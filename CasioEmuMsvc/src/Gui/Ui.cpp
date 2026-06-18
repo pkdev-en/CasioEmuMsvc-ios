@@ -109,7 +109,8 @@ void RenderDebuggerToolbar() {
         opened = ImGui::Begin("##DebuggerToolbar", nullptr, 
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | 
             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
-            ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking);
+            ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar | 
+            ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NavFlattened);
 #endif
     } else {
         opened = ImGui::BeginMainMenuBar();
