@@ -22,6 +22,7 @@
 #include "SnapshotWindow.h"
 #include "CalculatorWindow.h"
 #include "imgui/imgui.h"
+#include "imgui/imgui_internal.h" // Thư viện core để quản lý Z-Order
 #include "imgui/imgui_impl_sdl2.h"
 #include "imgui/imgui_impl_sdlrenderer2.h"
 #include <Gui.h>
@@ -31,15 +32,6 @@
 #include <fstream>
 #include <string>
 #include <unordered_map>
-/*#include <fstream>
-
-void DebugLog(const std::string& msg) {
-    static std::ofstream log("debug_log.txt", std::ios::app);
-    if (log.is_open()) {
-        log << msg << std::endl;
-        log.flush();
-    }
-}*/
 
 #ifdef ENABLE_SENTRY
 #include <sentry.h>
@@ -49,8 +41,6 @@ bool show_sentry_feedback = false;
 char sentry_user_comments[1024] = "";
 char sentry_user_email[128] = "";
 char sentry_user_name[128] = "";
-
-
 
 char* n_ram_buffer = 0;
 casioemu::MMU* me_mmu = 0;
@@ -88,6 +78,7 @@ void SaveUIState() {
 #include "iOSNativeBridge.h"
 #endif
 static float screenshot_toast_timer = 0.0f;
+
 void RenderDebuggerToolbar() {
     bool isCustom = false;
 #if defined(IOS)
@@ -112,10 +103,7 @@ void RenderDebuggerToolbar() {
             ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar | 
             ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NavFlattened);
 
-        // [BẢN VÁ CHẶN NUỐT EVENT] Nếu người dùng chạm vào Toolbar trên iPad, ép focus về Toolbar ngay lập tức
-        if (opened && ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && ImGui::GetIO().MouseDown[0]) {
-            ImGui::SetWindowFocus("##DebuggerToolbar");
-        }
+        // ĐÃ XÓA dòng ImGui::BringWindowToDisplayFront ở đây để tránh giành Z-order với các cửa sổ khác
 #endif
     } else {
         opened = ImGui::BeginMainMenuBar();
@@ -282,25 +270,22 @@ void RenderStatusBar() {
 		ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
 		ImGuiWindowFlags_NoDocking)) {
 		
-		// Run/Pause state status indicator
 		if (m_emu->GetPaused()) {
-			ImGui::TextColored(UIHelpers::kColorWarning, "[||] %s", "StatusBar.Paused"_lc);  // ⏸
+			ImGui::TextColored(UIHelpers::kColorWarning, "[||] %s", "StatusBar.Paused"_lc);  
 		} else {
-			ImGui::TextColored(UIHelpers::kColorSuccess, "[>] %s", "StatusBar.Running"_lc); // ▶
+			ImGui::TextColored(UIHelpers::kColorSuccess, "[>] %s", "StatusBar.Running"_lc); 
 		}
 		
 		ImGui::SameLine(0.0f, 20.0f);
 		ImGui::TextDisabled("|");
 		ImGui::SameLine(0.0f, 20.0f);
 		
-		// Current PC
 		ImGui::Text("PC: %05X", pc_cache);
 		
 		ImGui::SameLine(0.0f, 20.0f);
 		ImGui::TextDisabled("|");
 		ImGui::SameLine(0.0f, 20.0f);
 		
-		// Breakpoints count
 		int bpCount = code_viewer ? (int)code_viewer->GetBreakpointCount() : 0;
 		ImGui::Text("BP: %d", bpCount);
 	}
@@ -317,8 +302,6 @@ void gui_loop() {
 
 #if defined(__ANDROID__) || defined(MACOS) || defined(IOS)
     ThemeManager::Instance().UpdateUIScale();
-    // [BẢN VÁ LỖI IPAD GEN 11] Khôi phục chính xác tỉ lệ màn hình Retina cho iPad Gen 11 chống lệch tọa độ touch
-    io.DisplayFramebufferScale = ImVec2(2.0f, 2.0f);
 #endif
 
     ImGui_ImplSDLRenderer2_NewFrame();
@@ -326,8 +309,6 @@ void gui_loop() {
     ImGui::NewFrame();
     
     #if !defined(__ANDROID__) && !defined(IOS)
-    
-      // --- BẮT ĐẦU DOCKSPACE ---
     ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(viewport->WorkPos);
     
@@ -350,24 +331,62 @@ void gui_loop() {
     ImGui::Begin("MainDockHost", nullptr, host_flags);
     ImGui::PopStyleVar(3);
 
-    // Lệnh này tạo ra vùng để bạn gộp Tab
     ImGuiID dockspace_id = ImGui::GetID("MyDockSpace");
     ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_PassthruCentralNode);
-    
-    ImGui::End(); // Kết thúc Host
-    // --- KẾT THÚC DOCKSPACE ---
-#endif
+    ImGui::End(); 
+    #endif
 
+    // Vẽ Toolbar trước
     RenderDebuggerToolbar();
+
+    ImGuiWindow* hovered_win = ImGui::GetCurrentContext()->HoveredWindow;
+    bool hovering_other_ui = false;
+    
+    if (hovered_win != nullptr) {
+        if (!hovered_win->Name || strstr(hovered_win->Name, "Calculator") == nullptr) {
+            hovering_other_ui = true;
+        }
+    }
+
+    bool backup_down = io.MouseDown[0];
+    bool backup_clicked = io.MouseClicked[0];
+    bool backup_released = io.MouseReleased[0];
+
     for (auto win : windows) {
         if (!win) continue;
         
-        // [BẢN VÁ AN TOÀN] Chặn không cho các cửa sổ con bên dưới (như Calculator) thực thi logic click chuột 
-        // nếu người dùng thực sự đang chạm vào thanh Toolbar phía trên.
-        if (io.WantCaptureMouse && win->name && strcmp(win->name, "Calculator") == 0) {
-            continue; 
+        bool is_calculator = (win->name && strstr(win->name, "Calculator") != nullptr);
+        
+        // [CÁCH GIẢI QUYẾT MỚI] Khóa Calculator xuống làm "Hình nền", không cho phép nhảy lên trên đè các UI khác
+        if (is_calculator) {
+            ImGuiWindow* imgui_win = ImGui::FindWindowByName(win->name);
+            if (imgui_win) {
+                // Thêm cờ khóa: Click vào Calculator sẽ KHÔNG đẩy nó lên layer trên cùng
+                imgui_win->Flags |= ImGuiWindowFlags_NoBringToFrontOnFocus;
+                
+                // Đẩy Calculator xuống dưới cùng (back) đúng 1 lần duy nhất để nhường chỗ cho Toolbar và Menu nổi lên
+                static bool calc_pushed_back = false;
+                if (!calc_pushed_back) {
+                    ImGui::BringWindowToDisplayBack(imgui_win);
+                    calc_pushed_back = true;
+                }
+            }
         }
+
+        // Chống chạm xuyên (Click-through) khi thao tác với các cửa sổ khác
+        if (is_calculator && hovering_other_ui) {
+            io.MouseDown[0] = false;
+            io.MouseClicked[0] = false;
+            io.MouseReleased[0] = false;
+        }
+
         win->Render();
+
+        if (is_calculator && hovering_other_ui) {
+            io.MouseDown[0] = backup_down;
+            io.MouseClicked[0] = backup_clicked;
+            io.MouseReleased[0] = backup_released;
+        }
     }
 
     top_bar_size = ImGui::GetCursorPosY();
@@ -449,8 +468,6 @@ CodeViewer* test_gui(bool* guiCreated, SDL_Window* wnd, SDL_Renderer* rnd) {
 #if defined(__ANDROID__) || defined(IOS)
     ThemeManager::Instance().LoadSettings();
     ThemeManager::Instance().UpdateUIScale();
-    // Khởi tạo Scale Framebuffer Retina cho thiết bị iOS
-    io.DisplayFramebufferScale = ImVec2(2.0f, 2.0f);
 #endif
 
     RebuildFont();
