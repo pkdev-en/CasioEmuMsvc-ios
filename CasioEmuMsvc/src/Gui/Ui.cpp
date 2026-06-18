@@ -102,22 +102,25 @@ void RenderDebuggerToolbar() {
     isCustom = true;
 #endif
 
-    // Trạng thái thu gọn/mở rộng lưu động cho Toolbar
-    static bool toolbar_collapsed = false;
+    // CHỈNH SỬA: Đặt mặc định là true để khi mở ứng dụng lên thì toolbar tự động đóng sẵn
+    static bool toolbar_collapsed = true;
 
     bool opened = false;
     if (isCustom) {
 // FIX 2: đổi IOS -> __IOS__ trong block custom toolbar
 #if defined(__IOS__)
         ImGuiViewport* viewport = ImGui::GetMainViewport();
-        float headerY = std::max(viewport->WorkPos.y, 55.0f);
         
-        // Dùng ImGuiCond_FirstUseEver để chỉ ghim vị trí lần đầu, cho phép người dùng di chuyển kéo thả tự do
-        ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x, headerY), ImGuiCond_FirstUseEver);
-        
-        // Co giãn chiều dài linh hoạt theo trạng thái thu gọn hay mở rộng
+        float toolbarHeight = ImGui::GetFrameHeight() + 8.0f;
         float toolbarWidth = toolbar_collapsed ? 65.0f : viewport->WorkSize.x;
-        ImGui::SetNextWindowSize(ImVec2(toolbarWidth, ImGui::GetFrameHeight() + 8.0f));
+        
+        // CHỈNH SỬA: Tính toán tọa độ để đưa thanh Toolbar nằm chính giữa màn hình theo cả 2 trục X và Y
+        float centerX = viewport->WorkPos.x + (viewport->WorkSize.x - toolbarWidth) * 0.5f;
+        float centerY = viewport->WorkPos.y + (viewport->WorkSize.y - toolbarHeight) * 0.5f;
+        
+        // Dùng ImGuiCond_FirstUseEver để mặc định ở giữa khi chưa có vị trí lưu trong cấu hình, cho phép di chuyển kéo thả tự do
+        ImGui::SetNextWindowPos(ImVec2(centerX, centerY), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(toolbarWidth, toolbarHeight));
         
         ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize, ImVec2(0, 0));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.0f, 0.0f));
@@ -125,7 +128,7 @@ void RenderDebuggerToolbar() {
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ImGui::GetStyle().FramePadding.x, ImGui::GetStyle().FramePadding.y + 4.0f));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 12.0f); // Tạo độ bo tròn góc sắc nét cho thanh Toolbar
         
-        // Loại bỏ ImGuiWindowFlags_NoMove để có thể drag/kéo di chuyển được cửa sổ
+        // Không sử dụng cờ ImGuiWindowFlags_NoMove để giữ tính năng drag/kéo di chuyển được thanh bar
         opened = ImGui::Begin("##DebuggerToolbar", nullptr, 
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | 
             ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar | 
