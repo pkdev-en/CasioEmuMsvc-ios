@@ -32,16 +32,14 @@
 #include <fstream>
 #include <string>
 #include <unordered_map>
+#include <vector>   // thêm để dùng vector cho log
 
 #ifdef ENABLE_SENTRY
 #include <sentry.h>
 #endif
 #include <sdl_win32_extra.h>
 
-// ======================== ERROR LOG (START) ========================
-#include <vector>
-#include <string>
-
+// ======================== ERROR LOG ========================
 std::vector<std::string> g_error_logs;
 const size_t MAX_ERROR_LOGS = 1000;
 
@@ -51,7 +49,7 @@ void LogError(const std::string& msg) {
     }
     g_error_logs.push_back(msg);
 }
-// ======================== ERROR LOG (END) ========================
+// ===========================================================
 
 bool show_sentry_feedback = false;
 char sentry_user_comments[1024] = "";
@@ -412,15 +410,15 @@ void gui_loop() {
     #endif
 }
 
-// ======================== ERROR LOG WINDOW CLASS ========================
+// ==================== CLASS ERROR LOG WINDOW ====================
 class ErrorLogWindow : public UIWindow {
 public:
-    // Constructor đúng: base class UIWindow chỉ nhận một tham số const char*
+    // UIWindow chỉ có constructor nhận const char*
     ErrorLogWindow() : UIWindow("Error Log") {}
 
-    // Override phương thức thuần ảo RenderCore(), không phải Render()
+    // Override pure virtual RenderCore()
     virtual void RenderCore() override {
-        // Các nút chức năng
+        // Thanh công cụ
         if (ImGui::Button("Copy All")) {
             std::string full_log;
             for (const auto& line : g_error_logs) {
@@ -437,7 +435,7 @@ public:
 
         ImGui::Separator();
 
-        // Vùng hiển thị log với thanh cuộn
+        // Vùng hiển thị log (có thanh cuộn)
         ImGui::BeginChild("ErrorLogScrolling", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar);
         for (const auto& line : g_error_logs) {
             ImGui::TextWrapped("%s", line.c_str());
