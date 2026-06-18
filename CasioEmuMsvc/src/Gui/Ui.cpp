@@ -97,36 +97,40 @@ static float screenshot_toast_timer = 0.0f;
 
 void RenderDebuggerToolbar() {
     bool isCustom = false;
-// FIX 1: đổi IOS -> __IOS__ để macro được nhận diện đúng trên iOS build
 #if defined(__IOS__)
     isCustom = true;
 #endif
 
-    // Trạng thái thu gọn/mở rộng lưu động cho Toolbar
-    static bool toolbar_collapsed = false;
+    // Mặc định ban đầu luôn đóng (thu gọn) thành dấu ">"
+    static bool toolbar_collapsed = true;
 
     bool opened = false;
     if (isCustom) {
-// FIX 2: đổi IOS -> __IOS__ trong block custom toolbar
 #if defined(__IOS__)
         ImGuiViewport* viewport = ImGui::GetMainViewport();
-        float headerY = std::max(viewport->WorkPos.y, 55.0f);
         
-        // Dùng ImGuiCond_FirstUseEver để chỉ ghim vị trí lần đầu, cho phép người dùng di chuyển kéo thả tự do
-        ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x, headerY), ImGuiCond_FirstUseEver);
-        
-        // Co giãn chiều dài linh hoạt theo trạng thái thu gọn hay mở rộng
+        float toolbarHeight = ImGui::GetFrameHeight() + 8.0f;
         float toolbarWidth = toolbar_collapsed ? 65.0f : viewport->WorkSize.x;
-        ImGui::SetNextWindowSize(ImVec2(toolbarWidth, ImGui::GetFrameHeight() + 8.0f));
+        
+        // FIX TRIỆT ĐỂ: Đợi màn hình load xong kích thước chuẩn (> 100px) rồi mới căn giữa đúng 1 lần
+        static bool pos_initialized = false;
+        if (!pos_initialized && viewport->WorkSize.x > 100.0f) {
+            float centerX = viewport->WorkPos.x + (viewport->WorkSize.x - toolbarWidth) * 0.5f;
+            float centerY = viewport->WorkPos.y + (viewport->WorkSize.y - toolbarHeight) * 0.5f;
+            ImGui::SetNextWindowPos(ImVec2(centerX, centerY));
+            pos_initialized = true; // Căn giữa xong thì khóa lại, nhường quyền cho kéo thả tự do
+        }
+        
+        ImGui::SetNextWindowSize(ImVec2(toolbarWidth, toolbarHeight));
         
         ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize, ImVec2(0, 0));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.0f, 0.0f));
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ImGui::GetStyle().FramePadding.x, ImGui::GetStyle().FramePadding.y + 4.0f));
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 12.0f); // Tạo độ bo tròn góc sắc nét cho thanh Toolbar
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 12.0f); // Bo tròn góc mượt mà
         
-        // Loại bỏ ImGuiWindowFlags_NoMove để có thể drag/kéo di chuyển được cửa sổ
-        opened = ImGui::Begin("##DebuggerToolbar", nullptr, 
+        // Đổi ID thành "##MovableDebuggerToolbar" để bỏ qua cache vị trí cũ trong imgui.ini
+        opened = ImGui::Begin("##MovableDebuggerToolbar", nullptr, 
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | 
             ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar | 
             ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NavFlattened);
@@ -175,7 +179,6 @@ void RenderDebuggerToolbar() {
                         }
                     }
 
-// FIX 3: đổi IOS -> __IOS__ cho Hide KB button
 #if defined(__ANDROID__) || defined(__IOS__)
                     if (ImGui::TabItemButton("[v] Hide KB")) {
                         SDL_StopTextInput();
@@ -262,7 +265,7 @@ void RenderDebuggerToolbar() {
         
         if (isCustom) {
             ImGui::End();
-            ImGui::PopStyleVar(5); // Pop 5 styles để cân bằng với việc thêm WindowRounding ở trên
+            ImGui::PopStyleVar(5); // Cân bằng Pop 5 style đã push
         } else {
             ImGui::EndMainMenuBar();
         }
@@ -441,7 +444,6 @@ public:
     ErrorLogWindow() : UIWindow("Error Log") {}
 
     virtual void RenderCore() override {
-        // Toolbar
         if (ImGui::Button("Copy All")) {
             std::string full_log;
             for (const auto& line : g_error_logs) {
@@ -458,23 +460,18 @@ public:
 
         ImGui::Separator();
 
-        // Vùng hiển thị log với thanh cuộn, hỗ trợ màu sắc
         ImGui::BeginChild("ErrorLogScrolling", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar);
         for (const auto& line : g_error_logs) {
-            // Nếu dòng bắt đầu bằng "Function:" thì tô màu xanh lá cây
             if (line.find("Function:") == 0) {
                 ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f), "%s", line.c_str());
             }
-            // Nếu có địa chỉ dạng hex (0x7ff...) thì tô màu xanh dương
             else if (line.find("0x") != std::string::npos) {
                 ImGui::TextColored(ImVec4(0.3f, 0.6f, 1.0f, 1.0f), "%s", line.c_str());
             }
-            // Mặc định
             else {
                 ImGui::TextWrapped("%s", line.c_str());
             }
         }
-        // Tự động cuộn xuống cuối nếu có log mới
         if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
             ImGui::SetScrollHereY(1.0f);
         ImGui::EndChild();
@@ -496,7 +493,7 @@ CodeViewer* test_gui(bool* guiCreated, SDL_Window* wnd, SDL_Renderer* rnd) {
     renderer = rnd;
 #else
 #if defined(__ANDROID__) || defined(__IOS__)
-    window = SDL_CreateWindow("CasioEmuMsvc Debugger",
+    window = SDL_CreateWindow("CasioEmuMsvc Debugner",
         SDL_WINDOWPOS_CENTERED,
         SDL_WINDOWPOS_CENTERED,
         (int)ThemeManager::Instance().windowWidth,
@@ -572,7 +569,7 @@ CodeViewer* test_gui(bool* guiCreated, SDL_Window* wnd, SDL_Renderer* rnd) {
     if (std::filesystem::exists(label_file))
         g_labels = parseFile(label_file);
     else
-        std::cout << "[Warning] labels.txt doesn't exist. You can consider create one for better debugging experiences. Format: address(0x1234),func name(can be quoted)\n";
+        std::cout << "[Warning] labels.txt doesn't exist.\n";
 
     if (m_emu->hardware_id == casioemu::HW_FX_5800P) {
         windows.push_back(CreateFx5800FileSystem());
@@ -594,7 +591,7 @@ CodeViewer* test_gui(bool* guiCreated, SDL_Window* wnd, SDL_Renderer* rnd) {
              CreateSnapshotWindow(),
              MakeThemeWindow(),
              CreateBitmapViewer(),
-             new ErrorLogWindow()   // <--- CỬA SỔ LỖI
+             new ErrorLogWindow()
          })
         windows.push_back(item);
     for (auto item : GetEditors())
