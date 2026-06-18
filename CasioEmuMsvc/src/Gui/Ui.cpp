@@ -22,7 +22,7 @@
 #include "SnapshotWindow.h"
 #include "CalculatorWindow.h"
 #include "imgui/imgui.h"
-#include "imgui/imgui_internal.h" // Thư viện core để quản lý Z-Order
+#include "imgui/imgui_internal.h"
 #include "imgui/imgui_impl_sdl2.h"
 #include "imgui/imgui_impl_sdlrenderer2.h"
 #include <Gui.h>
@@ -37,6 +37,22 @@
 #include <sentry.h>
 #endif
 #include <sdl_win32_extra.h>
+
+// ======================== ERROR LOG (START) ========================
+#include <vector>
+#include <string>
+
+std::vector<std::string> g_error_logs;
+const size_t MAX_ERROR_LOGS = 1000;
+
+void LogError(const std::string& msg) {
+    if (g_error_logs.size() >= MAX_ERROR_LOGS) {
+        g_error_logs.erase(g_error_logs.begin());
+    }
+    g_error_logs.push_back(msg);
+}
+// ======================== ERROR LOG (END) ========================
+
 bool show_sentry_feedback = false;
 char sentry_user_comments[1024] = "";
 char sentry_user_email[128] = "";
@@ -58,6 +74,7 @@ std::vector<UIWindow*> windows{};
 
 std::string ui_state_fn = "ui_state.txt";
 bool ui_ready = false;
+
 void SaveUIState() {
     if (!ui_ready) return;
 
@@ -102,8 +119,6 @@ void RenderDebuggerToolbar() {
             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
             ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar | 
             ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NavFlattened);
-
-        // ĐÃ XÓA dòng ImGui::BringWindowToDisplayFront ở đây để tránh giành Z-order với các cửa sổ khác
 #endif
     } else {
         opened = ImGui::BeginMainMenuBar();
@@ -336,7 +351,6 @@ void gui_loop() {
     ImGui::End(); 
     #endif
 
-    // Vẽ Toolbar trước
     RenderDebuggerToolbar();
 
     ImGuiWindow* hovered_win = ImGui::GetCurrentContext()->HoveredWindow;
@@ -357,14 +371,11 @@ void gui_loop() {
         
         bool is_calculator = (win->name && strstr(win->name, "Calculator") != nullptr);
         
-        // [CÁCH GIẢI QUYẾT MỚI] Khóa Calculator xuống làm "Hình nền", không cho phép nhảy lên trên đè các UI khác
         if (is_calculator) {
             ImGuiWindow* imgui_win = ImGui::FindWindowByName(win->name);
             if (imgui_win) {
-                // Thêm cờ khóa: Click vào Calculator sẽ KHÔNG đẩy nó lên layer trên cùng
                 imgui_win->Flags |= ImGuiWindowFlags_NoBringToFrontOnFocus;
                 
-                // Đẩy Calculator xuống dưới cùng (back) đúng 1 lần duy nhất để nhường chỗ cho Toolbar và Menu nổi lên
                 static bool calc_pushed_back = false;
                 if (!calc_pushed_back) {
                     ImGui::BringWindowToDisplayBack(imgui_win);
@@ -373,7 +384,6 @@ void gui_loop() {
             }
         }
 
-        // Chống chạm xuyên (Click-through) khi thao tác với các cửa sổ khác
         if (is_calculator && hovering_other_ui) {
             io.MouseDown[0] = false;
             io.MouseClicked[0] = false;
@@ -401,6 +411,55 @@ void gui_loop() {
     SDL_RenderPresent(renderer);
     #endif
 }
+
+// ======================== ERROR LOG WINDOW CLASS ========================
+class ErrorLogWindow : public UIWindow {
+public:
+    ErrorLogWindow() {
+        name = "Error Log";
+        open = false; // Mặc định đóng, người dùng mở từ menu
+    }
+
+    virtual void Render() override {
+        if (!open) return;
+
+        ImGui::SetNextWindowSize(ImVec2(600, 400), ImGuiCond_FirstUseEver);
+        if (!ImGui::Begin(name, &open)) {
+            ImGui::End();
+            return;
+        }
+
+        // Toolbar
+        if (ImGui::Button("Copy All")) {
+            std::string full_log;
+            for (const auto& line : g_error_logs) {
+                full_log += line + "\n";
+            }
+            ImGui::SetClipboardText(full_log.c_str());
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Clear")) {
+            g_error_logs.clear();
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("(max %zu lines)", MAX_ERROR_LOGS);
+
+        ImGui::Separator();
+
+        // Vùng hiển thị log (có thanh cuộn)
+        ImGui::BeginChild("ErrorLogScrolling", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar);
+        for (const auto& line : g_error_logs) {
+            ImGui::TextWrapped("%s", line.c_str());
+        }
+        // Tự động cuộn xuống dòng cuối nếu có log mới
+        if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
+            ImGui::SetScrollHereY(1.0f);
+        ImGui::EndChild();
+
+        ImGui::End();
+    }
+};
+// ==============================================================
 
 CodeViewer* test_gui(bool* guiCreated, SDL_Window* wnd, SDL_Renderer* rnd) {
     SDL_SetHint(SDL_HINT_IME_SHOW_UI, "1");
@@ -513,7 +572,9 @@ CodeViewer* test_gui(bool* guiCreated, SDL_Window* wnd, SDL_Renderer* rnd) {
              new PluginLogWindow(),
              CreateSnapshotWindow(),
              MakeThemeWindow(),
-             CreateBitmapViewer(), })
+             CreateBitmapViewer(),
+             new ErrorLogWindow()   // <--- THÊM CỬA SỔ LỖI
+         })
         windows.push_back(item);
     for (auto item : GetEditors())
         windows.push_back(item);
