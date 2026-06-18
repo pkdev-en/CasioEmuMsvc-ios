@@ -97,13 +97,15 @@ static float screenshot_toast_timer = 0.0f;
 
 void RenderDebuggerToolbar() {
     bool isCustom = false;
-#if defined(IOS)
+// FIX 1: đổi IOS -> __IOS__ để macro được nhận diện đúng trên iOS build
+#if defined(__IOS__)
     isCustom = true;
 #endif
 
     bool opened = false;
     if (isCustom) {
-#if defined(IOS)
+// FIX 2: đổi IOS -> __IOS__ trong block custom toolbar
+#if defined(__IOS__)
         ImGuiViewport* viewport = ImGui::GetMainViewport();
         float headerY = std::max(viewport->WorkPos.y, 55.0f);
         ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x, headerY));
@@ -156,7 +158,8 @@ void RenderDebuggerToolbar() {
                     }
                 }
 
-#if defined(__ANDROID__) || defined(IOS)
+// FIX 3: đổi IOS -> __IOS__ cho Hide KB button
+#if defined(__ANDROID__) || defined(__IOS__)
                 if (ImGui::TabItemButton("[v] Hide KB")) {
                     SDL_StopTextInput();
                     ImGui::SetWindowFocus(nullptr);
@@ -314,7 +317,7 @@ void gui_loop() {
 
     ImGuiIO& io = ImGui::GetIO();
 
-#if defined(__ANDROID__) || defined(MACOS) || defined(IOS)
+#if defined(__ANDROID__) || defined(MACOS) || defined(__IOS__)
     ThemeManager::Instance().UpdateUIScale();
 #endif
 
@@ -322,7 +325,7 @@ void gui_loop() {
     ImGui_ImplSDL2_NewFrame();
     ImGui::NewFrame();
     
-    #if !defined(__ANDROID__) && !defined(IOS)
+    #if !defined(__ANDROID__) && !defined(__IOS__)
     ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(viewport->WorkPos);
     
@@ -399,7 +402,7 @@ void gui_loop() {
     }
 
     top_bar_size = ImGui::GetCursorPosY();
-#if !defined(__ANDROID__) && !defined(IOS)
+#if !defined(__ANDROID__) && !defined(__IOS__)
 	RenderStatusBar();
 #endif
 
@@ -471,7 +474,7 @@ CodeViewer* test_gui(bool* guiCreated, SDL_Window* wnd, SDL_Renderer* rnd) {
     window = wnd;
     renderer = rnd;
 #else
-#if defined(__ANDROID__) || defined(IOS)
+#if defined(__ANDROID__) || defined(__IOS__)
     window = SDL_CreateWindow("CasioEmuMsvc Debugger",
         SDL_WINDOWPOS_CENTERED,
         SDL_WINDOWPOS_CENTERED,
@@ -521,7 +524,7 @@ CodeViewer* test_gui(bool* guiCreated, SDL_Window* wnd, SDL_Renderer* rnd) {
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
 
-#if defined(__ANDROID__) || defined(IOS)
+#if defined(__ANDROID__) || defined(__IOS__)
     ThemeManager::Instance().LoadSettings();
     ThemeManager::Instance().UpdateUIScale();
 #endif
