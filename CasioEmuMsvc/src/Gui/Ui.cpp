@@ -415,12 +415,12 @@ void gui_loop() {
 // ======================== ERROR LOG WINDOW CLASS ========================
 class ErrorLogWindow : public UIWindow {
 public:
-    // Gọi constructor của base với tên và trạng thái mở
-    ErrorLogWindow() : UIWindow("Error Log", false) {}
+    // Constructor đúng: base class UIWindow chỉ nhận một tham số const char*
+    ErrorLogWindow() : UIWindow("Error Log") {}
 
-    // Override phương thức thuần ảo RenderCore() (không phải Render)
+    // Override phương thức thuần ảo RenderCore(), không phải Render()
     virtual void RenderCore() override {
-        // Thanh công cụ: Copy All và Clear
+        // Các nút chức năng
         if (ImGui::Button("Copy All")) {
             std::string full_log;
             for (const auto& line : g_error_logs) {
@@ -437,7 +437,7 @@ public:
 
         ImGui::Separator();
 
-        // Vùng hiển thị log (có thanh cuộn)
+        // Vùng hiển thị log với thanh cuộn
         ImGui::BeginChild("ErrorLogScrolling", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar);
         for (const auto& line : g_error_logs) {
             ImGui::TextWrapped("%s", line.c_str());
