@@ -415,21 +415,12 @@ void gui_loop() {
 // ======================== ERROR LOG WINDOW CLASS ========================
 class ErrorLogWindow : public UIWindow {
 public:
-    ErrorLogWindow() {
-        name = "Error Log";
-        open = false; // Mặc định đóng, người dùng mở từ menu
-    }
+    // Gọi constructor của base với tên và trạng thái mở
+    ErrorLogWindow() : UIWindow("Error Log", false) {}
 
-    virtual void Render() override {
-        if (!open) return;
-
-        ImGui::SetNextWindowSize(ImVec2(600, 400), ImGuiCond_FirstUseEver);
-        if (!ImGui::Begin(name, &open)) {
-            ImGui::End();
-            return;
-        }
-
-        // Toolbar
+    // Override phương thức thuần ảo RenderCore() (không phải Render)
+    virtual void RenderCore() override {
+        // Thanh công cụ: Copy All và Clear
         if (ImGui::Button("Copy All")) {
             std::string full_log;
             for (const auto& line : g_error_logs) {
@@ -455,8 +446,6 @@ public:
         if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
             ImGui::SetScrollHereY(1.0f);
         ImGui::EndChild();
-
-        ImGui::End();
     }
 };
 // ==============================================================
