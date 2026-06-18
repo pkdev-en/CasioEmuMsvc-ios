@@ -32,7 +32,8 @@
 #include <fstream>
 #include <string>
 #include <unordered_map>
-#include <vector>   // thêm để dùng vector cho log
+#include <vector>
+#include <sstream>   // để ghép log
 
 #ifdef ENABLE_SENTRY
 #include <sentry.h>
@@ -413,12 +414,10 @@ void gui_loop() {
 // ==================== CLASS ERROR LOG WINDOW ====================
 class ErrorLogWindow : public UIWindow {
 public:
-    // UIWindow chỉ có constructor nhận const char*
     ErrorLogWindow() : UIWindow("Error Log") {}
 
-    // Override pure virtual RenderCore()
     virtual void RenderCore() override {
-        // Thanh công cụ
+        // Toolbar
         if (ImGui::Button("Copy All")) {
             std::string full_log;
             for (const auto& line : g_error_logs) {
@@ -435,12 +434,23 @@ public:
 
         ImGui::Separator();
 
-        // Vùng hiển thị log (có thanh cuộn)
+        // Vùng hiển thị log với thanh cuộn, hỗ trợ màu sắc
         ImGui::BeginChild("ErrorLogScrolling", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar);
         for (const auto& line : g_error_logs) {
-            ImGui::TextWrapped("%s", line.c_str());
+            // Nếu dòng bắt đầu bằng "Function:" thì tô màu xanh lá cây
+            if (line.find("Function:") == 0) {
+                ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f), "%s", line.c_str());
+            }
+            // Nếu có địa chỉ dạng hex (0x7ff...) thì tô màu xanh dương
+            else if (line.find("0x") != std::string::npos) {
+                ImGui::TextColored(ImVec4(0.3f, 0.6f, 1.0f, 1.0f), "%s", line.c_str());
+            }
+            // Mặc định
+            else {
+                ImGui::TextWrapped("%s", line.c_str());
+            }
         }
-        // Tự động cuộn xuống dòng cuối nếu có log mới
+        // Tự động cuộn xuống cuối nếu có log mới
         if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
             ImGui::SetScrollHereY(1.0f);
         ImGui::EndChild();
@@ -560,7 +570,7 @@ CodeViewer* test_gui(bool* guiCreated, SDL_Window* wnd, SDL_Renderer* rnd) {
              CreateSnapshotWindow(),
              MakeThemeWindow(),
              CreateBitmapViewer(),
-             new ErrorLogWindow()   // <--- THÊM CỬA SỔ LỖI
+             new ErrorLogWindow()   // <--- CỬA SỔ LỖI
          })
         windows.push_back(item);
     for (auto item : GetEditors())
