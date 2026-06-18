@@ -111,6 +111,11 @@ void RenderDebuggerToolbar() {
             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
             ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar | 
             ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NavFlattened);
+
+        // [BẢN VÁ CHẶN NUỐT EVENT] Nếu người dùng chạm vào Toolbar trên iPad, ép focus về Toolbar ngay lập tức
+        if (opened && ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && ImGui::GetIO().MouseDown[0]) {
+            ImGui::SetWindowFocus("##DebuggerToolbar");
+        }
 #endif
     } else {
         opened = ImGui::BeginMainMenuBar();
@@ -312,6 +317,8 @@ void gui_loop() {
 
 #if defined(__ANDROID__) || defined(MACOS) || defined(IOS)
     ThemeManager::Instance().UpdateUIScale();
+    // [BẢN VÁ LỖI IPAD GEN 11] Khôi phục chính xác tỉ lệ màn hình Retina cho iPad Gen 11 chống lệch tọa độ touch
+    io.DisplayFramebufferScale = ImVec2(2.0f, 2.0f);
 #endif
 
     ImGui_ImplSDLRenderer2_NewFrame();
@@ -349,148 +356,26 @@ void gui_loop() {
     
     ImGui::End(); // Kết thúc Host
     // --- KẾT THÚC DOCKSPACE ---
-    
-    /*
-    ImGuiViewport* viewport = ImGui::GetMainViewport();
-    
-    ImGui::SetNextWindowPos(viewport->Pos);
-    ImGui::SetNextWindowSize(viewport->Size);
-    ImGui::SetNextWindowViewport(viewport->ID);
-    
-    ImGuiWindowFlags flags =
-        ImGuiWindowFlags_NoDecoration |
-        ImGuiWindowFlags_NoMove |
-        ImGuiWindowFlags_NoDocking |
-        ImGuiWindowFlags_NoBringToFrontOnFocus;
-    
-    ImGui::Begin("DockSpaceWnd", nullptr, flags);
-    
-    ImGuiID dockspace_id = ImGui::GetID("DockSpace");
-    ImGuiDockNodeFlags dock_flags = ImGuiDockNodeFlags_PassthruCentralNode;
-    
-    ImGui::DockSpace(dockspace_id, ImVec2(0, 0), dock_flags);
-    
-    ImGui::End();*/
 #endif
+
     RenderDebuggerToolbar();
     for (auto win : windows) {
         if (!win) continue;
+        
+        // [BẢN VÁ AN TOÀN] Chặn không cho các cửa sổ con bên dưới (như Calculator) thực thi logic click chuột 
+        // nếu người dùng thực sự đang chạm vào thanh Toolbar phía trên.
+        if (io.WantCaptureMouse && win->name && strcmp(win->name, "Calculator") == 0) {
+            continue; 
+        }
         win->Render();
     }
 
-    //    ImGui::Begin("Testing");
-    //    if (ImGui::Button("Crash"_lc)) {
-    //        throw 0;
-    //    }
-    //    // --- 新增：手动反馈选项 ---
-    // #ifdef ENABLE_SENTRY
-    //    ImGui::SameLine(); // 放在 Crash 按钮旁边
-    //    if (ImGui::Button("Send Feedback"_lc)) {
-    //        // 重置之前的输入内容
-    //        memset(sentry_user_comments, 0, sizeof(sentry_user_comments));
-    //        show_sentry_feedback = true;
-    //    }
-    // #endif
-    //    ImGui::End();
-    //    // --- Sentry 反馈对话框逻辑 ---
-    // #ifdef ENABLE_SENTRY
-    //    if (show_sentry_feedback) {
-    //        // 确保每一帧都调用 OpenPopup，直到它真正打开
-    //        ImGui::OpenPopup("User Feedback");
-    //    }
-    //
-    //    // 使用 Modal 窗口确保反馈过程不被打断
-    //    if (ImGui::BeginPopupModal("User Feedback", &show_sentry_feedback, ImGuiWindowFlags_AlwaysAutoResize)) {
-    //        ImGui::Text("Help us improve CasioEmuMsvc!");
-    //        ImGui::Separator();
-    //
-    //        ImGui::Text("Email (Optional):");
-    //        ImGui::InputText("##email", sentry_user_email, IM_ARRAYSIZE(sentry_user_email));
-    //
-    //        ImGui::Text("What happened?");
-    //        ImGui::InputTextMultiline("##comments", sentry_user_comments, IM_ARRAYSIZE(sentry_user_comments),
-    //            ImVec2(350, 120), ImGuiInputTextFlags_AllowTabInput);
-    //
-    //        if (ImGui::Button("Submit", ImVec2(120, 0))) {
-    //            auto uuid = Binary::LoadOrInit("uuid.bin", util::Random::getRandomObject<sentry_uuid_t>());
-    //            char buf[37]{};
-    //            sentry_uuid_as_string(&uuid, buf);
-    //            sentry_value_t feedback = sentry_value_new_feedback(sentry_user_comments, sentry_user_email, buf, 0);
-    //            sentry_capture_feedback(feedback);
-    //
-    //            show_sentry_feedback = false;
-    //            ImGui::CloseCurrentPopup();
-    //        }
-    //
-    //        ImGui::SameLine();
-    //        if (ImGui::Button("Cancel", ImVec2(120, 0))) {
-    //            show_sentry_feedback = false;
-    //            ImGui::CloseCurrentPopup();
-    //        }
-    //        ImGui::EndPopup();
-    //    }
-    // #endif
     top_bar_size = ImGui::GetCursorPosY();
 #if !defined(__ANDROID__) && !defined(IOS)
 	RenderStatusBar();
 #endif
 
-	//	ImGui::Begin("Testing");
-	//	if (ImGui::Button("Crash"_lc)) {
-	//		throw 0;
-	//	}
-	//	// --- 新增：手动反馈选项 ---
-	// #ifdef ENABLE_SENTRY
-	//	ImGui::SameLine(); // 放在 Crash 按钮旁边
-	//	if (ImGui::Button("Send Feedback"_lc)) {
-	//		// 重置之前的输入内容
-	//		memset(sentry_user_comments, 0, sizeof(sentry_user_comments));
-	//		show_sentry_feedback = true;
-	//	}
-	// #endif
-	//	ImGui::End();
-	//	// --- Sentry 反馈对话框逻辑 ---
-	// #ifdef ENABLE_SENTRY
-	//	if (show_sentry_feedback) {
-	//		// 确保每一帧都调用 OpenPopup，直到它真正打开
-	//		ImGui::OpenPopup("User Feedback");
-	//	}
-	//
-	//	// 使用 Modal 窗口确保反馈过程不被打断
-	//	if (ImGui::BeginPopupModal("User Feedback", &show_sentry_feedback, ImGuiWindowFlags_AlwaysAutoResize)) {
-	//		ImGui::Text("Help us improve CasioEmuMsvc!");
-	//		ImGui::Separator();
-	//
-	//		ImGui::Text("Email (Optional):");
-	//		ImGui::InputText("##email", sentry_user_email, IM_ARRAYSIZE(sentry_user_email));
-	//
-	//		ImGui::Text("What happened?");
-	//		ImGui::InputTextMultiline("##comments", sentry_user_comments, IM_ARRAYSIZE(sentry_user_comments),
-	//			ImVec2(350, 120), ImGuiInputTextFlags_AllowTabInput);
-	//
-	//		if (ImGui::Button("Submit", ImVec2(120, 0))) {
-	//			auto uuid = Binary::LoadOrInit("uuid.bin", util::Random::getRandomObject<sentry_uuid_t>());
-	//			char buf[37]{};
-	//			sentry_uuid_as_string(&uuid, buf);
-	//			sentry_value_t feedback = sentry_value_new_feedback(sentry_user_comments, sentry_user_email, buf, 0);
-	//			sentry_capture_feedback(feedback);
-	//
-	//			show_sentry_feedback = false;
-	//			ImGui::CloseCurrentPopup();
-	//		}
-	//
-	//		ImGui::SameLine();
-	//		if (ImGui::Button("Cancel", ImVec2(120, 0))) {
-	//			show_sentry_feedback = false;
-	//			ImGui::CloseCurrentPopup();
-	//		}
-	//		ImGui::EndPopup();
-	//	}
-	// #endif
-
     ImGui::Render();
-    //SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
-    
     ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData());
     
     #ifndef SINGLE_WINDOW
@@ -564,10 +449,11 @@ CodeViewer* test_gui(bool* guiCreated, SDL_Window* wnd, SDL_Renderer* rnd) {
 #if defined(__ANDROID__) || defined(IOS)
     ThemeManager::Instance().LoadSettings();
     ThemeManager::Instance().UpdateUIScale();
+    // Khởi tạo Scale Framebuffer Retina cho thiết bị iOS
+    io.DisplayFramebufferScale = ImVec2(2.0f, 2.0f);
 #endif
 
     RebuildFont();
-    // SetupDefaultTheme();
 
     io.IniFilename = "imgui.ini";
     io.WantCaptureKeyboard = true;
@@ -606,7 +492,6 @@ CodeViewer* test_gui(bool* guiCreated, SDL_Window* wnd, SDL_Renderer* rnd) {
              injector = new Injector(),
              membp = new Breakpoints(),
              CreateAddressWindow(),
-             // MakeAssemblerUI(),
              CreateRopCompilerWindow(),
              new PluginLogWindow(),
              CreateSnapshotWindow(),
@@ -625,19 +510,6 @@ CodeViewer* test_gui(bool* guiCreated, SDL_Window* wnd, SDL_Renderer* rnd) {
     }
     LoadUIState();
     ui_ready = true;
-    /*for (auto* w : windows) {
-        if (!w) continue;
-    
-        char buf[256];
-        snprintf(buf, sizeof(buf),
-            "%s ptr=%p open=%d",
-            w->name,
-            (void*)w,
-            w->open
-        );
-    
-        DebugLog(buf);
-    }*/
     
     return nullptr;
 }
@@ -645,26 +517,22 @@ CodeViewer* test_gui(bool* guiCreated, SDL_Window* wnd, SDL_Renderer* rnd) {
 namespace UIHelpers {
 
 	void JumpToMemory(uint32_t addr) {
-		// Try Ram first
 		for (auto* win : windows) {
 			if (win->name && strcmp(win->name, "Ram") == 0) {
 				if (win->GotoMemoryAddress(addr)) return;
 			}
 		}
-		// Try PRam next
 		for (auto* win : windows) {
 			if (win->name && strcmp(win->name, "PRam") == 0) {
 				if (win->GotoMemoryAddress(addr)) return;
 			}
 		}
-		// Try any remaining
 		for (auto* win : windows) {
 			if (win->GotoMemoryAddress(addr)) return;
 		}
 	}
 
 	void ClickableAddress(uint32_t addr, JumpTarget defaultTarget) {
-		// Render the colored address text
 		ImGui::PushStyleColor(ImGuiCol_Text, kColorInfo);
 		char addrLabel[16];
 		snprintf(addrLabel, sizeof(addrLabel), "%05X", addr);
@@ -686,7 +554,6 @@ namespace UIHelpers {
 			ImGui::EndTooltip();
 		}
 
-		// Left-click: default action
 		if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
 			if (defaultTarget == JumpTarget::Code || defaultTarget == JumpTarget::Both) {
 				if (code_viewer) {
@@ -698,7 +565,6 @@ namespace UIHelpers {
 			}
 		}
 
-		// Right-click: context menu with both options
 		char popupId[32];
 		snprintf(popupId, sizeof(popupId), "##ca_popup_%05X", addr);
 		if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
