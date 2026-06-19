@@ -93,21 +93,17 @@ void SaveUIState() {
 static float screenshot_toast_timer = 0.0f;
 
 // ===================== TOOLBAR STATE (iOS) =====================
-// g_toolbar_posY  : vị trí Y thực tế hiện tại (animated)
-// g_toolbar_targetY: vị trí Y đích (sau drag/snap)
-// g_toolbar_visible: toolbar đang hiện hay ẩn
-// g_toolbar_anim  : tiến trình animation 0→1
-static float g_toolbar_posY     = -1.0f; // -1 = chưa khởi tạo
+static float g_toolbar_posY     = -1.0f;
 static float g_toolbar_targetY  = -1.0f;
 static bool  g_toolbar_visible  = true;
-static float g_toolbar_anim     = 1.0f;  // 1 = fully shown
+static float g_toolbar_anim     = 1.0f;
 
 static bool  g_toolbar_dragging    = false;
 static float g_toolbar_drag_startY = 0.0f;
 static float g_toolbar_drag_origY  = 0.0f;
 
-static const float TOOLBAR_ANIM_SPEED = 8.0f; // đơn vị: 1/giây
-static const float STATUS_BAR_HEIGHT = 50.0f; // Chiều cao thanh trạng thái iOS
+static const float TOOLBAR_ANIM_SPEED = 8.0f;
+static const float STATUS_BAR_HEIGHT = 50.0f;
 
 static void SaveToolbarPos(float y, bool visible) {
     std::ofstream f("toolbar_pos.txt");
@@ -120,6 +116,23 @@ static void LoadToolbarPos(float& y, bool& visible) {
     visible = (v != 0);
 }
 // ==============================================================
+
+#ifdef __IOS__
+static float getSafeAreaTop() {
+    float safeTop = 0.0f;
+    UIWindow* window = [UIApplication sharedApplication].keyWindow;
+    if (window) {
+        if (@available(iOS 11.0, *)) {
+            safeTop = window.safeAreaInsets.top;
+        }
+    }
+    // Nếu không lấy được, dùng giá trị mặc định
+    if (safeTop == 0.0f) {
+        safeTop = 50.0f; // iPhone notch/dynamic island
+    }
+    return safeTop;
+}
+#endif
 
 void RenderDebuggerToolbar() {
     bool isCustom = false;
@@ -134,12 +147,15 @@ void RenderDebuggerToolbar() {
         float toolbarH = ImGui::GetFrameHeight() + 8.0f;
         float dt = ImGui::GetIO().DeltaTime;
 
+        // Lấy safe area top
+        float safeAreaTop = getSafeAreaTop();
+
         // ── Khởi tạo lần đầu ──────────────────────────────────
         if (g_toolbar_posY < 0.0f) {
             float savedY = -1.0f; bool savedVis = true;
             LoadToolbarPos(savedY, savedVis);
-            // Toolbar nằm ngay dưới thanh thông báo/thời gian
-            float defaultY = viewport->WorkPos.y + STATUS_BAR_HEIGHT;
+            // Toolbar nằm DƯỚI safe area (thanh status bar)
+            float defaultY = viewport->WorkPos.y + safeAreaTop;
             g_toolbar_posY    = (savedY >= 0.0f) ? savedY : defaultY;
             g_toolbar_targetY = g_toolbar_posY;
             g_toolbar_visible = savedVis;
@@ -147,11 +163,11 @@ void RenderDebuggerToolbar() {
         }
 
         // ── Clamp vùng hợp lệ ─────────────────────────────────
-        float minY = viewport->WorkPos.y + STATUS_BAR_HEIGHT; // Không cho kéo lên quá status bar
+        float minY = viewport->WorkPos.y + safeAreaTop;
         float maxY = viewport->WorkPos.y + viewport->WorkSize.y - toolbarH;
         g_toolbar_targetY = std::clamp(g_toolbar_targetY, minY, maxY);
 
-        // ── Animation trượt hiện/ẩn ───────────────────────────
+        // ── Animation ───────────────────────────────────────────
         float animTarget = g_toolbar_visible ? 1.0f : 0.0f;
         float animDelta  = TOOLBAR_ANIM_SPEED * dt;
         if (g_toolbar_anim < animTarget)
@@ -159,25 +175,21 @@ void RenderDebuggerToolbar() {
         else
             g_toolbar_anim = std::max(g_toolbar_anim - animDelta, animTarget);
 
-        // Ease-out cubic: t = 1-(1-x)^3
         float t = 1.0f - (1.0f - g_toolbar_anim) * (1.0f - g_toolbar_anim) * (1.0f - g_toolbar_anim);
-
-        // Khi ẩn toolbar trượt lên trên màn hình
         float hiddenY = g_toolbar_targetY - toolbarH - 4.0f;
         float renderY = hiddenY + t * (g_toolbar_targetY - hiddenY);
 
-        // Smooth drag position
         if (!g_toolbar_dragging) {
             float lerpSpeed = TOOLBAR_ANIM_SPEED * dt;
             g_toolbar_posY += (g_toolbar_targetY - g_toolbar_posY) * std::min(lerpSpeed, 1.0f);
         }
 
-        // Nếu hoàn toàn ẩn thì không render gì
         if (g_toolbar_anim <= 0.001f && !g_toolbar_visible)
             return;
 
         ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x, renderY), ImGuiCond_Always);
         ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x, toolbarH));
+        
         ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize,   ImVec2(0, 0));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,   ImVec2(0, 0));
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,     ImVec2(0, 0));
@@ -185,16 +197,22 @@ void RenderDebuggerToolbar() {
             ImVec2(ImGui::GetStyle().FramePadding.x,
                    ImGui::GetStyle().FramePadding.y + 4.0f));
 
-        // Alpha mờ dần khi ẩn
         ImGui::SetNextWindowBgAlpha(t);
 
         opened = ImGui::Begin("##DebuggerToolbar", nullptr,
             ImGuiWindowFlags_NoTitleBar  | ImGuiWindowFlags_NoResize  |
             ImGuiWindowFlags_NoMove      | ImGuiWindowFlags_NoScrollbar |
             ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar |
-            ImGuiWindowFlags_NoDocking   | ImGuiWindowFlags_NavFlattened);
+            ImGuiWindowFlags_NoDocking   | ImGuiWindowFlags_NavFlattened |
+            ImGuiWindowFlags_AlwaysAutoResize);
 
-        // ── Drag handle (invisible, full toolbar) ─────────────
+        // Đưa toolbar lên trên cùng
+        ImGuiWindow* toolbar_win = ImGui::FindWindowByName("##DebuggerToolbar");
+        if (toolbar_win) {
+            ImGui::BringWindowToDisplayFront(toolbar_win);
+        }
+
+        // ── Drag handle ────────────────────────────────────────
         ImVec2 winSize = ImGui::GetWindowSize();
         ImGui::SetCursorPos(ImVec2(0, 0));
         ImGui::InvisibleButton("##toolbar_drag_handle", winSize);
@@ -211,13 +229,10 @@ void RenderDebuggerToolbar() {
         } else {
             if (g_toolbar_dragging) {
                 g_toolbar_dragging = false;
-                // Snap to edge khi thả tay
                 float centerY = (minY + maxY) / 2.0f;
                 if (g_toolbar_targetY < centerY) {
-                    // Kéo lên nửa trên → snap về vị trí dưới status bar
                     g_toolbar_targetY = minY;
                 } else {
-                    // Kéo xuống nửa dưới → snap xuống bottom
                     g_toolbar_targetY = maxY;
                 }
                 g_toolbar_posY = g_toolbar_targetY;
@@ -237,7 +252,6 @@ void RenderDebuggerToolbar() {
             if (ImGui::BeginTabBar("ToolbarTabs",
                 ImGuiTabBarFlags_FittingPolicyScroll | ImGuiTabBarFlags_NoTooltip))
             {
-                // ── Nút ẩn/hiện toolbar (chỉ iOS) ─────────────
 #if defined(__IOS__)
                 if (ImGui::TabItemButton(g_toolbar_visible ? "[–] Hide" : "[+] Show")) {
                     g_toolbar_visible = !g_toolbar_visible;
@@ -580,7 +594,12 @@ CodeViewer* test_gui(bool* guiCreated, SDL_Window* wnd, SDL_Renderer* rnd) {
         } else {
             // Nếu chưa có file lưu, đặt mặc định dưới status bar
             ImGuiViewport* viewport = ImGui::GetMainViewport();
+#ifdef __IOS__
+            float safeAreaTop = getSafeAreaTop();
+            g_toolbar_posY = viewport->WorkPos.y + safeAreaTop;
+#else
             g_toolbar_posY = viewport->WorkPos.y + STATUS_BAR_HEIGHT;
+#endif
             g_toolbar_targetY = g_toolbar_posY;
         }
         g_toolbar_visible = savedVis;
