@@ -425,15 +425,6 @@ void RenderStatusBar() {
     ImGui::PopStyleVar();
 }
 
-// ======================== FIX: Khởi tạo display buffer ========================
-// Giả định rằng có biến toàn cục g_displayBuffer và kích thước
-// Nếu không có, bạn cần thay thế bằng biến thực tế trong dự án.
-// Hoặc có thể bỏ qua phần này nếu đã được khởi tạo ở nơi khác.
-// extern unsigned char* g_displayBuffer; // hoặc tên biến khác
-// extern int g_displayBufferSize;        // kích thước buffer
-// Nếu không có, bạn có thể comment phần này.
-// =============================================================================
-
 void gui_loop() {
     if (!m_emu->Running()) return;
     ImGuiIO& io = ImGui::GetIO();
@@ -446,7 +437,8 @@ void gui_loop() {
 
     // ======================== FIX: Xử lý click ngoài để ẩn bàn phím ========================
     // Khi người dùng click vào vùng không có cửa sổ hoặc item nào, ẩn bàn phím nếu đang mở
-    if (ImGui::IsMouseClicked(0) && !ImGui::IsAnyItemHovered() && !ImGui::IsAnyWindowHovered()) {
+    // Sửa lỗi: ImGui::IsAnyWindowHovered() không tồn tại → dùng ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow)
+    if (ImGui::IsMouseClicked(0) && !ImGui::IsAnyItemHovered() && !ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow)) {
         if (SDL_IsTextInputActive()) {
             SDL_StopTextInput();
         }
