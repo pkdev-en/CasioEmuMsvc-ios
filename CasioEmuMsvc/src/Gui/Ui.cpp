@@ -756,4 +756,17 @@ void gui_cleanup() {
         ThemeManager::Instance().Settings().windowX = x;
         ThemeManager::Instance().Settings().windowY = y;
         ThemeManager::Instance().Settings().windowW = w;
-        ThemeManager::Instance().Settings
+        ThemeManager::Instance().Settings().windowH = h;
+        ThemeManager::Instance().SaveSettings();
+    }
+#endif
+#endif
+    ImGui_ImplSDLRenderer2_Shutdown();
+    ImGui_ImplSDL2_Shutdown();
+    ImGui::DestroyContext();
+    SaveUIState();
+    windows.clear();
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+}
