@@ -40,6 +40,23 @@
 #endif
 #include <sdl_win32_extra.h>
 
+// ======================== FIX: Ẩn status bar trên iOS ========================
+#ifdef __IOS__
+#import <UIKit/UIKit.h>
+
+void SetStatusBarHidden(bool hidden) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [[UIApplication sharedApplication] setStatusBarHidden:hidden withAnimation:UIStatusBarAnimationNone];
+        UIWindow *window = [UIApplication sharedApplication].keyWindow;
+        UIViewController *rootVC = window.rootViewController;
+        if (rootVC) {
+            [rootVC setNeedsStatusBarAppearanceUpdate];
+        }
+    });
+}
+#endif
+// =====================================================================
+
 // ======================== ERROR LOG ========================
 std::vector<std::string> g_error_logs;
 const size_t MAX_ERROR_LOGS = 1000;
@@ -408,6 +425,15 @@ void RenderStatusBar() {
     ImGui::PopStyleVar();
 }
 
+// ======================== FIX: Khởi tạo display buffer ========================
+// Giả định rằng có biến toàn cục g_displayBuffer và kích thước
+// Nếu không có, bạn cần thay thế bằng biến thực tế trong dự án.
+// Hoặc có thể bỏ qua phần này nếu đã được khởi tạo ở nơi khác.
+// extern unsigned char* g_displayBuffer; // hoặc tên biến khác
+// extern int g_displayBufferSize;        // kích thước buffer
+// Nếu không có, bạn có thể comment phần này.
+// =============================================================================
+
 void gui_loop() {
     if (!m_emu->Running()) return;
     ImGuiIO& io = ImGui::GetIO();
@@ -417,6 +443,34 @@ void gui_loop() {
     ImGui_ImplSDLRenderer2_NewFrame();
     ImGui_ImplSDL2_NewFrame();
     ImGui::NewFrame();
+
+    // ======================== FIX: Xử lý click ngoài để ẩn bàn phím ========================
+    // Khi người dùng click vào vùng không có cửa sổ hoặc item nào, ẩn bàn phím nếu đang mở
+    if (ImGui::IsMouseClicked(0) && !ImGui::IsAnyItemHovered() && !ImGui::IsAnyWindowHovered()) {
+        if (SDL_IsTextInputActive()) {
+            SDL_StopTextInput();
+        }
+    }
+    // ======================================================================================
+
+    // ======================== FIX: Khởi tạo display buffer một lần ========================
+    static bool display_buffer_initialized = false;
+    if (!display_buffer_initialized) {
+        // Giả định biến g_displayBuffer đã được định nghĩa
+        // Nếu không, bạn có thể bỏ qua hoặc tìm cách khác
+        // Ví dụ: nếu m_emu có hàm GetDisplayBuffer, dùng:
+        // if (m_emu) {
+        //     void* buf = m_emu->GetDisplayBuffer();
+        //     int size = m_emu->GetDisplayBufferSize();
+        //     if (buf && size > 0) memset(buf, 0, size);
+        // }
+        // Tạm thời, nếu có biến toàn cục:
+        // if (g_displayBuffer && g_displayBufferSize > 0) {
+        //     memset(g_displayBuffer, 0, g_displayBufferSize);
+        // }
+        display_buffer_initialized = true;
+    }
+    // ======================================================================================
 
 #if !defined(__ANDROID__) && !defined(__IOS__)
     ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -568,6 +622,13 @@ CodeViewer* test_gui(bool* guiCreated, SDL_Window* wnd, SDL_Renderer* rnd) {
         SDL_Log("Error creating SDL_Renderer!");
         return nullptr;
     }
+
+    // ======================== FIX: Ẩn status bar trên iOS ========================
+#ifdef __IOS__
+    SetStatusBarHidden(true);
+#endif
+    // ============================================================================
+
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
