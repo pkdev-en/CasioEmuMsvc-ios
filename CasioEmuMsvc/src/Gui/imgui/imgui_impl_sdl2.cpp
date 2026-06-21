@@ -1,4 +1,4 @@
-﻿// dear imgui: Platform Backend for SDL2
+// dear imgui: Platform Backend for SDL2
 // This needs to be used along with a Renderer (e.g. DirectX11, OpenGL3, Vulkan..)
 // (Info: SDL2 is a cross-platform general purpose library for handling windows, inputs, graphics context creation, etc.)
 // (Prefer SDL 2.0.5+ for full feature support.)
@@ -154,7 +154,13 @@ static void ImGui_ImplSDL2_SetPlatformImeData(ImGuiContext*,ImGuiViewport*, ImGu
         SDL_SetTextInputRect(&r);*/
         SDL_StartTextInput();
     }else {
-        // SDL_StopTextInput();
+#if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IOS)
+        // On mobile, the on-screen keyboard must be explicitly dismissed
+        // when no ImGui text field is focused (e.g. user tapped outside
+        // the input area). Desktop platforms keep this disabled to avoid
+        // IME flicker, see note above.
+        SDL_StopTextInput();
+#endif
     }
 }
 
