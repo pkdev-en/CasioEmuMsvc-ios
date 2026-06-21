@@ -488,6 +488,17 @@ if(APPLE AND BUILD_EXECUTABLE AND NOT IOS)
         ${CMAKE_CURRENT_SOURCE_DIR}/locales
         $<TARGET_BUNDLE_DIR:${TARGET_NAME}>/Contents/Resources/locales
     )
+
+    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+        $<TARGET_BUNDLE_DIR:${TARGET_NAME}>/Contents/Resources/fonts
+    )
+
+    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_CURRENT_SOURCE_DIR}/fonts
+        $<TARGET_BUNDLE_DIR:${TARGET_NAME}>/Contents/Resources/fonts
+    )
 elseif(IOS AND BUILD_EXECUTABLE)
     add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory
@@ -498,6 +509,17 @@ elseif(IOS AND BUILD_EXECUTABLE)
         COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_CURRENT_SOURCE_DIR}/locales
         $<TARGET_BUNDLE_DIR:${TARGET_NAME}>/locales
+    )
+
+    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+        $<TARGET_BUNDLE_DIR:${TARGET_NAME}>/fonts
+    )
+
+    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_CURRENT_SOURCE_DIR}/fonts
+        $<TARGET_BUNDLE_DIR:${TARGET_NAME}>/fonts
     )
 endif()
 
