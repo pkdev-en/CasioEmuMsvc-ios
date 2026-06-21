@@ -6,9 +6,9 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-// ¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T
-//  ¹¹Ôì / »ù´¡
-// ¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T
+// ï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½T
+//  ï¿½ï¿½ï¿½ï¿½ / ï¿½ï¿½ï¿½ï¿½
+// ï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½T
 
 TouchMouseTranslator::TouchMouseTranslator(
 	Uint32 windowId,
@@ -37,9 +37,9 @@ bool TouchMouseTranslator::HandleEvent(const SDL_Event& event,
 	}
 }
 
-// ¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T
+// ï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½T
 //  FingerDown
-// ¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T
+// ï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½T
 
 bool TouchMouseTranslator::HandleFingerDown(
 	const SDL_TouchFingerEvent& finger, int windowW, int windowH) {
@@ -56,16 +56,16 @@ bool TouchMouseTranslator::HandleFingerDown(
 		StartFinger(primary_, finger.fingerId, x, y, target);
 
 		/*
-		 * ÎÞÂÛ ImGui »¹ÊÇ Emulator£¬¶¼²»ÔÚ FingerDown Ê±Á¢¼´°´ÏÂÊó±ê¡£
-		 * µÈ Motion ³¬¹ýãÐÖµºó¿ªÊ¼ÍÏ×§£¬»òÔÚ Up Ê±ÅÐ¶Ï tap / long-press¡£
-		 * ÕâÑùÒÆ¶¯¾àÀë²»¹»¾Í²»»á´¥·¢ÈÎºÎÊó±êÊÂ¼þ¡£
+		 * ï¿½ï¿½ï¿½ï¿½ ImGui ï¿½ï¿½ï¿½ï¿½ Emulatorï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ FingerDown Ê±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ê¡£
+		 * ï¿½ï¿½ Motion ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Öµï¿½ï¿½Ê¼ï¿½ï¿½×§ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ Up Ê±ï¿½Ð¶ï¿½ tap / long-pressï¿½ï¿½
+		 * ï¿½ï¿½ï¿½ï¿½ï¿½Æ¶ï¿½ï¿½ï¿½ï¿½ë²»ï¿½ï¿½ï¿½Í²ï¿½ï¿½á´¥ï¿½ï¿½ï¿½Îºï¿½ï¿½ï¿½ï¿½ï¿½Â¼ï¿½ï¿½ï¿½
 		 */
 		return true;
 	}
 
 	if (!secondary_.active && finger.fingerId != primary_.fingerId) {
-		// µÚ¶þ¸ùÊÖÖ¸°´ÏÂ ¡ú ×ªË«Ö¸¹ö¶¯
-		// ÏÈÊÍ·Å×ó¼ü£¬±ÜÃâ¿¨×¡
+		// ï¿½Ú¶ï¿½ï¿½ï¿½ï¿½ï¿½Ö¸ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ ×ªË«Ö¸ï¿½ï¿½ï¿½ï¿½
+		// ï¿½ï¿½ï¿½Í·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½â¿¨×¡
 		if (primary_.dragging || leftButtonDown_) {
 			EmitMouseButton(primary_.target, SDL_BUTTON_LEFT,
 				SDL_RELEASED,
@@ -82,9 +82,9 @@ bool TouchMouseTranslator::HandleFingerDown(
 	return true;
 }
 
-// ¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T
+// ï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½T
 //  FingerUp
-// ¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T
+// ï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½T
 
 bool TouchMouseTranslator::HandleFingerUp(
 	const SDL_TouchFingerEvent& finger, int windowW, int windowH) {
@@ -93,20 +93,34 @@ bool TouchMouseTranslator::HandleFingerUp(
 	const float y = finger.y * static_cast<float>(windowH);
 	const Uint32 now = SDL_GetTicks();
 
-	// ©¤©¤ primary up ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+	// FIX: re-check the hit-test target at FingerUp time (not just at
+	// FingerDown). A modal/popup (e.g. an "OK" dialog) can open in the
+	// same frame the finger went down, in which case the original
+	// FingerDown hit-test still sees the *previous* frame's layout and
+	// routes the tap to the Emulator (calculator keypad) instead of
+	// ImGui. Re-testing immediately before the tap/click is emitted
+	// fixes taps on buttons inside dialogs that just appeared.
+	if (guiHitTest_) {
+		if (primary_.active && primary_.fingerId == finger.fingerId && !primary_.dragging && !leftButtonDown_)
+			primary_.target = guiHitTest_(x, y) ? TouchTarget::ImGui : TouchTarget::Emulator;
+		else if (secondary_.active && secondary_.fingerId == finger.fingerId && !secondary_.dragging && !leftButtonDown_)
+			secondary_.target = guiHitTest_(x, y) ? TouchTarget::ImGui : TouchTarget::Emulator;
+	}
+
+	// ï¿½ï¿½ï¿½ï¿½ primary up ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 	if (primary_.active && primary_.fingerId == finger.fingerId) {
 		primary_.currentX = x;
 		primary_.currentY = y;
 
 		if (primary_.dragging || leftButtonDown_) {
-			// ÕýÔÚÍÏ×§ÖÐ ¡ú ÊÍ·Å×ó¼ü
+			// ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½×§ï¿½ï¿½ ï¿½ï¿½ ï¿½Í·ï¿½ï¿½ï¿½ï¿½
 			EmitMouseMotion(primary_.target, x, y);
 			EmitMouseButton(primary_.target, SDL_BUTTON_LEFT,
 				SDL_RELEASED, x, y);
 			primary_.dragging = false;
 		}
 		else {
-			// Ã»ÓÐÍÏ×§ ¡ú ÅÐ¶Ï tap / long-press
+			// Ã»ï¿½ï¿½ï¿½ï¿½×§ ï¿½ï¿½ ï¿½Ð¶ï¿½ tap / long-press
 			const float dx = x - primary_.startX;
 			const float dy = y - primary_.startY;
 			const float distSq = dx * dx + dy * dy;
@@ -115,17 +129,17 @@ bool TouchMouseTranslator::HandleFingerUp(
 
 			if (primary_.isTapCandidate && distSq <= thresholdSq) {
 				if (now - primary_.startTime < longPressDelayMs_) {
-					// ¶Ì°´ ¡ú ×ó¼üµã»÷
+					// ï¿½Ì°ï¿½ ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 					EmitMouseClick(primary_.target,
 						SDL_BUTTON_LEFT, x, y);
 				}
 				else {
-					// ³¤°´ ¡ú ÓÒ¼üµã»÷
+					// ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ ï¿½Ò¼ï¿½ï¿½ï¿½ï¿½
 					EmitMouseClick(primary_.target,
 						SDL_BUTTON_RIGHT, x, y);
 				}
 			}
-			// ÒÆ¶¯¾àÀë²»¹» ÇÒ suppressTap ¡ú Ê²Ã´¶¼²»×ö
+			// ï¿½Æ¶ï¿½ï¿½ï¿½ï¿½ë²»ï¿½ï¿½ ï¿½ï¿½ suppressTap ï¿½ï¿½ Ê²Ã´ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 		}
 
 		ResetFinger(primary_);
@@ -135,7 +149,7 @@ bool TouchMouseTranslator::HandleFingerUp(
 		return true;
 	}
 
-	// ©¤©¤ secondary up ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+	// ï¿½ï¿½ï¿½ï¿½ secondary up ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 	if (secondary_.active && secondary_.fingerId == finger.fingerId) {
 		secondary_.currentX = x;
 		secondary_.currentY = y;
@@ -153,9 +167,9 @@ bool TouchMouseTranslator::HandleFingerUp(
 	return true;
 }
 
-// ¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T
+// ï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½T
 //  FingerMotion
-// ¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T
+// ï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½T
 
 bool TouchMouseTranslator::HandleFingerMotion(
 	const SDL_TouchFingerEvent& finger, int windowW, int windowH) {
@@ -163,7 +177,7 @@ bool TouchMouseTranslator::HandleFingerMotion(
 	const float x = finger.x * static_cast<float>(windowW);
 	const float y = finger.y * static_cast<float>(windowH);
 
-	// ©¤©¤ primary motion ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+	// ï¿½ï¿½ï¿½ï¿½ primary motion ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 	if (primary_.active && primary_.fingerId == finger.fingerId) {
 
 		if (!secondary_.active) {
@@ -182,7 +196,7 @@ bool TouchMouseTranslator::HandleFingerMotion(
 		return true;
 	}
 
-	// ©¤©¤ secondary motion ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+	// ï¿½ï¿½ï¿½ï¿½ secondary motion ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 	if (secondary_.active && secondary_.fingerId == finger.fingerId) {
 
 		if (primary_.active) {
@@ -201,9 +215,9 @@ bool TouchMouseTranslator::HandleFingerMotion(
 	return true;
 }
 
-// ¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T
-//  ÄÚ²¿ÒÆ¶¯´¦Àí
-// ¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T
+// ï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½T
+//  ï¿½Ú²ï¿½ï¿½Æ¶ï¿½ï¿½ï¿½ï¿½ï¿½
+// ï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½T
 
 void TouchMouseTranslator::HandleSingleFingerMove(
 	TouchState& state, float x, float y) {
@@ -255,9 +269,9 @@ void TouchMouseTranslator::HandleTwoFingerMove(
 	state.lastScrollTime = now;
 }
 
-// ¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T
-//  ¸¨Öú
-// ¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T
+// ï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½T
+//  ï¿½ï¿½ï¿½ï¿½
+// ï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½T
 
 void TouchMouseTranslator::StartFinger(
 	TouchState& state, SDL_FingerID fingerId,
@@ -314,9 +328,9 @@ void TouchMouseTranslator::ResetTrail(TouchTrail& trail) {
 	trail.count = 0;
 }
 
-// ¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T
-//  äÖÈ¾
-// ¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T
+// ï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½T
+//  ï¿½ï¿½È¾
+// ï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½T
 
 static void RenderFilledCircle(SDL_Renderer* renderer,
 	int cx, int cy, int radius) {
@@ -364,7 +378,7 @@ void TouchMouseTranslator::RenderDebug(SDL_Renderer* renderer) const {
 	DrawCross(renderer, primary_, 255, 0, 0);
 	DrawCross(renderer, secondary_, 0, 255, 0);
 
-	// ³¤°´½ø¶È»·£º½öµ±µ¥Ö¸°´×¡¡¢Î´ÍÏ×§¡¢Î´ suppress Ê±ÏÔÊ¾
+	// ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½È»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö¸ï¿½ï¿½×¡ï¿½ï¿½Î´ï¿½ï¿½×§ï¿½ï¿½Î´ suppress Ê±ï¿½ï¿½Ê¾
 	DrawLongPressRing(renderer, primary_);
 	DrawLongPressRing(renderer, secondary_);
 }
@@ -409,7 +423,7 @@ void TouchMouseTranslator::DrawCross(SDL_Renderer* renderer,
 	if (!state.active) {
 		return;
 	}
-	// ¿ÉÑ¡£º»æÖÆÊ®×Ö×¼ÐÇ
+	// ï¿½ï¿½Ñ¡ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê®ï¿½ï¿½×¼ï¿½ï¿½
 	// SDL_SetRenderDrawColor(renderer, r, g, b, 255);
 	// ...
 	(void)r;
@@ -425,12 +439,12 @@ void TouchMouseTranslator::DrawLongPressRing(
 		return;
 	}
 
-	// ÕýÔÚÍÏ×§»òÒÑ±»ÒÖÖÆ ¡ú ²»ÏÔÊ¾»·
+	// ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½×§ï¿½ï¿½ï¿½Ñ±ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½Ê¾ï¿½ï¿½
 	if (state.dragging || state.suppressTap) {
 		return;
 	}
 
-	// ¼ì²éÒÆ¶¯¾àÀëÊÇ·ñ»¹ÔÚãÐÖµÄÚ
+	// ï¿½ï¿½ï¿½ï¿½Æ¶ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ç·ï¿½ï¿½ï¿½ï¿½ï¿½Öµï¿½ï¿½
 	const float dx = state.currentX - state.startX;
 	const float dy = state.currentY - state.startY;
 	const float distSq = dx * dx + dy * dy;
@@ -443,21 +457,21 @@ void TouchMouseTranslator::DrawLongPressRing(
 	const Uint32 now = SDL_GetTicks();
 	const Uint32 elapsed = now - state.startTime;
 
-	// ½ø¶È 0.0 ~ 1.0
+	// ï¿½ï¿½ï¿½ï¿½ 0.0 ~ 1.0
 	float progress = static_cast<float>(elapsed) / static_cast<float>(longPressDelayMs_);
 	progress = std::min(progress, 1.0f);
 
-	// ½ø¶ÈÌ«Ð¡²»»­
+	// ï¿½ï¿½ï¿½ï¿½Ì«Ð¡ï¿½ï¿½ï¿½ï¿½
 	if (progress < 0.5f) {
 		return;
 	}
-	progress = (progress - 0.5f) * 2.0f; // 0.5~1.0 Ó³Éäµ½ 0.0~1.0
+	progress = (progress - 0.5f) * 2.0f; // 0.5~1.0 Ó³ï¿½äµ½ 0.0~1.0
 
 	const int cx = static_cast<int>(state.startX);
 	const int cy = static_cast<int>(state.startY);
 	const float endAngle = progress * 2.0f * static_cast<float>(M_PI);
 
-	// ÑÕÉ«£ºÎ´Âú°×É«£¬ÂúÁËÂÌÉ«
+	// ï¿½ï¿½É«ï¿½ï¿½Î´ï¿½ï¿½ï¿½ï¿½É«ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½É«
 	if (progress >= 1.0f) {
 		SDL_SetRenderDrawColor(renderer, 100, 255, 100, 220);
 	}
@@ -465,15 +479,15 @@ void TouchMouseTranslator::DrawLongPressRing(
 		SDL_SetRenderDrawColor(renderer, 255, 255, 255, 180);
 	}
 
-	// ÓÃÏß¶Î±Æ½üÔ²»¡
+	// ï¿½ï¿½ï¿½ß¶Î±Æ½ï¿½Ô²ï¿½ï¿½
 	const int segments = std::max(16, static_cast<int>(progress * 64));
-	const float startAng = -static_cast<float>(M_PI) / 2.0f; // 12 µãÖÓ·½Ïò
+	const float startAng = -static_cast<float>(M_PI) / 2.0f; // 12 ï¿½ï¿½ï¿½Ó·ï¿½ï¿½ï¿½
 
 	for (int i = 0; i < segments; ++i) {
 		float a1 = startAng + endAngle * static_cast<float>(i) / static_cast<float>(segments);
 		float a2 = startAng + endAngle * static_cast<float>(i + 1) / static_cast<float>(segments);
 
-		// ¶ÔÃ¿¶Î»¡Ïß£¬»­¶à²ãÒÔÄ£ÄâÏß¿í
+		// ï¿½ï¿½Ã¿ï¿½Î»ï¿½ï¿½ß£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ä£ï¿½ï¿½ï¿½ß¿ï¿½
 		for (float r = ringRadius_ - ringThickness_ * 0.5f;
 			r <= ringRadius_ + ringThickness_ * 0.5f;
 			r += 1.0f) {
@@ -487,7 +501,7 @@ void TouchMouseTranslator::DrawLongPressRing(
 		}
 	}
 
-	// ÂúÁËÖ®ºó»­Ò»¸öÐ¡µãÇ¿µ÷
+	// ï¿½ï¿½ï¿½ï¿½Ö®ï¿½ï¿½Ò»ï¿½ï¿½Ð¡ï¿½ï¿½Ç¿ï¿½ï¿½
 	if (progress >= 1.0f) {
 		SDL_SetRenderDrawColor(renderer, 100, 255, 100, 255);
 		RenderFilledCircle(renderer,
@@ -499,9 +513,9 @@ void TouchMouseTranslator::DrawLongPressRing(
 	}
 }
 
-// ¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T
-//  ÊÂ¼þ·¢Éä
-// ¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T
+// ï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½T
+//  ï¿½Â¼ï¿½ï¿½ï¿½ï¿½ï¿½
+// ï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½Tï¿½T
 
 void TouchMouseTranslator::EmitMouseMotion(
 	TouchTarget target, float x, float y) {
