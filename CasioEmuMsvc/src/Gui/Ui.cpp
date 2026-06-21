@@ -408,7 +408,7 @@ void RenderStatusBar() {
     ImGui::PopStyleVar();
 }
 
-// ======================== FIX: gui_loop (bàn phím được ẩn từ vòng lặp sự kiện chính, xem casioemu.cpp) ========================
+// ======================== FIX: gui_loop với xử lý ẩn bàn phím ========================
 void gui_loop() {
     if (!m_emu->Running()) return;
     ImGuiIO& io = ImGui::GetIO();
@@ -416,6 +416,45 @@ void gui_loop() {
 #if defined(__ANDROID__) || defined(MACOS) || defined(__IOS__)
     ThemeManager::Instance().UpdateUIScale();
 #endif
+
+    // ─── Xử lý sự kiện SDL để ẩn bàn phím khi click ngoài ───
+    SDL_Event event;
+    while (SDL_PollEvent(&event)) {
+        // Đẩy event cho ImGui xử lý
+        ImGui_ImplSDL2_ProcessEvent(&event);
+
+        // Bắt click chuột hoặc chạm
+        if (event.type == SDL_MOUSEBUTTONDOWN || event.type == SDL_FINGERDOWN) {
+            int x, y;
+            if (event.type == SDL_MOUSEBUTTONDOWN) {
+                x = event.button.x;
+                y = event.button.y;
+            } else {
+                x = (int)(event.tfinger.x * io.DisplaySize.x);
+                y = (int)(event.tfinger.y * io.DisplaySize.y);
+            }
+
+            // Nếu bàn phím đang mở
+            if (SDL_IsTextInputActive()) {
+                // Lấy vùng cửa sổ Calculator
+                ImGuiWindow* calc_win = ImGui::FindWindowByName("Calculator");
+                bool insideKeyboard = false;
+                if (calc_win) {
+                    insideKeyboard = (x >= calc_win->Pos.x && x <= calc_win->Pos.x + calc_win->Size.x &&
+                                      y >= calc_win->Pos.y && y <= calc_win->Pos.y + calc_win->Size.y);
+                }
+                // Toolbar nằm ở đỉnh (y < 60) - điều chỉnh nếu cần
+                bool insideToolbar = (y < 60);
+
+                // Click ngoài → ẩn bàn phím
+                if (!insideKeyboard && !insideToolbar) {
+                    SDL_StopTextInput();
+                    ImGui::SetWindowFocus(nullptr);
+                }
+            }
+        }
+    }
+    // ──────────────────────────────────────────────────────────
 
     ImGui_ImplSDLRenderer2_NewFrame();
     ImGui_ImplSDL2_NewFrame();
