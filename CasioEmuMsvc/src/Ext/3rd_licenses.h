@@ -741,6 +741,19 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 
+Noto Sans SC / Noto Sans KR (https://github.com/notofonts/noto-cjk):
+Noto Sans Thai (https://github.com/notofonts/thai):
+
+Copyright 2014-2022 Adobe / The Noto Project Authors.
+
+This Font Software is licensed under the SIL Open Font License,
+Version 1.1. This Font Software is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+implied. See the SIL Open Font License for the specific language
+governing permissions and limitations.
+
+Full license text available at: https://scripts.sil.org/OFL
+
 
 
 )aaaaaaaa";
