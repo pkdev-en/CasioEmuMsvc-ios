@@ -167,7 +167,9 @@ void ThemeManager::UpdateUIScale() {
 
 	fontScale = baseScale * screenSizeAdjustment * sqrt(densityScale);
 	fontScale = std::clamp(fontScale, 0.5f, 1.5f);
-	io.FontGlobalScale = std::max(fontScale, 0.75f);
+	// Keep a higher floor on mobile so body text never shrinks below a
+	// comfortably readable size, even on very dense/small screens.
+	io.FontGlobalScale = std::max(fontScale, 0.85f);
 
 	float touchScale = std::max(fontScale, 1.0f);
 	padding = 9.5f * touchScale;
@@ -187,6 +189,11 @@ void ThemeManager::UpdateUIScale() {
 	style.GrabMinSize = 30.0f * touchScale;
 	style.WindowTitleAlign = ImVec2(0.5f, 0.5f);
 	style.MouseCursorScale = 1.2f * touchScale;
+
+	// Slightly thicker borders/separators on mobile improve contrast between
+	// rows, table headers, and grouped sections without changing the palette.
+	style.FrameBorderSize = 1.0f;
+	style.SeparatorTextBorderSize = 2.0f;
 
 	float rounding = 7.5f * std::min(touchScale, 1.3f);
 	style.WindowRounding = rounding;
@@ -257,7 +264,7 @@ void ThemeManager::SetDarkMode() {
 	base.Colors[ImGuiCol_WindowBg] = ImVec4(0.08f, 0.08f, 0.12f, 0.97f);
 	base.Colors[ImGuiCol_ChildBg] = ImVec4(0.05f, 0.05f, 0.07f, 1.0f);
 	base.Colors[ImGuiCol_PopupBg] = ImVec4(0.08f, 0.08f, 0.12f, 0.97f);
-	base.Colors[ImGuiCol_Border] = ImVec4(0.18f, 0.18f, 0.24f, 1.0f);
+	base.Colors[ImGuiCol_Border] = ImVec4(0.32f, 0.32f, 0.42f, 1.0f);
 	base.Colors[ImGuiCol_FrameBg] = ImVec4(0.12f, 0.12f, 0.18f, 1.0f);
 	base.Colors[ImGuiCol_FrameBgHovered] = ImVec4(0.18f, 0.18f, 0.26f, 1.0f);
 	base.Colors[ImGuiCol_FrameBgActive] = ImVec4(0.24f, 0.24f, 0.36f, 1.0f);
@@ -311,7 +318,7 @@ void ThemeManager::ApplyDefaultTheme() {
 	style.Colors[ImGuiCol_WindowBg] = ImVec4(0.08f, 0.08f, 0.12f, 0.97f);
 	style.Colors[ImGuiCol_ChildBg] = ImVec4(0.05f, 0.05f, 0.07f, 1.0f);
 	style.Colors[ImGuiCol_PopupBg] = ImVec4(0.08f, 0.08f, 0.12f, 0.97f);
-	style.Colors[ImGuiCol_Border] = ImVec4(0.18f, 0.18f, 0.24f, 1.0f);
+	style.Colors[ImGuiCol_Border] = ImVec4(0.32f, 0.32f, 0.42f, 1.0f);
 	style.Colors[ImGuiCol_FrameBg] = ImVec4(0.12f, 0.12f, 0.18f, 1.0f);
 	style.Colors[ImGuiCol_FrameBgHovered] = ImVec4(0.18f, 0.18f, 0.26f, 1.0f);
 	style.Colors[ImGuiCol_FrameBgActive] = ImVec4(0.24f, 0.24f, 0.36f, 1.0f);
