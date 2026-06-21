@@ -128,38 +128,46 @@ float getSafeTop() {
 
 - (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     if (urls.count == 0) return;
-    
+
     NSURL *url = urls.firstObject;
-    [url startAccessingSecurityScopedResource]; // Required for iOS file access
-    
-    NSString *path = url.path;
-    
-    // Check if it's a directory (Folder)
-    NSError *error = nil;
-    NSDictionary *attrs = [[NSFileManager defaultManager] attributesOfItemAtPath:path error:&error];
-    BOOL isDir = (attrs.fileType == NSFileTypeDirectory);
-    
-    if (isDir) {
-        if (controller.documentPickerMode == UIDocumentPickerModeOpen) {
-            onFolderSelected(path.UTF8String);
-        } else {
-            onFolderSaved(path.UTF8String);
-        }
-    } else {
-        // It's a file, read the data
-        NSData *fileData = [NSData dataWithContentsOfURL:url options:0 error:&error];
-        if (fileData && !error) {
-            if (controller.documentPickerMode == UIDocumentPickerModeOpen) {
-                onFileSelected(path.UTF8String, (const unsigned char*)fileData.bytes, (int)fileData.length);
+    UIDocumentPickerMode mode = controller.documentPickerMode;
+
+    // Defer the actual processing (and any resulting error alert) to the
+    // next run loop turn. Doing this synchronously here races with the
+    // document picker's own dismissal animation, which can leave a
+    // subsequently-presented alert's buttons unresponsive.
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [url startAccessingSecurityScopedResource]; // Required for iOS file access
+
+        NSString *path = url.path;
+
+        // Check if it's a directory (Folder)
+        NSError *error = nil;
+        NSDictionary *attrs = [[NSFileManager defaultManager] attributesOfItemAtPath:path error:&error];
+        BOOL isDir = (attrs.fileType == NSFileTypeDirectory);
+
+        if (isDir) {
+            if (mode == UIDocumentPickerModeOpen) {
+                onFolderSelected(path.UTF8String);
             } else {
-                onFileSaved(path.UTF8String);
+                onFolderSaved(path.UTF8String);
             }
         } else {
-            onImportFailed();
+            // It's a file, read the data
+            NSData *fileData = [NSData dataWithContentsOfURL:url options:0 error:&error];
+            if (fileData && !error) {
+                if (mode == UIDocumentPickerModeOpen) {
+                    onFileSelected(path.UTF8String, (const unsigned char*)fileData.bytes, (int)fileData.length);
+                } else {
+                    onFileSaved(path.UTF8String);
+                }
+            } else {
+                onImportFailed();
+            }
         }
-    }
-    
-    [url stopAccessingSecurityScopedResource];
+
+        [url stopAccessingSecurityScopedResource];
+    });
 }
 
 - (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller {
