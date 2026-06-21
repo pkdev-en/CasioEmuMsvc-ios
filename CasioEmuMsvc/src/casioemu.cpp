@@ -465,24 +465,7 @@ int main(int argc, char* argv[]) {
 			}
 			break;
 #if defined(__ANDROID__) || defined(IOS)
-		case SDL_FINGERDOWN: {
-			// FIX: hide the on-screen text-input keyboard when the user taps
-			// outside the currently focused input/ImGui area. Uses the same
-			// hit-test (IsPointInImGuiWindow) that decides touch routing,
-			// instead of hardcoding a window name like "Calculator" — this
-			// way it works correctly no matter which window/input currently
-			// owns the keyboard (Watch window, Hex editor, Memory view, ...).
-			if (SDL_IsTextInputActive()) {
-				const float tx = event.tfinger.x * static_cast<float>(wid);
-				const float ty = event.tfinger.y * static_cast<float>(hei);
-				if (!IsPointInImGuiWindow(tx, ty)) {
-					SDL_StopTextInput();
-					ImGui::SetWindowFocus(nullptr);
-				}
-			}
-			touchTranslator.HandleEvent(event, wid, hei);
-			break;
-		}
+		case SDL_FINGERDOWN:
 		case SDL_FINGERUP:
 		case SDL_FINGERMOTION:
 			touchTranslator.HandleEvent(event, wid, hei);
