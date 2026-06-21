@@ -198,6 +198,7 @@ int main(int argc, char* argv[]) {
 		std::error_code ec;
 		std::filesystem::copy("models", path + "/models", std::filesystem::copy_options::recursive | std::filesystem::copy_options::skip_existing, ec);
 		std::filesystem::copy("locales", path + "/locales", std::filesystem::copy_options::recursive | std::filesystem::copy_options::skip_existing, ec);
+		std::filesystem::copy("fonts", path + "/fonts", std::filesystem::copy_options::recursive | std::filesystem::copy_options::skip_existing, ec);
 		std::filesystem::copy("License.md", path + "/License.md", std::filesystem::copy_options::skip_existing, ec);
 		chdir(path.c_str());
 	}
