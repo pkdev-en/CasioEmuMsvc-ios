@@ -80,12 +80,22 @@ namespace casioemu {
 			PANIC("out of range width/height parameter\n");
 		}
 		SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "best");
+		// FIX: SDL_WINDOW_ALLOW_HIGHDPI is required so that on Retina/HiDPI
+		// displays (e.g. iPad Pro 11") SDL allocates the backing drawable at
+		// the *physical* pixel resolution instead of the logical "point"
+		// resolution. Without this flag the renderer draws at a lower
+		// resolution and iOS upscales the result, producing a visibly blurry
+		// UI and emulator screen on Retina iPads/iPhones.
+		Uint32 windowFlags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE;
+#if defined(__ANDROID__) || defined(IOS)
+		windowFlags |= SDL_WINDOW_ALLOW_HIGHDPI;
+#endif
 		window = SDL_CreateWindow(
 			std::string(ModelDefinition.model_name).c_str(),
 			SDL_WINDOWPOS_UNDEFINED,
 			SDL_WINDOWPOS_UNDEFINED,
 			width, height,
-			SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE
+			windowFlags
 			);
 		if (!window)
 			PANIC("SDL_CreateWindow failed: %s\n", SDL_GetError());
