@@ -80,43 +80,12 @@ namespace casioemu {
 			PANIC("out of range width/height parameter\n");
 		}
 		SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "best");
-		// FIX: SDL_WINDOW_ALLOW_HIGHDPI is required so that on Retina/HiDPI
-		// displays (e.g. iPad Pro 11") SDL allocates the backing drawable at
-		// the *physical* pixel resolution instead of the logical "point"
-		// resolution. Without this flag the renderer draws at a lower
-		// resolution and iOS upscales the result, producing a visibly blurry
-		// UI and emulator screen on Retina iPads/iPhones.
-		Uint32 windowFlags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE;
-#if defined(__ANDROID__) || defined(IOS)
-		windowFlags |= SDL_WINDOW_ALLOW_HIGHDPI;
-
-		// FIX: on iOS/Android there is no such thing as a free-floating
-		// desktop window — SDL_CreateWindow always creates a UIWindow/
-		// Activity window pinned to the top-left corner, sized exactly to
-		// the width/height you pass in. `width`/`height` at this point come
-		// from the calculator skin sprite (interface_background.dest.w/h),
-		// which is unrelated to the device's real screen size and is
-		// almost always much smaller than an iPad's screen. The result is
-		// the UI being rendered into a small box in the top-left corner
-		// with the rest of the screen left black. On mobile we must ignore
-		// the sprite-derived size and use SDL_WINDOW_FULLSCREEN_DESKTOP so
-		// the window always covers the full physical screen, whatever its
-		// resolution/aspect ratio (iPhone, iPad, iPad Pro 11", ...).
-		windowFlags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
-		{
-			SDL_DisplayMode displayMode;
-			if (SDL_GetCurrentDisplayMode(0, &displayMode) == 0) {
-				width = displayMode.w;
-				height = displayMode.h;
-			}
-		}
-#endif
 		window = SDL_CreateWindow(
 			std::string(ModelDefinition.model_name).c_str(),
 			SDL_WINDOWPOS_UNDEFINED,
 			SDL_WINDOWPOS_UNDEFINED,
 			width, height,
-			windowFlags
+			SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE
 			);
 		if (!window)
 			PANIC("SDL_CreateWindow failed: %s\n", SDL_GetError());
@@ -258,26 +227,12 @@ namespace casioemu {
 				PANIC("out of range width/height parameter\n");
 			}
 			SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "best");
-			Uint32 windowFlags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE;
-#if defined(__ANDROID__) || defined(IOS)
-			// FIX: same reasoning as the primary constructor above — on
-			// mobile the window must cover the real screen, not the
-			// calculator skin sprite size.
-			windowFlags |= SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_FULLSCREEN_DESKTOP;
-			{
-				SDL_DisplayMode displayMode;
-				if (SDL_GetCurrentDisplayMode(0, &displayMode) == 0) {
-					width = displayMode.w;
-					height = displayMode.h;
-				}
-			}
-#endif
 			window = SDL_CreateWindow(
 				std::string(ModelDefinition.model_name).c_str(),
 				SDL_WINDOWPOS_UNDEFINED,
 				SDL_WINDOWPOS_UNDEFINED,
 				width, height,
-				windowFlags);
+				SDL_WINDOW_SHOWN | (SDL_WINDOW_RESIZABLE));
 			if (!window)
 				PANIC("SDL_CreateWindow failed: %s\n", SDL_GetError());
 			renderer = SDL_CreateRenderer(window, -1, 0);
