@@ -93,20 +93,6 @@ bool TouchMouseTranslator::HandleFingerUp(
 	const float y = finger.y * static_cast<float>(windowH);
 	const Uint32 now = SDL_GetTicks();
 
-	// FIX: re-check the hit-test target at FingerUp time (not just at
-	// FingerDown). A modal/popup (e.g. an "OK" dialog) can open in the
-	// same frame the finger went down, in which case the original
-	// FingerDown hit-test still sees the *previous* frame's layout and
-	// routes the tap to the Emulator (calculator keypad) instead of
-	// ImGui. Re-testing immediately before the tap/click is emitted
-	// fixes taps on buttons inside dialogs that just appeared.
-	if (guiHitTest_) {
-		if (primary_.active && primary_.fingerId == finger.fingerId && !primary_.dragging && !leftButtonDown_)
-			primary_.target = guiHitTest_(x, y) ? TouchTarget::ImGui : TouchTarget::Emulator;
-		else if (secondary_.active && secondary_.fingerId == finger.fingerId && !secondary_.dragging && !leftButtonDown_)
-			secondary_.target = guiHitTest_(x, y) ? TouchTarget::ImGui : TouchTarget::Emulator;
-	}
-
 	// ���� primary up ������������������������������������������������������������������������������������
 	if (primary_.active && primary_.fingerId == finger.fingerId) {
 		primary_.currentX = x;
