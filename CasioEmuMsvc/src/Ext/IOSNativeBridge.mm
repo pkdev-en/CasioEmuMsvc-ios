@@ -90,8 +90,11 @@ float getSafeTop() {
 
 - (void)openFileDialog {
     dispatch_async(dispatch_get_main_queue(), ^{
-        NSArray *documentTypes = @[(NSString *)kUTTypeItem]; // Equivalent to setType("/")
-        UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initWithDocumentTypes:documentTypes inMode:UIDocumentPickerModeOpen];
+        // kUTTypeItem was deprecated in iOS 14 and removed in iOS 16+.
+        // Use UTTypeItem from UniformTypeIdentifiers (already imported above).
+        UIDocumentPickerViewController *picker;
+        picker = [[UIDocumentPickerViewController alloc]
+            initForOpeningContentTypes:@[UTTypeItem]];
         picker.delegate = self;
         picker.allowsMultipleSelection = NO;
         [[self rootViewController] presentViewController:picker animated:YES completion:nil];
@@ -100,20 +103,21 @@ float getSafeTop() {
 
 - (void)saveFileDialog:(NSString*)preferredName {
     dispatch_async(dispatch_get_main_queue(), ^{
-        NSArray *documentTypes = @[(NSString *)kUTTypeItem];
-        UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initWithDocumentTypes:documentTypes inMode:UIDocumentPickerModeExportToService];
+        UIDocumentPickerViewController *picker;
+        picker = [[UIDocumentPickerViewController alloc]
+            initForExportingURLs:@[] asCopy:NO];
         picker.delegate = self;
-        if (@available(iOS 11.0, *)) {
-            picker.allowsContentCreation = YES;
-        }
+        // allowsContentCreation does not exist on UIDocumentPickerViewController
         [[self rootViewController] presentViewController:picker animated:YES completion:nil];
     });
 }
 
 - (void)openFolderDialog {
     dispatch_async(dispatch_get_main_queue(), ^{
-        NSArray *documentTypes = @[(NSString *)kUTTypeFolder];
-        UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initWithDocumentTypes:documentTypes inMode:UIDocumentPickerModeOpen];
+        // kUTTypeFolder was deprecated in iOS 14 and removed in iOS 16+.
+        UIDocumentPickerViewController *picker;
+        picker = [[UIDocumentPickerViewController alloc]
+            initForOpeningContentTypes:@[UTTypeFolder]];
         picker.delegate = self;
         [[self rootViewController] presentViewController:picker animated:YES completion:nil];
     });

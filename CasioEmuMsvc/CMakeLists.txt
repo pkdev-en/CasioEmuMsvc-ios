@@ -282,17 +282,6 @@ else()
     target_compile_definitions(${TARGET_NAME} PRIVATE ASMJIT_STATIC)
 endif()
 
-if(IOS)
-    # The CMake variable IOS (set automatically when CMAKE_SYSTEM_NAME is
-    # "iOS") only exists in CMake script scope — it does NOT automatically
-    # become a C/C++ preprocessor macro. The codebase's iOS-specific paths
-    # need an actual compiler flag to ever be compiled in. Two different
-    # macro spellings are used across the codebase (IOS in casioemu.cpp,
-    # Gui.h, SysDialog.cpp; __IOS__ in Ui.cpp for window/renderer/scale
-    # setup) — define both so neither code path is silently skipped.
-    target_compile_definitions(${TARGET_NAME} PRIVATE IOS __IOS__)
-endif()
-
 set(PLATFORM_LIBS "")
 
 if(WIN32)

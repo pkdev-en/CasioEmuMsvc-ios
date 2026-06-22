@@ -4,7 +4,12 @@
 #include <TargetConditionals.h>
 
 #if TARGET_OS_IPHONE
+    #ifndef IOS
     #define IOS
+    #endif
+    #ifndef __IOS__
+    #define __IOS__
+    #endif
 #elif TARGET_OS_MAC
     #define MACOS
 #endif
@@ -96,7 +101,9 @@ public:                       \
 
 #define EMULATOR_VERSION GIT_COMMIT_HASH
 
+#ifndef DISABLE_SENTRY
 #define DISABLE_SENTRY
+#endif
 
 #if !defined(__ANDROID__) && !defined(__EMSCRIPTEN__) && !defined(DISABLE_SENTRY)
 #define ENABLE_SENTRY
