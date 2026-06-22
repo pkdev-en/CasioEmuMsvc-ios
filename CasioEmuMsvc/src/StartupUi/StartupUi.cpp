@@ -912,13 +912,13 @@ namespace casioemu {
 			float scaledHeight = tm.windowHeight;
 			float fontScale = tm.fontScale;
 			float padding = tm.padding;
-			float buttonHeight = tm.buttonHeight;
+			float buttonHeight = tm.buttonHeight * 1.15f; // Slightly taller, easier to tap precisely
 
 			float contentWidth = scaledWidth * 0.95f;
 			float searchBarWidth = contentWidth * 0.45f;
 			float filterWidth = contentWidth * 0.25f;
-			float tableHeight = scaledHeight * 0.35f;
-			float buttonWidth = contentWidth * 0.3f;
+			float tableHeight = scaledHeight * 0.38f; // A bit more room so rows aren't cramped
+			float buttonWidth = contentWidth * 0.45f; // Was 0.3f — too narrow to read/tap comfortably
 #else
 			float scaledWidth = io.DisplaySize.x;
 			float scaledHeight = io.DisplaySize.y;
@@ -1056,7 +1056,11 @@ namespace casioemu {
 
 			ImGui::TextUnformatted("StartupUI.ChooseModelHint"_lc);
 			ImGui::Separator();
-			ImGui::TextUnformatted("StartupUI.RecentlyUsed"_lc);
+			ImGui::Spacing();
+			{
+				ImVec4 accent = ImGui::GetStyle().Colors[ImGuiCol_ButtonHovered];
+				ImGui::TextColored(accent, "%s", "StartupUI.RecentlyUsed"_lc);
+			}
 
 			if (ImGui::BeginTable("Recently", 4, pretty_table | ImGuiTableFlags_ScrollY, ImVec2(0, tableHeight))) {
 				RenderHeaders();
@@ -1073,6 +1077,7 @@ namespace casioemu {
 				}
 				ImGui::EndTable();
 			}
+			ImGui::Spacing();
 
 			if (ImGui::CollapsingHeader("StartupUI.AllModel"_lc)) {
 				ImGui::SetNextItemWidth(searchBarWidth);

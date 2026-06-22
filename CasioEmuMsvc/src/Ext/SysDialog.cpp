@@ -369,7 +369,16 @@ std::function<void(std::filesystem::path)> SystemDialogs::folderSaveCallback;
             [url stopAccessingSecurityScopedResource];
         }
         
-        self.callback(std::filesystem::path([tempPath UTF8String]));
+        auto callback = self.callback;
+        // The document picker is still in the middle of dismissing itself when
+        // this delegate method fires. If the callback presents another UIKit
+        // view (e.g. an error alert via SDL_ShowSimpleMessageBox), it ends up
+        // racing with that dismissal, which can leave the new alert's buttons
+        // unresponsive. Defer to the next run loop turn so the picker has
+        // fully finished dismissing before anything else is presented.
+        dispatch_async(dispatch_get_main_queue(), ^{
+            callback(std::filesystem::path([tempPath UTF8String]));
+        });
     }
 }
 @end

@@ -118,17 +118,13 @@ static void LoadToolbarPos(float& y, bool& visible) {
 // ==============================================================
 
 #ifdef __IOS__
+// getSafeTop() is implemented in IOSNativeBridge.mm (compiled as
+// Objective-C++) — Ui.cpp itself is plain C++ and cannot contain
+// Objective-C syntax like [UIApplication sharedApplication] directly.
 static float getSafeAreaTop() {
-    float safeTop = 0.0f;
-    UIWindow* window = [UIApplication sharedApplication].keyWindow;
-    if (window) {
-        if (@available(iOS 11.0, *)) {
-            safeTop = window.safeAreaInsets.top;
-        }
-    }
-    // Nếu không lấy được, dùng giá trị mặc định
-    if (safeTop == 0.0f) {
-        safeTop = 50.0f; // iPhone notch/dynamic island
+    float safeTop = getSafeTop();
+    if (safeTop <= 0.0f) {
+        safeTop = 50.0f; // iPhone notch/dynamic island fallback
     }
     return safeTop;
 }

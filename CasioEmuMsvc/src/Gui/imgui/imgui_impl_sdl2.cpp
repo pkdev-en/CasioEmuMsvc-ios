@@ -154,7 +154,13 @@ static void ImGui_ImplSDL2_SetPlatformImeData(ImGuiContext*,ImGuiViewport*, ImGu
         SDL_SetTextInputRect(&r);*/
         SDL_StartTextInput();
     }else {
-        // SDL_StopTextInput();
+#if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IOS)
+        // On mobile, the on-screen keyboard must be explicitly dismissed
+        // when no ImGui text field is focused (e.g. user tapped outside
+        // the input area). Desktop platforms keep this disabled to avoid
+        // IME flicker, see note above.
+        SDL_StopTextInput();
+#endif
     }
 }
 

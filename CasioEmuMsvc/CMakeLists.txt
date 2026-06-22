@@ -282,6 +282,17 @@ else()
     target_compile_definitions(${TARGET_NAME} PRIVATE ASMJIT_STATIC)
 endif()
 
+if(IOS)
+    # The CMake variable IOS (set automatically when CMAKE_SYSTEM_NAME is
+    # "iOS") only exists in CMake script scope — it does NOT automatically
+    # become a C/C++ preprocessor macro. The codebase's iOS-specific paths
+    # need an actual compiler flag to ever be compiled in. Two different
+    # macro spellings are used across the codebase (IOS in casioemu.cpp,
+    # Gui.h, SysDialog.cpp; __IOS__ in Ui.cpp for window/renderer/scale
+    # setup) — define both so neither code path is silently skipped.
+    target_compile_definitions(${TARGET_NAME} PRIVATE IOS __IOS__)
+endif()
+
 set(PLATFORM_LIBS "")
 
 if(WIN32)
@@ -488,6 +499,28 @@ if(APPLE AND BUILD_EXECUTABLE AND NOT IOS)
         ${CMAKE_CURRENT_SOURCE_DIR}/locales
         $<TARGET_BUNDLE_DIR:${TARGET_NAME}>/Contents/Resources/locales
     )
+
+    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+        $<TARGET_BUNDLE_DIR:${TARGET_NAME}>/Contents/Resources/fonts
+    )
+
+    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_CURRENT_SOURCE_DIR}/fonts
+        $<TARGET_BUNDLE_DIR:${TARGET_NAME}>/Contents/Resources/fonts
+    )
+
+    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+        $<TARGET_BUNDLE_DIR:${TARGET_NAME}>/Contents/Resources/fonts_cjk
+    )
+
+    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_CURRENT_SOURCE_DIR}/fonts_cjk
+        $<TARGET_BUNDLE_DIR:${TARGET_NAME}>/Contents/Resources/fonts_cjk
+    )
 elseif(IOS AND BUILD_EXECUTABLE)
     add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory
@@ -498,6 +531,28 @@ elseif(IOS AND BUILD_EXECUTABLE)
         COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_CURRENT_SOURCE_DIR}/locales
         $<TARGET_BUNDLE_DIR:${TARGET_NAME}>/locales
+    )
+
+    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+        $<TARGET_BUNDLE_DIR:${TARGET_NAME}>/fonts
+    )
+
+    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_CURRENT_SOURCE_DIR}/fonts
+        $<TARGET_BUNDLE_DIR:${TARGET_NAME}>/fonts
+    )
+
+    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+        $<TARGET_BUNDLE_DIR:${TARGET_NAME}>/fonts_cjk
+    )
+
+    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_CURRENT_SOURCE_DIR}/fonts_cjk
+        $<TARGET_BUNDLE_DIR:${TARGET_NAME}>/fonts_cjk
     )
 endif()
 

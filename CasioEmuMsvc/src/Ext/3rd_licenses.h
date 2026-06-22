@@ -725,6 +725,35 @@ freely, subject to the following restrictions:
    misrepresented as being the original software.
 3. This notice may not be removed or altered from any source distribution.
 
+Roboto Font (https://github.com/googlefonts/roboto-2):
+
+Copyright 2011 Google Inc. All Rights Reserved.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+Noto Sans SC / Noto Sans KR (https://github.com/notofonts/noto-cjk):
+Noto Sans Thai (https://github.com/notofonts/thai):
+
+Copyright 2014-2022 Adobe / The Noto Project Authors.
+
+This Font Software is licensed under the SIL Open Font License,
+Version 1.1. This Font Software is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+implied. See the SIL Open Font License for the specific language
+governing permissions and limitations.
+
+Full license text available at: https://scripts.sil.org/OFL
+
 
 
 )aaaaaaaa";

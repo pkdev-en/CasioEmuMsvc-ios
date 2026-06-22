@@ -128,6 +128,26 @@ inline std::string GetCJKFontPath() {
 	candidates = {
 		"/system/fonts/NotoSansCJK-Regular.ttc",
 		"/system/fonts/DroidSansFallback.ttf"};
+#elif defined(IOS)
+	// iOS sandboxes the app away from any system CJK font files, so we ship
+	// our own subset Noto Sans fonts under ./fonts_cjk/ (copied into the
+	// writable Documents dir at startup, see casioemu.cpp). This is kept
+	// SEPARATE from ./fonts/ on purpose: ./fonts/ is auto-scanned and every
+	// file in it gets merged into the base font with the full glyph range
+	// (see AddFontsFromDir below) — dumping multi-MB CJK/Hangul fonts in
+	// there would force-rasterize tens of thousands of glyphs on every
+	// launch regardless of language settings, which is expensive enough on
+	// mobile to risk the launch watchdog killing the app. Keeping them in a
+	// dedicated folder means they're only loaded here, on demand.
+	// Korean needs its own font since Hangul isn't covered by the Simplified
+	// Chinese subset; Japanese shares the SC font because its common Kanji +
+	// Kana glyphs are covered.
+	if (preference == "KR") {
+		candidates = {"./fonts_cjk/NotoSansKR-Regular.otf"};
+	}
+	else {
+		candidates = {"./fonts_cjk/NotoSansSC-Regular.otf"};
+	}
 #else // Linux
 	// 尝试寻找 CJK 的 Mono 版本 (如果有)，否则使用 Regular
 	candidates = {
@@ -137,6 +157,34 @@ inline std::string GetCJKFontPath() {
 		"/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
 		"/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
 		"/usr/share/fonts/droid/DroidSansFallbackFull.ttf"};
+#endif
+
+	return FindBestFont(candidates);
+}
+
+// -----------------------------------------------------------------------------
+// 获取泰文字体 (Thai Font)
+// Most system "monospace"/CJK fonts used as the base font do not include Thai
+// glyphs, so Thai needs its own dedicated font merged into the atlas.
+// -----------------------------------------------------------------------------
+inline std::string GetThaiFontPath() {
+	std::vector<std::string> candidates;
+
+#ifdef _WIN32
+	candidates = {
+		"C:\\Windows\\Fonts\\leelawad.ttf", // Leelawadee — Windows' default Thai font
+		"C:\\Windows\\Fonts\\tahoma.ttf"};	 // Tahoma has Thai glyphs as a fallback
+#elif defined(__ANDROID__)
+	candidates = {
+		"/system/fonts/NotoSansThai-Regular.ttf",
+		"/system/fonts/DroidSansThai.ttf"};
+#elif defined(IOS)
+	candidates = {"./fonts_cjk/NotoSansThai-Regular.ttf"};
+#else // Linux
+	candidates = {
+		"/usr/share/fonts/truetype/noto/NotoSansThai-Regular.ttf",
+		"/usr/share/fonts/thai-scalable/Garuda.ttf",
+		"/usr/share/fonts/truetype/tlwg/Garuda.ttf"};
 #endif
 
 	return FindBestFont(candidates);
@@ -218,9 +266,6 @@ inline void RebuildFont(float scale = 0.0f) {
 		if ("Localization.LoadGreek"_l == "1" || "Localization.LoadGreek"_l == "true") {
 			io.Fonts->AddFontFromFileTTF(mono_font_path.c_str(), 15 * scale, &config, io.Fonts->GetGlyphRangesGreek());
 		}
-		if ("Localization.LoadThai"_l == "1" || "Localization.LoadThai"_l == "true") {
-			io.Fonts->AddFontFromFileTTF(mono_font_path.c_str(), 15 * scale, &config, io.Fonts->GetGlyphRangesThai());
-		}
 		config.MergeMode = false;
 	}
 	else {
@@ -228,6 +273,22 @@ inline void RebuildFont(float scale = 0.0f) {
 		// ImGui 自带的默认字体 (ProggyClean) 也是等宽的，是一个安全的最后防线
 		io.Fonts->AddFontDefault(&config);
 		base_loaded = true;
+	}
+
+	// Thai glyphs are not reliably present in the base/monospace font, so
+	// always merge a dedicated Thai font when requested instead of reusing
+	// mono_font_path (which previously silently produced tofu boxes).
+	if ("Localization.LoadThai"_l == "1" || "Localization.LoadThai"_l == "true") {
+		std::string thai_font_path = GetThaiFontPath();
+		if (!thai_font_path.empty()) {
+			config.MergeMode = true;
+			io.Fonts->AddFontFromFileTTF(thai_font_path.c_str(), 15 * scale, &config, io.Fonts->GetGlyphRangesThai());
+			config.MergeMode = false;
+			printf("[Ui][Info] Loaded Thai Font: %s\n", thai_font_path.c_str());
+		}
+		else {
+			printf("[Ui][Warn] Thai requested but no Thai font found.\n");
+		}
 	}
 
 	// 2. 合并 CJK 字体

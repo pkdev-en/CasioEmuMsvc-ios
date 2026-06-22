@@ -191,19 +191,19 @@ int main(int argc, char* argv[]) {
         }
     }
 #elif defined(IOS)
-	const char* home = getenv("HOME");
-	if (home) {
-		std::string path = std::string(home) + "/Documents/CasioEmuMsvc";
-		std::filesystem::create_directories(path);
-		std::error_code ec;
-		std::filesystem::copy("models", path + "/models", std::filesystem::copy_options::recursive | std::filesystem::copy_options::skip_existing, ec);
-		std::filesystem::copy("locales", path + "/locales", std::filesystem::copy_options::recursive | std::filesystem::copy_options::skip_existing, ec);
-		std::filesystem::copy("License.md", path + "/License.md", std::filesystem::copy_options::skip_existing, ec);
-		chdir(path.c_str());
-	}
+	// NOTE: the actual resource copy + chdir for iOS happens further below,
+	// right after SDL_Init(), where SDL_GetBasePath() can reliably resolve
+	// the app bundle's Resources directory. SDL does not chdir into the
+	// bundle on its own (see SDL's own docs: the working directory is left
+	// as whatever the launching process used), so relying on relative paths
+	// like "models" here — before SDL_Init() establishes anything — silently
+	// resolves against the wrong directory and leaves the app without any
+	// models, locales, or fonts after the chdir() below runs.
 #endif
+#ifndef IOS
 	g_local.Load();
 	ThemeManager::Instance().LoadSettings();
+#endif
 
 	DiscordRPC::Init();
   DiscordRPC::UpdatePresence("");
@@ -256,6 +256,42 @@ int main(int argc, char* argv[]) {
 	int sdlFlags = SDL_INIT_VIDEO | SDL_INIT_TIMER;
 	if (SDL_Init(sdlFlags) != 0)
 		PANIC("SDL_Init failed: %s\n", SDL_GetError());
+
+#ifdef IOS
+	{
+		// SDL_GetBasePath() is the reliable way to find the app bundle's
+		// Resources directory on iOS/macOS — it does NOT depend on the
+		// process's working directory at launch (which SDL leaves
+		// untouched, see SDL's own docs). Calling this only works after
+		// SDL_Init(), hence why this whole block lives here instead of at
+		// the top of main().
+		char* basePathRaw = SDL_GetBasePath();
+		std::string basePath = basePathRaw ? basePathRaw : "";
+		if (basePathRaw) SDL_free(basePathRaw);
+
+		const char* home = getenv("HOME");
+		if (home && !basePath.empty()) {
+			std::string path = std::string(home) + "/Documents/CasioEmuMsvc";
+			std::filesystem::create_directories(path);
+			std::error_code ec;
+			std::filesystem::copy(basePath + "models", path + "/models", std::filesystem::copy_options::recursive | std::filesystem::copy_options::skip_existing, ec);
+			std::filesystem::copy(basePath + "locales", path + "/locales", std::filesystem::copy_options::recursive | std::filesystem::copy_options::skip_existing, ec);
+			std::filesystem::copy(basePath + "fonts", path + "/fonts", std::filesystem::copy_options::recursive | std::filesystem::copy_options::skip_existing, ec);
+			std::filesystem::copy(basePath + "fonts_cjk", path + "/fonts_cjk", std::filesystem::copy_options::recursive | std::filesystem::copy_options::skip_existing, ec);
+			std::filesystem::copy(basePath + "License.md", path + "/License.md", std::filesystem::copy_options::skip_existing, ec);
+			chdir(path.c_str());
+		}
+		else if (!basePath.empty()) {
+			// No writable HOME dir available — fall back to running
+			// straight out of the (read-only) bundle directory so the app
+			// can still find its resources, even though it won't be able
+			// to persist settings/recordings/etc.
+			chdir(basePath.c_str());
+		}
+	}
+	g_local.Load();
+	ThemeManager::Instance().LoadSettings();
+#endif
 
 	int imgFlags = IMG_INIT_PNG;
 	if (IMG_Init(imgFlags) != imgFlags)
