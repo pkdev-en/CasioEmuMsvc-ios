@@ -94,7 +94,7 @@ jobs:
         rm -rf $ICONSET
         mkdir $ICONSET
     
-        # generate iconset (macOS chuẩn size)
+        # generate iconset (macOS chuáº©n size)
         sips -z 16 16     "$IMG" --out $ICONSET/icon_16x16.png
         sips -z 32 32     "$IMG" --out $ICONSET/icon_16x16@2x.png
     
@@ -252,7 +252,7 @@ jobs:
         security list-keychains -d user -s build.keychain
         security default-keychain -s build.keychain
     
-        security import iOSresources/export_anar.p12 \
+        security import iOSResources/export_anar.p12 \
           -k build.keychain \
           -P "1234" \
           -A \
@@ -265,20 +265,20 @@ jobs:
           build.keychain
         
         mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-        cp iOSresources/export_anar.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/
+        cp iOSResources/export_anar.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/
     
     - name: Build for iOS
       if: matrix.platform == 'ios'
       run: |
         
-        cmake -S . -B build -G Ninja -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+        cmake -S . -B build -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
           -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=YES \
           -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=YES \
           -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY="Apple Distribution" \
           -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM="4Z7V3V3G9R" \
           -DCMAKE_CXX_STANDARD=20
         
-        cmake --build build --config Release 
+        cmake --build build --config Release
     - name: Create .ipa
       if: matrix.platform == 'ios'
       run: |
@@ -394,9 +394,9 @@ jobs:
       uses: softprops/action-gh-release@v3
       with:
         tag_name: ${{ env.RELEASE_TAG }}
-        name: '🚧 Auto Build ${{ env.RELEASE_TAG }} (Pre-release)'
+        name: 'ð§ Auto Build ${{ env.RELEASE_TAG }} (Pre-release)'
         body: |
-          ## ⚠️ Pre-release Auto Build
+          ## â ï¸ Pre-release Auto Build
           
           > **Warning**: This is an automated pre-release build for testing purposes. 
           > It may contain bugs and is not recommended for production use.
