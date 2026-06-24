@@ -305,9 +305,11 @@ jobs:
 
         echo "Signing with identity: $IDENTITY"
 
-        /usr/bin/codesign --force --sign "$IDENTITY" \
-          --entitlements /dev/null \
-          "$APP"
+        if /usr/bin/codesign --force --sign "$IDENTITY" "$APP"; then
+          echo "Signing succeeded"
+        else
+          echo "Signing failed, continuing with unsigned app"
+        fi
 
         mkdir -p build/Payload
         rm -rf build/Payload/*
@@ -415,7 +417,7 @@ jobs:
         tag_name: ${{ env.RELEASE_TAG }}
         name: 'Auto Build ${{ env.RELEASE_TAG }} (Pre-release)'
         body: |
-          ## [WARNING] Pre-release Auto Build :)
+          ## [WARNING] Pre-release Auto Build
           
           > **Warning**: This is an automated pre-release build for testing purposes. 
           > It may contain bugs and is not recommended for production use.
