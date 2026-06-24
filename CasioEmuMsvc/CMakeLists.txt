@@ -137,6 +137,12 @@ if(CASIOEMU_WEB)
         ${MAIN_SOURCES_WEB}
     )
 else()
+    # .mm (Objective-C++) files only compile on Apple platforms (iOS/macOS)
+    if(APPLE)
+        set(APPLE_MM_SOURCES ${MAIN_SOURCES_EXT_MM})
+    else()
+        set(APPLE_MM_SOURCES "")
+    endif()
     set(MAIN_SOURCES
         ${MAIN_SOURCES_ROOT}
         ${MAIN_SOURCES_MINIZ}
@@ -144,7 +150,7 @@ else()
         ${MAIN_SOURCES_CRASH}
         ${MAIN_SOURCES_EXT}
         ${MAIN_SOURCES_EXT_CAM}
-        ${MAIN_SOURCES_EXT_MM}
+        ${APPLE_MM_SOURCES}
         ${MAIN_SOURCES_GUI}
         ${MAIN_SOURCES_ROP}
         ${MAIN_SOURCES_IMGUI}
