@@ -382,6 +382,7 @@ elseif(BUILD_EXECUTABLE)
             "-framework Metal"
             "-framework ImageIO"
             "-framework MobileCoreServices"
+            "-framework UniformTypeIdentifiers"
         )
 
         # Compile SysDialog.cpp as Objective-C++ for iOS native file picker
