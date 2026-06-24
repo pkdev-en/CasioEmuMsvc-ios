@@ -28,13 +28,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
 endif()
 
 if(IOS)
+    # Code signing handled per-target after the target is created below
     set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "NO")
-
-    set_target_properties(${TARGET_NAME} PROPERTIES
-        MACOSX_BUNDLE TRUE
-        MACOSX_BUNDLE_GUI_IDENTIFIER com.
-        XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET "13.0"
-    )
 endif()
 
 #set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fms-extensions")
@@ -254,7 +249,7 @@ if(APPLE AND NOT IOS)
     set_target_properties(${TARGET_NAME} PROPERTIES
         MACOSX_BUNDLE_INFO_PLIST
         ${CMAKE_SOURCE_DIR}/MacResources/Info.plist
-        XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.luongtam.casioemu"
+        XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.pkdevvn.casioemu"
 
         INSTALL_RPATH "@executable_path/../Frameworks"
         BUILD_WITH_INSTALL_RPATH TRUE
@@ -263,7 +258,7 @@ elseif(IOS)
     set_target_properties(${TARGET_NAME} PROPERTIES
         MACOSX_BUNDLE_INFO_PLIST
         ${CMAKE_SOURCE_DIR}/iOSResources/Info.plist
-        XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.luongtam.casioemu"
+        XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.pkdevvn.casioemu"
 
         INSTALL_RPATH "@executable_path/Frameworks"
         BUILD_WITH_INSTALL_RPATH TRUE
