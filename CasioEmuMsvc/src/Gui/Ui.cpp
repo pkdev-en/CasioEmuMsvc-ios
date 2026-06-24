@@ -87,7 +87,9 @@ void SaveUIState() {
 }
 
 #ifdef __IOS__
-#include "iOSNativeBridge.h"
+// FIX: Sửa tên include đúng chữ hoa (IOSNativeBridge.h thay vì iOSNativeBridge.h)
+// FIX: Dùng getSafeTop() từ IOSNativeBridge.mm thay vì tự implement Objective-C trong file .cpp
+#include "IOSNativeBridge.h"
 #endif
 
 static float screenshot_toast_timer = 0.0f;
@@ -117,22 +119,8 @@ static void LoadToolbarPos(float& y, bool& visible) {
 }
 // ==============================================================
 
-#ifdef __IOS__
-static float getSafeAreaTop() {
-    float safeTop = 0.0f;
-    UIWindow* window = [UIApplication sharedApplication].keyWindow;
-    if (window) {
-        if (@available(iOS 11.0, *)) {
-            safeTop = window.safeAreaInsets.top;
-        }
-    }
-    // Nếu không lấy được, dùng giá trị mặc định
-    if (safeTop == 0.0f) {
-        safeTop = 50.0f; // iPhone notch/dynamic island
-    }
-    return safeTop;
-}
-#endif
+// FIX: Đã xóa hàm getSafeAreaTop() khỏi đây vì nó dùng Objective-C syntax
+// không hợp lệ trong file .cpp. Thay vào đó dùng getSafeTop() từ IOSNativeBridge.h
 
 void RenderDebuggerToolbar() {
     bool isCustom = false;
@@ -147,8 +135,8 @@ void RenderDebuggerToolbar() {
         float toolbarH = ImGui::GetFrameHeight() + 8.0f;
         float dt = ImGui::GetIO().DeltaTime;
 
-        // Lấy safe area top
-        float safeAreaTop = getSafeAreaTop();
+        // FIX: Dùng getSafeTop() từ IOSNativeBridge.h thay vì getSafeAreaTop()
+        float safeAreaTop = getSafeTop();
 
         // ── Khởi tạo lần đầu ──────────────────────────────────
         if (g_toolbar_posY < 0.0f) {
@@ -639,7 +627,8 @@ CodeViewer* test_gui(bool* guiCreated, SDL_Window* wnd, SDL_Renderer* rnd) {
             // Nếu chưa có file lưu, đặt mặc định dưới status bar
             ImGuiViewport* viewport = ImGui::GetMainViewport();
 #ifdef __IOS__
-            float safeAreaTop = getSafeAreaTop();
+            // FIX: Dùng getSafeTop() từ IOSNativeBridge.h
+            float safeAreaTop = getSafeTop();
             g_toolbar_posY = viewport->WorkPos.y + safeAreaTop;
 #else
             g_toolbar_posY = viewport->WorkPos.y + STATUS_BAR_HEIGHT;
