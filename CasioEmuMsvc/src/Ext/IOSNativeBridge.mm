@@ -9,8 +9,11 @@
 #include "iOSNativeBridge.h"
 
 // Singleton to act as the UIDocumentPickerDelegate
+// _isOpenMode tracks whether the last-presented picker was an Open (YES) or Export/Save (NO) picker,
+// replacing the deprecated UIDocumentPickerMode / controller.documentPickerMode property removed in iOS 16+.
 @interface iOSNativeBridge : NSObject <UIDocumentPickerDelegate>
 + (instancetype)sharedInstance;
+@property (nonatomic, assign) BOOL isOpenMode;
 @end
 
 @implementation iOSNativeBridge
@@ -93,6 +96,7 @@ float getSafeTop() {
     dispatch_async(dispatch_get_main_queue(), ^{
         // kUTTypeItem was deprecated in iOS 14 and removed in iOS 16+.
         // Use UTTypeItem from UniformTypeIdentifiers (already imported above).
+        self.isOpenMode = YES; // Track intent: open
         UIDocumentPickerViewController *picker;
         picker = [[UIDocumentPickerViewController alloc]
             initForOpeningContentTypes:@[UTTypeItem]];
@@ -104,11 +108,11 @@ float getSafeTop() {
 
 - (void)saveFileDialog:(NSString*)preferredName {
     dispatch_async(dispatch_get_main_queue(), ^{
+        self.isOpenMode = NO; // Track intent: save/export
         UIDocumentPickerViewController *picker;
         picker = [[UIDocumentPickerViewController alloc]
             initForExportingURLs:@[] asCopy:NO];
         picker.delegate = self;
-        // allowsContentCreation does not exist on UIDocumentPickerViewController
         [[self rootViewController] presentViewController:picker animated:YES completion:nil];
     });
 }
@@ -116,6 +120,7 @@ float getSafeTop() {
 - (void)openFolderDialog {
     dispatch_async(dispatch_get_main_queue(), ^{
         // kUTTypeFolder was deprecated in iOS 14 and removed in iOS 16+.
+        self.isOpenMode = YES; // Track intent: open
         UIDocumentPickerViewController *picker;
         picker = [[UIDocumentPickerViewController alloc]
             initForOpeningContentTypes:@[UTTypeFolder]];
@@ -126,6 +131,7 @@ float getSafeTop() {
 
 - (void)saveFolderDialog {
     // iOS doesn't distinguish between open/save folder, just open a folder picker
+    self.isOpenMode = NO; // Track intent: save
     [self openFolderDialog];
 }
 
@@ -135,7 +141,9 @@ float getSafeTop() {
     if (urls.count == 0) return;
 
     NSURL *url = urls.firstObject;
-    UIDocumentPickerMode mode = controller.documentPickerMode;
+    // UIDocumentPickerMode / controller.documentPickerMode was deprecated in iOS 13 and removed in iOS 16+.
+    // Use our own isOpenMode flag that is set before presenting each picker.
+    BOOL openMode = self.isOpenMode;
 
     // Defer the actual processing (and any resulting error alert) to the
     // next run loop turn. Doing this synchronously here races with the
@@ -152,7 +160,7 @@ float getSafeTop() {
         BOOL isDir = (attrs.fileType == NSFileTypeDirectory);
 
         if (isDir) {
-            if (mode == UIDocumentPickerModeOpen) {
+            if (openMode) {
                 onFolderSelected(path.UTF8String);
             } else {
                 onFolderSaved(path.UTF8String);
@@ -161,7 +169,7 @@ float getSafeTop() {
             // It's a file, read the data
             NSData *fileData = [NSData dataWithContentsOfURL:url options:0 error:&error];
             if (fileData && !error) {
-                if (mode == UIDocumentPickerModeOpen) {
+                if (openMode) {
                     onFileSelected(path.UTF8String, (const unsigned char*)fileData.bytes, (int)fileData.length);
                 } else {
                     onFileSaved(path.UTF8String);
