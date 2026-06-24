@@ -40,23 +40,6 @@
 #endif
 #include <sdl_win32_extra.h>
 
-// ======================== FIX: Ẩn status bar trên iOS ========================
-#ifdef __IOS__
-#import <UIKit/UIKit.h>
-
-void SetStatusBarHidden(bool hidden) {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [[UIApplication sharedApplication] setStatusBarHidden:hidden withAnimation:UIStatusBarAnimationNone];
-        UIWindow *window = [UIApplication sharedApplication].keyWindow;
-        UIViewController *rootVC = window.rootViewController;
-        if (rootVC) {
-            [rootVC setNeedsStatusBarAppearanceUpdate];
-        }
-    });
-}
-#endif
-// =====================================================================
-
 // ======================== ERROR LOG ========================
 std::vector<std::string> g_error_logs;
 const size_t MAX_ERROR_LOGS = 1000;
@@ -135,17 +118,13 @@ static void LoadToolbarPos(float& y, bool& visible) {
 // ==============================================================
 
 #ifdef __IOS__
+// getSafeTop() is implemented in IOSNativeBridge.mm (compiled as
+// Objective-C++) — Ui.cpp itself is plain C++ and cannot contain
+// Objective-C syntax like [UIApplication sharedApplication] directly.
 static float getSafeAreaTop() {
-    float safeTop = 0.0f;
-    UIWindow* window = [UIApplication sharedApplication].keyWindow;
-    if (window) {
-        if (@available(iOS 11.0, *)) {
-            safeTop = window.safeAreaInsets.top;
-        }
-    }
-    // Nếu không lấy được, dùng giá trị mặc định
-    if (safeTop == 0.0f) {
-        safeTop = 50.0f; // iPhone notch/dynamic island
+    float safeTop = getSafeTop();
+    if (safeTop <= 0.0f) {
+        safeTop = 50.0f; // iPhone notch/dynamic island fallback
     }
     return safeTop;
 }
@@ -232,7 +211,12 @@ void RenderDebuggerToolbar() {
         // ── Drag handle ────────────────────────────────────────
         ImVec2 winSize = ImGui::GetWindowSize();
         ImGui::SetCursorPos(ImVec2(0, 0));
-        ImGui::InvisibleButton("##toolbar_drag_handle", winSize);
+        // Dùng ImGuiButtonFlags_AllowOverlap để InvisibleButton không nuốt
+        // input của các TabItemButton — fix bug bấm toolbar không được
+        // sau khi tương tác với emulator.
+        ImGui::InvisibleButton("##toolbar_drag_handle", winSize,
+            ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_AllowOverlap);
+        ImGui::SetItemAllowOverlap();
 
         ImGuiIO& io = ImGui::GetIO();
         if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 4.0f)) {
@@ -425,44 +409,57 @@ void RenderStatusBar() {
     ImGui::PopStyleVar();
 }
 
+// ======================== FIX: gui_loop với xử lý ẩn bàn phím ========================
 void gui_loop() {
     if (!m_emu->Running()) return;
     ImGuiIO& io = ImGui::GetIO();
+    
 #if defined(__ANDROID__) || defined(MACOS) || defined(__IOS__)
     ThemeManager::Instance().UpdateUIScale();
 #endif
+
+    // ─── Xử lý sự kiện SDL để ẩn bàn phím khi click ngoài ───
+    SDL_Event event;
+    while (SDL_PollEvent(&event)) {
+        // Đẩy event cho ImGui xử lý
+        ImGui_ImplSDL2_ProcessEvent(&event);
+
+        // Bắt click chuột hoặc chạm
+        if (event.type == SDL_MOUSEBUTTONDOWN || event.type == SDL_FINGERDOWN) {
+            int x, y;
+            if (event.type == SDL_MOUSEBUTTONDOWN) {
+                x = event.button.x;
+                y = event.button.y;
+            } else {
+                x = (int)(event.tfinger.x * io.DisplaySize.x);
+                y = (int)(event.tfinger.y * io.DisplaySize.y);
+            }
+
+            // Nếu bàn phím đang mở
+            if (SDL_IsTextInputActive()) {
+                // Lấy vùng cửa sổ Calculator
+                ImGuiWindow* calc_win = ImGui::FindWindowByName("Calculator");
+                bool insideKeyboard = false;
+                if (calc_win) {
+                    insideKeyboard = (x >= calc_win->Pos.x && x <= calc_win->Pos.x + calc_win->Size.x &&
+                                      y >= calc_win->Pos.y && y <= calc_win->Pos.y + calc_win->Size.y);
+                }
+                // Toolbar nằm ở đỉnh (y < 60) - điều chỉnh nếu cần
+                bool insideToolbar = (y < 60);
+
+                // Click ngoài → ẩn bàn phím
+                if (!insideKeyboard && !insideToolbar) {
+                    SDL_StopTextInput();
+                    ImGui::SetWindowFocus(nullptr);
+                }
+            }
+        }
+    }
+    // ──────────────────────────────────────────────────────────
+
     ImGui_ImplSDLRenderer2_NewFrame();
     ImGui_ImplSDL2_NewFrame();
     ImGui::NewFrame();
-
-    // ======================== FIX: Xử lý click ngoài để ẩn bàn phím ========================
-    // Khi người dùng click vào vùng không có cửa sổ hoặc item nào, ẩn bàn phím nếu đang mở
-    // Sửa lỗi: ImGui::IsAnyWindowHovered() không tồn tại → dùng ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow)
-    if (ImGui::IsMouseClicked(0) && !ImGui::IsAnyItemHovered() && !ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow)) {
-        if (SDL_IsTextInputActive()) {
-            SDL_StopTextInput();
-        }
-    }
-    // ======================================================================================
-
-    // ======================== FIX: Khởi tạo display buffer một lần ========================
-    static bool display_buffer_initialized = false;
-    if (!display_buffer_initialized) {
-        // Giả định biến g_displayBuffer đã được định nghĩa
-        // Nếu không, bạn có thể bỏ qua hoặc tìm cách khác
-        // Ví dụ: nếu m_emu có hàm GetDisplayBuffer, dùng:
-        // if (m_emu) {
-        //     void* buf = m_emu->GetDisplayBuffer();
-        //     int size = m_emu->GetDisplayBufferSize();
-        //     if (buf && size > 0) memset(buf, 0, size);
-        // }
-        // Tạm thời, nếu có biến toàn cục:
-        // if (g_displayBuffer && g_displayBufferSize > 0) {
-        //     memset(g_displayBuffer, 0, g_displayBufferSize);
-        // }
-        display_buffer_initialized = true;
-    }
-    // ======================================================================================
 
 #if !defined(__ANDROID__) && !defined(__IOS__)
     ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -534,6 +531,7 @@ void gui_loop() {
     SDL_RenderPresent(renderer);
 #endif
 }
+// =====================================================================================
 
 // ==================== CLASS ERROR LOG WINDOW ====================
 class ErrorLogWindow : public UIWindow {
@@ -614,12 +612,6 @@ CodeViewer* test_gui(bool* guiCreated, SDL_Window* wnd, SDL_Renderer* rnd) {
         SDL_Log("Error creating SDL_Renderer!");
         return nullptr;
     }
-
-    // ======================== FIX: Ẩn status bar trên iOS ========================
-#ifdef __IOS__
-    SetStatusBarHidden(true);
-#endif
-    // ============================================================================
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
