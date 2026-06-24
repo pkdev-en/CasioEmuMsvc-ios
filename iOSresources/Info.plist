@@ -6,7 +6,7 @@
     <string>CasioEmuMsvc</string>
 
     <key>CFBundleIdentifier</key>
-    <string>com.bhlk64.casioemumsvc</string>
+    <string>com.pkdevvn.casioemu</string>
 
     <key>CFBundleExecutable</key>
     <string>CasioEmuMsvc</string>
