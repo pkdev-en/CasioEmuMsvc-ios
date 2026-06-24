@@ -94,7 +94,7 @@ jobs:
         rm -rf $ICONSET
         mkdir $ICONSET
     
-        # generate iconset (macOS chuáº©n size)
+        # generate iconset (macOS standard sizes)
         sips -z 16 16     "$IMG" --out $ICONSET/icon_16x16.png
         sips -z 32 32     "$IMG" --out $ICONSET/icon_16x16@2x.png
     
@@ -394,9 +394,9 @@ jobs:
       uses: softprops/action-gh-release@v3
       with:
         tag_name: ${{ env.RELEASE_TAG }}
-        name: 'ð§ Auto Build ${{ env.RELEASE_TAG }} (Pre-release)'
+        name: 'Auto Build ${{ env.RELEASE_TAG }} (Pre-release)'
         body: |
-          ## â ï¸ Pre-release Auto Build
+          ## [WARNING] Pre-release Auto Build :)
           
           > **Warning**: This is an automated pre-release build for testing purposes. 
           > It may contain bugs and is not recommended for production use.
