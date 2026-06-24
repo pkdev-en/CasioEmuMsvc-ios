@@ -270,10 +270,13 @@ jobs:
     - name: Build for iOS
       if: matrix.platform == 'ios'
       run: |
+        # Build without code signing - sign manually in the .ipa step.
+        # Setting CODE_SIGNING_ALLOWED=NO on ALL_BUILD prevents the
+        # "conflicting provisioning settings" error on SDL subprojects.
         cmake -S . -B build -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
-          -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=YES \
-          -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=YES \
-          -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY="Apple Distribution" \
+          -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
+          -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
+          -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY="" \
           -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM="4Z7V3V3G9R" \
           -DCMAKE_CXX_STANDARD=20 \
           -DSDL_TESTS=OFF \
@@ -282,23 +285,26 @@ jobs:
           -DSDL2IMAGE_INSTALL=OFF
 
         cmake --build build --config Release --parallel 6
+
     - name: Create .ipa
       if: matrix.platform == 'ios'
       run: |
         set -e
 
-        mkdir -p build/Payload
-        
         APP=$(find build -type d -name "*.app" | head -n 1)
-        
         echo "Found app: $APP"
-        
+
+        # Sign the app manually with the certificate imported earlier
+        /usr/bin/codesign --force --sign "Apple Distribution" \
+          --entitlements /dev/null \
+          "$APP"
+
+        mkdir -p build/Payload
         rm -rf build/Payload/*
         cp -R "$APP" build/Payload/
-        
+
         cd build
         zip -r CasioEmuMsvc.ipa Payload
-        
         cd ..
         
     - name: upload build ios
@@ -399,7 +405,7 @@ jobs:
         tag_name: ${{ env.RELEASE_TAG }}
         name: 'Auto Build ${{ env.RELEASE_TAG }} (Pre-release)'
         body: |
-          ## Pre-release Auto Build :)
+          ## [WARNING] Pre-release Auto Build
           
           > **Warning**: This is an automated pre-release build for testing purposes. 
           > It may contain bugs and is not recommended for production use.
