@@ -294,8 +294,18 @@ jobs:
         APP=$(find build -type d -name "*.app" | head -n 1)
         echo "Found app: $APP"
 
-        # Sign the app manually with the certificate imported earlier
-        /usr/bin/codesign --force --sign "Apple Distribution" \
+        # Find signing identity from keychain (use first available Distribution or Developer cert)
+        IDENTITY=$(security find-identity -v -p codesigning build.keychain \
+          | grep -E '"[^"]+"' -o | head -n 1 | tr -d '"')
+
+        if [ -z "$IDENTITY" ]; then
+          echo "No identity found in build.keychain, falling back to ad-hoc signing"
+          IDENTITY="-"
+        fi
+
+        echo "Signing with identity: $IDENTITY"
+
+        /usr/bin/codesign --force --sign "$IDENTITY" \
           --entitlements /dev/null \
           "$APP"
 
@@ -405,7 +415,7 @@ jobs:
         tag_name: ${{ env.RELEASE_TAG }}
         name: 'Auto Build ${{ env.RELEASE_TAG }} (Pre-release)'
         body: |
-          ## [WARNING] Pre-release Auto Build
+          ## [WARNING] Pre-release Auto Build :)
           
           > **Warning**: This is an automated pre-release build for testing purposes. 
           > It may contain bugs and is not recommended for production use.
