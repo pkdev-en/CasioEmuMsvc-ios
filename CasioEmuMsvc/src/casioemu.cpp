@@ -558,6 +558,67 @@ static std::atomic<bool> is_in_background(false);
 static std::thread* background_timer_thread = nullptr;
 static std::atomic<bool> exit_timer_thread(false);
 
+// ---- iOS File/Folder Dialog Callbacks ----
+// These C functions are called by IOSNativeBridge.mm (Objective-C side)
+// and bridge into the SystemDialogs C++ callback system used by the engine.
+#include "Ext/SysDialog.h"
+#include <vector>
+
+extern "C" void onFileSelected(const char* path, const unsigned char* data, int dataLength) {
+    if (SystemDialogs::fileOpenCallback) {
+        // Write the received data to a temp file, then pass the path to the callback
+        std::filesystem::path tempDir = std::filesystem::temp_directory_path() / "casioemu_ios_tmp";
+        std::filesystem::create_directories(tempDir);
+        std::filesystem::path fileName = std::filesystem::path(path).filename();
+        std::filesystem::path tempPath = tempDir / fileName;
+        {
+            std::ofstream f(tempPath, std::ios::binary);
+            if (f) f.write(reinterpret_cast<const char*>(data), dataLength);
+        }
+        auto cb = SystemDialogs::fileOpenCallback;
+        SystemDialogs::fileOpenCallback = nullptr;
+        cb(tempPath);
+    }
+}
+
+extern "C" void onFileSaved(const char* path) {
+    if (SystemDialogs::fileSaveCallback) {
+        auto cb = SystemDialogs::fileSaveCallback;
+        SystemDialogs::fileSaveCallback = nullptr;
+        cb(std::filesystem::path(path));
+    }
+}
+
+extern "C" void onFolderSelected(const char* path) {
+    if (SystemDialogs::folderOpenCallback) {
+        auto cb = SystemDialogs::folderOpenCallback;
+        SystemDialogs::folderOpenCallback = nullptr;
+        cb(std::filesystem::path(path));
+    }
+}
+
+extern "C" void onFolderSaved(const char* path) {
+    if (SystemDialogs::folderSaveCallback) {
+        auto cb = SystemDialogs::folderSaveCallback;
+        SystemDialogs::folderSaveCallback = nullptr;
+        cb(std::filesystem::path(path));
+    }
+}
+
+extern "C" void onImportFailed() {
+    // Cancel: clear all pending callbacks gracefully
+    SystemDialogs::fileOpenCallback = nullptr;
+    SystemDialogs::folderOpenCallback = nullptr;
+    SystemDialogs::fileSaveCallback = nullptr;
+    SystemDialogs::folderSaveCallback = nullptr;
+}
+
+extern "C" void onExportFailed() {
+    SystemDialogs::fileSaveCallback = nullptr;
+    SystemDialogs::folderSaveCallback = nullptr;
+}
+// ---- End iOS Callbacks ----
+
 extern "C" void onAppCreate() {
 }
 
