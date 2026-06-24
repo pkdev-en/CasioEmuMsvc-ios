@@ -89,7 +89,7 @@ void SaveUIState() {
 #ifdef __IOS__
 // FIX: Sửa tên include đúng chữ hoa (IOSNativeBridge.h thay vì iOSNativeBridge.h)
 // FIX: Dùng getSafeTop() từ IOSNativeBridge.mm thay vì tự implement Objective-C trong file .cpp
-#include "IOSNativeBridge.h"
+#include "../Ext/IOSNativeBridge.h"
 #endif
 
 static float screenshot_toast_timer = 0.0f;
