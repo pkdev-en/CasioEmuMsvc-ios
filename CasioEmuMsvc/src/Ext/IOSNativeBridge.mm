@@ -92,6 +92,14 @@ float getSafeTop() {
     return 20.0f;
 }
 
+float getSafeBottom() {
+    if (@available(iOS 11.0, *)) {
+        UIWindow *window = UIApplication.sharedApplication.windows.firstObject;
+        return window.safeAreaInsets.bottom;
+    }
+    return 0.0f;
+}
+
 - (void)openFileDialog {
     dispatch_async(dispatch_get_main_queue(), ^{
         // kUTTypeItem was deprecated in iOS 14 and removed in iOS 16+.
