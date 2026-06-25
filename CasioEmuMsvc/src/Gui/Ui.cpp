@@ -491,9 +491,22 @@ void gui_loop() {
 
     RenderDebuggerToolbar();
 
+    // Đảm bảo toolbar luôn ở trên cùng NGAY sau khi render,
+    // để HoveredWindow frame sau resolve đúng toolbar chứ không phải Calculator.
+#if defined(__IOS__)
+    {
+        ImGuiWindow* toolbar_win = ImGui::FindWindowByName("##DebuggerToolbar");
+        if (toolbar_win) ImGui::BringWindowToDisplayFront(toolbar_win);
+    }
+#endif
+
     ImGuiWindow* hovered_win = ImGui::GetCurrentContext()->HoveredWindow;
+    // Suppress calculator input only when hovering a real UI window —
+    // NOT when hovering the toolbar or StatusBar, those need unblocked mouse events.
     bool hovering_other_ui = (hovered_win != nullptr) &&
-        (!hovered_win->Name || strstr(hovered_win->Name, "Calculator") == nullptr);
+        (!hovered_win->Name || strstr(hovered_win->Name, "Calculator") == nullptr) &&
+        (!hovered_win->Name || strstr(hovered_win->Name, "##DebuggerToolbar") == nullptr) &&
+        (!hovered_win->Name || strstr(hovered_win->Name, "##StatusBar") == nullptr);
 
     bool backup_down     = io.MouseDown[0];
     bool backup_clicked  = io.MouseClicked[0];
@@ -525,16 +538,6 @@ void gui_loop() {
             io.MouseReleased[0] = backup_released;
         }
     }
-
-    // Sau khi render tất cả windows, bring toolbar lên trên cùng
-#if defined(__IOS__)
-    {
-        ImGuiWindow* toolbar_win = ImGui::FindWindowByName("##DebuggerToolbar");
-        if (toolbar_win) {
-            ImGui::BringWindowToDisplayFront(toolbar_win);
-        }
-    }
-#endif
 
     top_bar_size = ImGui::GetCursorPosY();
 #if !defined(__ANDROID__)
