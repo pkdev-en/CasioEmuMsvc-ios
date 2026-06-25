@@ -103,8 +103,8 @@ static bool  g_toolbar_dragging    = false;
 static float g_toolbar_drag_startY = 0.0f;
 static float g_toolbar_drag_origY  = 0.0f;
 
-static const float TOOLBAR_ANIM_SPEED       = 8.0f;
-static const float TOOLBAR_INTRO_SPEED      = 5.0f; // slightly slower for intro feel
+static const float TOOLBAR_ANIM_SPEED       = 15.0f; // Tăng tốc độ để kéo thả mượt hơn
+static const float TOOLBAR_INTRO_SPEED      = 5.0f;
 static const float STATUS_BAR_HEIGHT        = 50.0f;
 
 static void SaveToolbarPos(float y) {
@@ -142,24 +142,38 @@ void RenderDebuggerToolbar() {
 #if defined(__IOS__)
         ImGuiViewport* viewport = ImGui::GetMainViewport();
         float toolbarH = ImGui::GetFrameHeight() + 8.0f;
-        float dt = ImGui::GetIO().DeltaTime;
+        
+        // ── PHÁT HIỆN APP RESUME (TỪ APP SWITCHER / BACKGROUND) ──
+        float raw_dt = ImGui::GetIO().DeltaTime;
+        static bool first_frame = true;
+
+        // Nếu app bị hệ điều hành đình chỉ (> 1.0 giây), lúc bật lại dt sẽ nhảy vọt.
+        if (!first_frame && raw_dt > 1.0f) {
+            g_toolbar_posY = -1.0f; // Reset để ép toolbar chạy lại intro animation
+        }
+        first_frame = false;
+
         // clamp dt to avoid jumps after resume/backgrounding
+        float dt = raw_dt;
         if (dt > 0.1f) dt = 0.1f;
 
         float safeAreaTop = getSafeAreaTop();
         float minY = viewport->WorkPos.y + safeAreaTop;
         float maxY = viewport->WorkPos.y + viewport->WorkSize.y - toolbarH;
 
-        // ── First-time init ────────────────────────────────────
+        // ── First-time init & Resume Animation ──────────────────
         if (g_toolbar_posY < 0.0f) {
             float savedY = -1.0f;
             LoadToolbarPos(savedY);
-            g_toolbar_targetY = (savedY >= 0.0f)
-                ? std::clamp(savedY, minY, maxY)
-                : minY;               // default: top of screen under safe area
+            g_toolbar_targetY = (savedY >= 0.0f) ? std::clamp(savedY, minY, maxY) : minY;
 
-            // Start the intro: toolbar begins fully offscreen above
-            g_toolbar_posY = g_toolbar_targetY - toolbarH - 8.0f;
+            // Kiểm tra vị trí để trượt từ trên hay từ dưới màn hình vào
+            float centerY = (minY + maxY) / 2.0f;
+            if (g_toolbar_targetY < centerY) {
+                g_toolbar_posY = g_toolbar_targetY - toolbarH - 20.0f;
+            } else {
+                g_toolbar_posY = g_toolbar_targetY + toolbarH + 20.0f;
+            }
             g_toolbar_anim = 0.0f;
             g_toolbar_intro_done = false;
         }
@@ -168,7 +182,6 @@ void RenderDebuggerToolbar() {
         g_toolbar_targetY = std::clamp(g_toolbar_targetY, minY, maxY);
 
         // ── Intro / visibility animation ────────────────────────
-        // anim goes 0 → 1 on intro, stays at 1 afterwards
         float animSpeed = g_toolbar_intro_done ? TOOLBAR_ANIM_SPEED : TOOLBAR_INTRO_SPEED;
         g_toolbar_anim = std::min(g_toolbar_anim + animSpeed * dt, 1.0f);
         if (g_toolbar_anim >= 1.0f) g_toolbar_intro_done = true;
@@ -179,16 +192,12 @@ void RenderDebuggerToolbar() {
         // ── Drag lerp ──────────────────────────────────────────
         if (!g_toolbar_dragging) {
             float lerpSpeed = TOOLBAR_ANIM_SPEED * dt;
-            g_toolbar_posY += (g_toolbar_targetY - g_toolbar_posY)
-                              * std::min(lerpSpeed, 1.0f);
+            g_toolbar_posY += (g_toolbar_targetY - g_toolbar_posY) * std::min(lerpSpeed, 1.0f);
         }
 
         // Blend between intro start pos and settled pos
-        float introStartY = g_toolbar_targetY - toolbarH - 8.0f;
+        float introStartY = (g_toolbar_targetY < (minY + maxY) / 2.0f) ? (g_toolbar_targetY - toolbarH - 20.0f) : (g_toolbar_targetY + toolbarH + 20.0f);
         float renderY = introStartY + t * (g_toolbar_posY - introStartY);
-
-        // Alpha fade-in during intro
-        float alpha = t;
 
         ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x, renderY), ImGuiCond_Always);
         ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x, toolbarH));
@@ -200,7 +209,7 @@ void RenderDebuggerToolbar() {
             ImVec2(ImGui::GetStyle().FramePadding.x,
                    ImGui::GetStyle().FramePadding.y + 4.0f));
 
-        ImGui::SetNextWindowBgAlpha(alpha);
+        ImGui::SetNextWindowBgAlpha(t);
 
         opened = ImGui::Begin("##DebuggerToolbar", nullptr,
             ImGuiWindowFlags_NoTitleBar  | ImGuiWindowFlags_NoResize  |
@@ -250,18 +259,28 @@ void RenderDebuggerToolbar() {
             if (ImGui::BeginTabBar("ToolbarTabs",
                 ImGuiTabBarFlags_FittingPolicyScroll | ImGuiTabBarFlags_NoTooltip))
             {
-                // [Hide] button removed — toolbar is always visible on iOS
-
                 if (ImGui::TabItemButton("Debugger Windows"))
                     ImGui::OpenPopup("DebuggerMenuPopup");
-                ImGui::SetNextWindowPos(ImVec2(ImGui::GetItemRectMin().x, ImGui::GetItemRectMax().y));
+                
+                // ── STYLE CHO MENU HIỆN ĐẠI HƠN (iOS friendly) ────────
+                ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, 12.0f);
+                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f, 16.0f));
+                ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f, 14.0f));
+                
+                ImGui::SetNextWindowPos(ImVec2(ImGui::GetItemRectMin().x, ImGui::GetItemRectMax().y + 5.0f));
                 if (ImGui::BeginPopup("DebuggerMenuPopup")) {
+                    ImGui::TextDisabled("Select Window");
+                    ImGui::Separator();
                     for (auto* w : windows) {
-                        if (w && ImGui::MenuItem(w->name, nullptr, &w->open))
-                            SaveUIState();
+                        if (w) {
+                            if (ImGui::Checkbox(w->name, &w->open)) {
+                                SaveUIState();
+                            }
+                        }
                     }
                     ImGui::EndPopup();
                 }
+                ImGui::PopStyleVar(3); // Khôi phục lại style cũ
 
                 if (std::any_of(windows.begin(), windows.end(), [](UIWindow* w){ return !w->open; })) {
                     if (ImGui::TabItemButton("Open All"))
