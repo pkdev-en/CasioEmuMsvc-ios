@@ -87,9 +87,7 @@ void SaveUIState() {
 }
 
 #ifdef __IOS__
-// FIX: Sửa tên include đúng chữ hoa (IOSNativeBridge.h thay vì iOSNativeBridge.h)
-// FIX: Dùng getSafeTop() từ IOSNativeBridge.mm thay vì tự implement Objective-C trong file .cpp
-#include "../Ext/IOSNativeBridge.h"
+#include "iOSNativeBridge.h"
 #endif
 
 static float screenshot_toast_timer = 0.0f;
@@ -119,8 +117,18 @@ static void LoadToolbarPos(float& y, bool& visible) {
 }
 // ==============================================================
 
-// FIX: Đã xóa hàm getSafeAreaTop() khỏi đây vì nó dùng Objective-C syntax
-// không hợp lệ trong file .cpp. Thay vào đó dùng getSafeTop() từ IOSNativeBridge.h
+#ifdef __IOS__
+// getSafeTop() is implemented in IOSNativeBridge.mm (compiled as
+// Objective-C++) — Ui.cpp itself is plain C++ and cannot contain
+// Objective-C syntax like [UIApplication sharedApplication] directly.
+static float getSafeAreaTop() {
+    float safeTop = getSafeTop();
+    if (safeTop <= 0.0f) {
+        safeTop = 50.0f; // iPhone notch/dynamic island fallback
+    }
+    return safeTop;
+}
+#endif
 
 void RenderDebuggerToolbar() {
     bool isCustom = false;
@@ -135,8 +143,8 @@ void RenderDebuggerToolbar() {
         float toolbarH = ImGui::GetFrameHeight() + 8.0f;
         float dt = ImGui::GetIO().DeltaTime;
 
-        // FIX: Dùng getSafeTop() từ IOSNativeBridge.h thay vì getSafeAreaTop()
-        float safeAreaTop = getSafeTop();
+        // Lấy safe area top
+        float safeAreaTop = getSafeAreaTop();
 
         // ── Khởi tạo lần đầu ──────────────────────────────────
         if (g_toolbar_posY < 0.0f) {
@@ -508,6 +516,16 @@ void gui_loop() {
         }
     }
 
+    // Sau khi render tất cả windows, bring toolbar lên trên cùng
+#if defined(__IOS__)
+    {
+        ImGuiWindow* toolbar_win = ImGui::FindWindowByName("##DebuggerToolbar");
+        if (toolbar_win) {
+            ImGui::BringWindowToDisplayFront(toolbar_win);
+        }
+    }
+#endif
+
     top_bar_size = ImGui::GetCursorPosY();
 #if !defined(__ANDROID__) && !defined(__IOS__)
     RenderStatusBar();
@@ -627,8 +645,7 @@ CodeViewer* test_gui(bool* guiCreated, SDL_Window* wnd, SDL_Renderer* rnd) {
             // Nếu chưa có file lưu, đặt mặc định dưới status bar
             ImGuiViewport* viewport = ImGui::GetMainViewport();
 #ifdef __IOS__
-            // FIX: Dùng getSafeTop() từ IOSNativeBridge.h
-            float safeAreaTop = getSafeTop();
+            float safeAreaTop = getSafeAreaTop();
             g_toolbar_posY = viewport->WorkPos.y + safeAreaTop;
 #else
             g_toolbar_posY = viewport->WorkPos.y + STATUS_BAR_HEIGHT;
