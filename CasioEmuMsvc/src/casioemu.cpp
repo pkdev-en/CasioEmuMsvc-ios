@@ -125,7 +125,7 @@ static bool IsPointInImGuiWindow(float x, float y) {
 			continue;
 		}
 
-		if ((window->Flags & ImGuiWindowFlags_NoMouseInputs) || (window->Flags & ImGuiWindowFlags_NoTitleBar)) {
+		if (window->Flags & ImGuiWindowFlags_NoMouseInputs) {
 			continue;
 		}
 
