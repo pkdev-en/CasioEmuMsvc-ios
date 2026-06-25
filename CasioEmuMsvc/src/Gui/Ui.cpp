@@ -93,34 +93,31 @@ void SaveUIState() {
 static float screenshot_toast_timer = 0.0f;
 
 // ===================== TOOLBAR STATE (iOS) =====================
-static float g_toolbar_posY     = -1.0f;
-static float g_toolbar_targetY  = -1.0f;
-static bool  g_toolbar_visible  = true;
-static float g_toolbar_anim     = 1.0f;
+static float g_toolbar_posY      = -1.0f;   
+static float g_toolbar_targetY   = -1.0f;
+static float g_toolbar_anim      = 0.0f;    
+static bool  g_toolbar_intro_done = false;  
 
 static bool  g_toolbar_dragging    = false;
 static float g_toolbar_drag_startY = 0.0f;
 static float g_toolbar_drag_origY  = 0.0f;
 
-static const float TOOLBAR_ANIM_SPEED = 8.0f;
-static const float STATUS_BAR_HEIGHT = 50.0f;
+static const float TOOLBAR_ANIM_SPEED       = 15.0f; 
+static const float TOOLBAR_INTRO_SPEED      = 5.0f;
+static const float STATUS_BAR_HEIGHT        = 50.0f;
 
-static void SaveToolbarPos(float y, bool visible) {
+static void SaveToolbarPos(float y) {
     std::ofstream f("toolbar_pos.txt");
-    if (f.is_open()) f << y << " " << (visible ? 1 : 0);
+    if (f.is_open()) f << y;
 }
-static void LoadToolbarPos(float& y, bool& visible) {
+static void LoadToolbarPos(float& y) {
     std::ifstream f("toolbar_pos.txt");
-    int v = 1;
-    if (f.is_open()) { f >> y >> v; }
-    visible = (v != 0);
+    y = -1.0f;
+    if (f.is_open()) f >> y;
 }
 // ==============================================================
 
 #ifdef __IOS__
-// getSafeTop() is implemented in IOSNativeBridge.mm (compiled as
-// Objective-C++) — Ui.cpp itself is plain C++ and cannot contain
-// Objective-C syntax like [UIApplication sharedApplication] directly.
 static float getSafeAreaTop() {
     float safeTop = getSafeTop();
     if (safeTop <= 0.0f) {
@@ -132,79 +129,74 @@ static float getSafeAreaTop() {
 
 void RenderDebuggerToolbar() {
     bool isCustom = false;
-#if defined(__IOS__)
+#if defined(__IOS__) || defined(__ANDROID__)
     isCustom = true;
 #endif
 
     bool opened = false;
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+
     if (isCustom) {
-#if defined(__IOS__)
-        ImGuiViewport* viewport = ImGui::GetMainViewport();
+#if defined(__IOS__) || defined(__ANDROID__)
         float toolbarH = ImGui::GetFrameHeight() + 8.0f;
-        float dt = ImGui::GetIO().DeltaTime;
+        
+        float raw_dt = ImGui::GetIO().DeltaTime;
+        static bool first_frame = true;
 
-        // Lấy safe area top
-        float safeAreaTop = getSafeAreaTop();
-
-        // ── Khởi tạo lần đầu ──────────────────────────────────
-        if (g_toolbar_posY < 0.0f) {
-            float savedY = -1.0f; bool savedVis = true;
-            LoadToolbarPos(savedY, savedVis);
-            // Toolbar nằm DƯỚI safe area (thanh status bar)
-            float defaultY = viewport->WorkPos.y + safeAreaTop;
-            g_toolbar_posY    = (savedY >= 0.0f) ? savedY : defaultY;
-            g_toolbar_targetY = g_toolbar_posY;
-            g_toolbar_visible = savedVis;
-            g_toolbar_anim    = savedVis ? 1.0f : 0.0f;
+        if (!first_frame && raw_dt > 1.0f) {
+            g_toolbar_posY = -1.0f; 
         }
+        first_frame = false;
 
-        // ── Clamp vùng hợp lệ ─────────────────────────────────
+        float dt = raw_dt;
+        if (dt > 0.1f) dt = 0.1f;
+
+#if defined(__IOS__)
+        float safeAreaTop = getSafeAreaTop();
+#else
+        float safeAreaTop = 0.0f;
+#endif
         float minY = viewport->WorkPos.y + safeAreaTop;
         float maxY = viewport->WorkPos.y + viewport->WorkSize.y - toolbarH;
+
+        if (g_toolbar_posY < 0.0f) {
+            float savedY = -1.0f;
+            LoadToolbarPos(savedY);
+            g_toolbar_targetY = (savedY >= 0.0f) ? std::clamp(savedY, minY, maxY) : minY;
+
+            float centerY = (minY + maxY) / 2.0f;
+            if (g_toolbar_targetY < centerY) {
+                g_toolbar_posY = g_toolbar_targetY - toolbarH - 20.0f;
+            } else {
+                g_toolbar_posY = g_toolbar_targetY + toolbarH + 20.0f;
+            }
+            g_toolbar_anim = 0.0f;
+            g_toolbar_intro_done = false;
+        }
+
         g_toolbar_targetY = std::clamp(g_toolbar_targetY, minY, maxY);
 
-        // ── Lerp posY về targetY (chạy TRƯỚC khi dùng posY để render) ──
+        float animSpeed = g_toolbar_intro_done ? TOOLBAR_ANIM_SPEED : TOOLBAR_INTRO_SPEED;
+        g_toolbar_anim = std::min(g_toolbar_anim + animSpeed * dt, 1.0f);
+        if (g_toolbar_anim >= 1.0f) g_toolbar_intro_done = true;
+
+        float t = 1.0f - (1.0f - g_toolbar_anim) * (1.0f - g_toolbar_anim) * (1.0f - g_toolbar_anim);
+
         if (!g_toolbar_dragging) {
             float lerpSpeed = TOOLBAR_ANIM_SPEED * dt;
             g_toolbar_posY += (g_toolbar_targetY - g_toolbar_posY) * std::min(lerpSpeed, 1.0f);
         }
-        // Clamp posY sau lerp
-        g_toolbar_posY = std::clamp(g_toolbar_posY, minY, maxY);
 
-        // ── Fade in/out animation (show/hide) ──────────────────
-        float animTarget = g_toolbar_visible ? 1.0f : 0.0f;
-        float animDelta  = TOOLBAR_ANIM_SPEED * dt;
-        g_toolbar_anim = (g_toolbar_anim < animTarget)
-            ? std::min(g_toolbar_anim + animDelta, animTarget)
-            : std::max(g_toolbar_anim - animDelta, animTarget);
+        float introStartY = (g_toolbar_targetY < (minY + maxY) / 2.0f) ? (g_toolbar_targetY - toolbarH - 20.0f) : (g_toolbar_targetY + toolbarH + 20.0f);
+        float renderY = introStartY + t * (g_toolbar_posY - introStartY);
 
-        if (g_toolbar_anim <= 0.001f && !g_toolbar_visible)
-            return;
-
-        // Ease-out cubic
-        float t = 1.0f - (1.0f - g_toolbar_anim)
-                       * (1.0f - g_toolbar_anim)
-                       * (1.0f - g_toolbar_anim);
-
-        // Slide hướng: toolbar ở top thì slide từ trên xuống,
-        // toolbar ở bottom thì slide từ dưới lên
-        float centerY  = (minY + maxY) / 2.0f;
-        float slideDir = (g_toolbar_posY < centerY) ? -1.0f : 1.0f;
-        float hiddenY  = g_toolbar_posY + slideDir * (toolbarH + 4.0f);
-        float renderY  = hiddenY + t * (g_toolbar_posY - hiddenY);
-
-        // Khi đang kéo: render thẳng vị trí posY, bỏ qua slide offset
-        float finalRenderY = g_toolbar_dragging ? g_toolbar_posY : renderY;
-
-        ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x, finalRenderY), ImGuiCond_Always);
+        ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x, renderY), ImGuiCond_Always);
         ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x, toolbarH));
-        
+
         ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize,   ImVec2(0, 0));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,   ImVec2(0, 0));
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,     ImVec2(0, 0));
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
-            ImVec2(ImGui::GetStyle().FramePadding.x,
-                   ImGui::GetStyle().FramePadding.y + 4.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ImGui::GetStyle().FramePadding.x, ImGui::GetStyle().FramePadding.y + 4.0f));
 
         ImGui::SetNextWindowBgAlpha(t);
 
@@ -215,13 +207,9 @@ void RenderDebuggerToolbar() {
             ImGuiWindowFlags_NoDocking   | ImGuiWindowFlags_NavFlattened |
             ImGuiWindowFlags_AlwaysAutoResize);
 
-        // Đưa toolbar lên trên cùng
         ImGuiWindow* toolbar_win = ImGui::FindWindowByName("##DebuggerToolbar");
-        if (toolbar_win) {
-            ImGui::BringWindowToDisplayFront(toolbar_win);
-        }
+        if (toolbar_win) ImGui::BringWindowToDisplayFront(toolbar_win);
 
-        // ── Drag handle ────────────────────────────────────────
         ImVec2 winSize = ImGui::GetWindowSize();
         ImGui::SetCursorPos(ImVec2(0, 0));
         ImGui::InvisibleButton("##toolbar_drag_handle", winSize);
@@ -235,15 +223,13 @@ void RenderDebuggerToolbar() {
             }
             float delta = io.MousePos.y - g_toolbar_drag_startY;
             g_toolbar_targetY = std::clamp(g_toolbar_drag_origY + delta, minY, maxY);
-            g_toolbar_posY    = g_toolbar_targetY; // cập nhật ngay để render không lag
         } else {
             if (g_toolbar_dragging) {
                 g_toolbar_dragging = false;
-                // Snap về top hoặc bottom
                 float centerY = (minY + maxY) / 2.0f;
                 g_toolbar_targetY = (g_toolbar_targetY < centerY) ? minY : maxY;
-                // posY giữ nguyên để lerp mượt về target
-                SaveToolbarPos(g_toolbar_targetY, g_toolbar_visible);
+                g_toolbar_posY    = g_toolbar_targetY;
+                SaveToolbarPos(g_toolbar_targetY);
             }
         }
 #endif
@@ -256,26 +242,35 @@ void RenderDebuggerToolbar() {
         if (isCustom) showMenu = ImGui::BeginMenuBar();
 
         if (showMenu) {
-            if (ImGui::BeginTabBar("ToolbarTabs",
-                ImGuiTabBarFlags_FittingPolicyScroll | ImGuiTabBarFlags_NoTooltip))
-            {
-#if defined(__IOS__)
-                if (ImGui::TabItemButton(g_toolbar_visible ? "[–] Hide" : "[+] Show")) {
-                    g_toolbar_visible = !g_toolbar_visible;
-                    SaveToolbarPos(g_toolbar_targetY, g_toolbar_visible);
-                }
-#endif
-
+            if (ImGui::BeginTabBar("ToolbarTabs", ImGuiTabBarFlags_FittingPolicyScroll | ImGuiTabBarFlags_NoTooltip)) {
+                
                 if (ImGui::TabItemButton("Debugger Windows"))
                     ImGui::OpenPopup("DebuggerMenuPopup");
-                ImGui::SetNextWindowPos(ImVec2(ImGui::GetItemRectMin().x, ImGui::GetItemRectMax().y));
+                
+                // --- FIX UI MENU QUÁ TO Ở ĐÂY ---
+                // Thu nhỏ Padding và ItemSpacing lại để vừa vặn
+                ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, 8.0f);
+                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 8.0f));
+                ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f, 6.0f)); // Khoảng cách giữa các check box
+                
+                ImGui::SetNextWindowPos(ImVec2(ImGui::GetItemRectMin().x, ImGui::GetItemRectMax().y + 2.0f));
+                
+                // Giới hạn chiều cao popup để ko bị lỗi scroll vượt màn hình
+                ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(FLT_MAX, viewport->WorkSize.y * 0.75f));
+
                 if (ImGui::BeginPopup("DebuggerMenuPopup")) {
+                    ImGui::TextDisabled("Select Window");
+                    ImGui::Separator();
                     for (auto* w : windows) {
-                        if (w && ImGui::MenuItem(w->name, nullptr, &w->open))
-                            SaveUIState();
+                        if (w) {
+                            if (ImGui::Checkbox(w->name, &w->open)) {
+                                SaveUIState();
+                            }
+                        }
                     }
                     ImGui::EndPopup();
                 }
+                ImGui::PopStyleVar(3); // Reset style
 
                 if (std::any_of(windows.begin(), windows.end(), [](UIWindow* w){ return !w->open; })) {
                     if (ImGui::TabItemButton("Open All"))
@@ -331,9 +326,7 @@ void RenderDebuggerToolbar() {
                     }
                 }
 
-                if (ImGui::TabItemButton(ThemeManager::Instance().Settings().isDarkMode
-                    ? "Light Theme" : "Dark Theme"))
-                {
+                if (ImGui::TabItemButton(ThemeManager::Instance().Settings().isDarkMode ? "Light Theme" : "Dark Theme")) {
                     if (ThemeManager::Instance().Settings().isDarkMode)
                         ThemeManager::Instance().SetLightMode();
                     else
@@ -353,10 +346,8 @@ void RenderDebuggerToolbar() {
             }
 
             if (m_emu->recording_active.load()) {
-                ImGui::SameLine(ImGui::GetWindowWidth() -
-                    (screenshot_toast_timer > 0.0f ? 450.0f : 200.0f));
-                ImGui::TextColored(ImVec4(1.0f,0.2f,0.2f,1.0f),
-                    "[O] Recording: %u frames", m_emu->recording_frame_count.load());
+                ImGui::SameLine(ImGui::GetWindowWidth() - (screenshot_toast_timer > 0.0f ? 450.0f : 200.0f));
+                ImGui::TextColored(ImVec4(1.0f,0.2f,0.2f,1.0f), "[O] Recording: %u frames", m_emu->recording_frame_count.load());
             }
 
             if (isCustom) ImGui::EndMenuBar();
@@ -393,6 +384,9 @@ void RenderStatusBar() {
 
 #ifdef __IOS__
     // Thêm safe area bottom (home indicator iPhone)
+#if defined(__cplusplus)
+    extern float getSafeBottom(); 
+#endif
     float safeBottom = getSafeBottom();
     if (safeBottom < 0.0f) safeBottom = 0.0f;
     float posY = viewport->Pos.y + viewport->Size.y - barHeight - safeBottom;
@@ -425,7 +419,7 @@ void RenderStatusBar() {
     ImGui::PopStyleVar();
 }
 
-// ======================== FIX: gui_loop với xử lý ẩn bàn phím ========================
+// ======================== gui_loop ========================
 void gui_loop() {
     if (!m_emu->Running()) return;
     ImGuiIO& io = ImGui::GetIO();
@@ -434,13 +428,10 @@ void gui_loop() {
     ThemeManager::Instance().UpdateUIScale();
 #endif
 
-    // ─── Xử lý sự kiện SDL để ẩn bàn phím khi click ngoài ───
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
-        // Đẩy event cho ImGui xử lý
         ImGui_ImplSDL2_ProcessEvent(&event);
 
-        // Bắt click chuột hoặc chạm
         if (event.type == SDL_MOUSEBUTTONDOWN || event.type == SDL_FINGERDOWN) {
             int x, y;
             if (event.type == SDL_MOUSEBUTTONDOWN) {
@@ -451,19 +442,15 @@ void gui_loop() {
                 y = (int)(event.tfinger.y * io.DisplaySize.y);
             }
 
-            // Nếu bàn phím đang mở
             if (SDL_IsTextInputActive()) {
-                // Lấy vùng cửa sổ Calculator
                 ImGuiWindow* calc_win = ImGui::FindWindowByName("Calculator");
                 bool insideKeyboard = false;
                 if (calc_win) {
                     insideKeyboard = (x >= calc_win->Pos.x && x <= calc_win->Pos.x + calc_win->Size.x &&
                                       y >= calc_win->Pos.y && y <= calc_win->Pos.y + calc_win->Size.y);
                 }
-                // Toolbar nằm ở đỉnh (y < 60) - điều chỉnh nếu cần
                 bool insideToolbar = (y < 60);
 
-                // Click ngoài → ẩn bàn phím
                 if (!insideKeyboard && !insideToolbar) {
                     SDL_StopTextInput();
                     ImGui::SetWindowFocus(nullptr);
@@ -471,7 +458,6 @@ void gui_loop() {
             }
         }
     }
-    // ──────────────────────────────────────────────────────────
 
     ImGui_ImplSDLRenderer2_NewFrame();
     ImGui_ImplSDL2_NewFrame();
@@ -502,8 +488,6 @@ void gui_loop() {
 
     RenderDebuggerToolbar();
 
-    // Đảm bảo toolbar luôn ở trên cùng NGAY sau khi render,
-    // để HoveredWindow frame sau resolve đúng toolbar chứ không phải Calculator.
 #if defined(__IOS__)
     {
         ImGuiWindow* toolbar_win = ImGui::FindWindowByName("##DebuggerToolbar");
@@ -512,12 +496,11 @@ void gui_loop() {
 #endif
 
     ImGuiWindow* hovered_win = ImGui::GetCurrentContext()->HoveredWindow;
-    // Suppress calculator input only when hovering a real UI window —
-    // NOT when hovering the toolbar or StatusBar, those need unblocked mouse events.
     bool hovering_other_ui = (hovered_win != nullptr) &&
         (!hovered_win->Name || strstr(hovered_win->Name, "Calculator") == nullptr) &&
         (!hovered_win->Name || strstr(hovered_win->Name, "##DebuggerToolbar") == nullptr) &&
-        (!hovered_win->Name || strstr(hovered_win->Name, "##StatusBar") == nullptr);
+        (!hovered_win->Name || strstr(hovered_win->Name, "##StatusBar") == nullptr) &&
+        (!hovered_win->Name || strstr(hovered_win->Name, "DebuggerMenuPopup") == nullptr); // Fix thêm bug touch xuyên qua popup menu
 
     bool backup_down     = io.MouseDown[0];
     bool backup_clicked  = io.MouseClicked[0];
@@ -562,7 +545,6 @@ void gui_loop() {
 }
 // =====================================================================================
 
-// ==================== CLASS ERROR LOG WINDOW ====================
 class ErrorLogWindow : public UIWindow {
 public:
     ErrorLogWindow() : UIWindow("Error Log") {}
@@ -591,7 +573,6 @@ public:
         ImGui::EndChild();
     }
 };
-// ==============================================================
 
 CodeViewer* test_gui(bool* guiCreated, SDL_Window* wnd, SDL_Renderer* rnd) {
     SDL_SetHint(SDL_HINT_IME_SHOW_UI, "1");
@@ -658,27 +639,10 @@ CodeViewer* test_gui(bool* guiCreated, SDL_Window* wnd, SDL_Renderer* rnd) {
     ImGui_ImplSDLRenderer2_Init(renderer);
     if (guiCreated) *guiCreated = true;
 
-    // Load vị trí toolbar đã lưu ngay khi khởi động
-    {
-        float savedY = -1.0f; bool savedVis = true;
-        LoadToolbarPos(savedY, savedVis);
-        if (savedY >= 0.0f) {
-            g_toolbar_posY    = savedY;
-            g_toolbar_targetY = savedY;
-        } else {
-            // Nếu chưa có file lưu, đặt mặc định dưới status bar
-            ImGuiViewport* viewport = ImGui::GetMainViewport();
-#ifdef __IOS__
-            float safeAreaTop = getSafeAreaTop();
-            g_toolbar_posY = viewport->WorkPos.y + safeAreaTop;
-#else
-            g_toolbar_posY = viewport->WorkPos.y + STATUS_BAR_HEIGHT;
-#endif
-            g_toolbar_targetY = g_toolbar_posY;
-        }
-        g_toolbar_visible = savedVis;
-        g_toolbar_anim    = savedVis ? 1.0f : 0.0f;
-    }
+    g_toolbar_posY       = -1.0f;
+    g_toolbar_targetY    = -1.0f;
+    g_toolbar_anim       = 0.0f;
+    g_toolbar_intro_done = false;
 
     for (int i = 0; i < 5000 && !me_mmu; i++)
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
