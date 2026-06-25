@@ -379,7 +379,17 @@ void LoadUIState() {
 void RenderStatusBar() {
     ImGuiViewport* viewport = ImGui::GetMainViewport();
     float barHeight = ImGui::GetFrameHeight() + 4.0f;
-    ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x, viewport->Pos.y + viewport->Size.y - barHeight));
+
+#ifdef __IOS__
+    // Thêm safe area bottom (home indicator iPhone)
+    float safeBottom = getSafeBottom();
+    if (safeBottom < 0.0f) safeBottom = 0.0f;
+    float posY = viewport->Pos.y + viewport->Size.y - barHeight - safeBottom;
+#else
+    float posY = viewport->Pos.y + viewport->Size.y - barHeight;
+#endif
+
+    ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x, posY));
     ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, barHeight));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 2.0f));
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.08f, 0.08f, 0.12f, 1.0f));
@@ -527,7 +537,7 @@ void gui_loop() {
 #endif
 
     top_bar_size = ImGui::GetCursorPosY();
-#if !defined(__ANDROID__) && !defined(__IOS__)
+#if !defined(__ANDROID__)
     RenderStatusBar();
 #endif
     ImGui::Render();
