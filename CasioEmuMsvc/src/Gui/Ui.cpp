@@ -93,27 +93,28 @@ void SaveUIState() {
 static float screenshot_toast_timer = 0.0f;
 
 // ===================== TOOLBAR STATE (iOS) =====================
-static float g_toolbar_posY     = -1.0f;
-static float g_toolbar_targetY  = -1.0f;
-static bool  g_toolbar_visible  = true;
-static float g_toolbar_anim     = 1.0f;
+// Intro animation: toolbar slides in from top on first launch
+static float g_toolbar_posY      = -1.0f;   // -1 = not init yet
+static float g_toolbar_targetY   = -1.0f;
+static float g_toolbar_anim      = 0.0f;    // 0=hidden, 1=fully visible
+static bool  g_toolbar_intro_done = false;  // intro slide-in played?
 
 static bool  g_toolbar_dragging    = false;
 static float g_toolbar_drag_startY = 0.0f;
 static float g_toolbar_drag_origY  = 0.0f;
 
-static const float TOOLBAR_ANIM_SPEED = 8.0f;
-static const float STATUS_BAR_HEIGHT = 50.0f;
+static const float TOOLBAR_ANIM_SPEED       = 8.0f;
+static const float TOOLBAR_INTRO_SPEED      = 5.0f; // slightly slower for intro feel
+static const float STATUS_BAR_HEIGHT        = 50.0f;
 
-static void SaveToolbarPos(float y, bool visible) {
+static void SaveToolbarPos(float y) {
     std::ofstream f("toolbar_pos.txt");
-    if (f.is_open()) f << y << " " << (visible ? 1 : 0);
+    if (f.is_open()) f << y;
 }
-static void LoadToolbarPos(float& y, bool& visible) {
+static void LoadToolbarPos(float& y) {
     std::ifstream f("toolbar_pos.txt");
-    int v = 1;
-    if (f.is_open()) { f >> y >> v; }
-    visible = (v != 0);
+    y = -1.0f;
+    if (f.is_open()) f >> y;
 }
 // ==============================================================
 
@@ -142,50 +143,56 @@ void RenderDebuggerToolbar() {
         ImGuiViewport* viewport = ImGui::GetMainViewport();
         float toolbarH = ImGui::GetFrameHeight() + 8.0f;
         float dt = ImGui::GetIO().DeltaTime;
+        // clamp dt to avoid jumps after resume/backgrounding
+        if (dt > 0.1f) dt = 0.1f;
 
-        // Lấy safe area top
         float safeAreaTop = getSafeAreaTop();
-
-        // ── Khởi tạo lần đầu ──────────────────────────────────
-        if (g_toolbar_posY < 0.0f) {
-            float savedY = -1.0f; bool savedVis = true;
-            LoadToolbarPos(savedY, savedVis);
-            // Toolbar nằm DƯỚI safe area (thanh status bar)
-            float defaultY = viewport->WorkPos.y + safeAreaTop;
-            g_toolbar_posY    = (savedY >= 0.0f) ? savedY : defaultY;
-            g_toolbar_targetY = g_toolbar_posY;
-            g_toolbar_visible = savedVis;
-            g_toolbar_anim    = savedVis ? 1.0f : 0.0f;
-        }
-
-        // ── Clamp vùng hợp lệ ─────────────────────────────────
         float minY = viewport->WorkPos.y + safeAreaTop;
         float maxY = viewport->WorkPos.y + viewport->WorkSize.y - toolbarH;
-        g_toolbar_targetY = std::clamp(g_toolbar_targetY, minY, maxY);
 
-        // ── Animation ───────────────────────────────────────────
-        float animTarget = g_toolbar_visible ? 1.0f : 0.0f;
-        float animDelta  = TOOLBAR_ANIM_SPEED * dt;
-        if (g_toolbar_anim < animTarget)
-            g_toolbar_anim = std::min(g_toolbar_anim + animDelta, animTarget);
-        else
-            g_toolbar_anim = std::max(g_toolbar_anim - animDelta, animTarget);
+        // ── First-time init ────────────────────────────────────
+        if (g_toolbar_posY < 0.0f) {
+            float savedY = -1.0f;
+            LoadToolbarPos(savedY);
+            g_toolbar_targetY = (savedY >= 0.0f)
+                ? std::clamp(savedY, minY, maxY)
+                : minY;               // default: top of screen under safe area
 
-        float t = 1.0f - (1.0f - g_toolbar_anim) * (1.0f - g_toolbar_anim) * (1.0f - g_toolbar_anim);
-        float hiddenY = g_toolbar_targetY - toolbarH - 4.0f;
-        float renderY = hiddenY + t * (g_toolbar_targetY - hiddenY);
-
-        if (!g_toolbar_dragging) {
-            float lerpSpeed = TOOLBAR_ANIM_SPEED * dt;
-            g_toolbar_posY += (g_toolbar_targetY - g_toolbar_posY) * std::min(lerpSpeed, 1.0f);
+            // Start the intro: toolbar begins fully offscreen above
+            g_toolbar_posY = g_toolbar_targetY - toolbarH - 8.0f;
+            g_toolbar_anim = 0.0f;
+            g_toolbar_intro_done = false;
         }
 
-        if (g_toolbar_anim <= 0.001f && !g_toolbar_visible)
-            return;
+        // ── Clamp target to valid range ─────────────────────────
+        g_toolbar_targetY = std::clamp(g_toolbar_targetY, minY, maxY);
+
+        // ── Intro / visibility animation ────────────────────────
+        // anim goes 0 → 1 on intro, stays at 1 afterwards
+        float animSpeed = g_toolbar_intro_done ? TOOLBAR_ANIM_SPEED : TOOLBAR_INTRO_SPEED;
+        g_toolbar_anim = std::min(g_toolbar_anim + animSpeed * dt, 1.0f);
+        if (g_toolbar_anim >= 1.0f) g_toolbar_intro_done = true;
+
+        // Ease-out cubic: fast start, smooth settle
+        float t = 1.0f - (1.0f - g_toolbar_anim) * (1.0f - g_toolbar_anim) * (1.0f - g_toolbar_anim);
+
+        // ── Drag lerp ──────────────────────────────────────────
+        if (!g_toolbar_dragging) {
+            float lerpSpeed = TOOLBAR_ANIM_SPEED * dt;
+            g_toolbar_posY += (g_toolbar_targetY - g_toolbar_posY)
+                              * std::min(lerpSpeed, 1.0f);
+        }
+
+        // Blend between intro start pos and settled pos
+        float introStartY = g_toolbar_targetY - toolbarH - 8.0f;
+        float renderY = introStartY + t * (g_toolbar_posY - introStartY);
+
+        // Alpha fade-in during intro
+        float alpha = t;
 
         ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x, renderY), ImGuiCond_Always);
         ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x, toolbarH));
-        
+
         ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize,   ImVec2(0, 0));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,   ImVec2(0, 0));
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,     ImVec2(0, 0));
@@ -193,7 +200,7 @@ void RenderDebuggerToolbar() {
             ImVec2(ImGui::GetStyle().FramePadding.x,
                    ImGui::GetStyle().FramePadding.y + 4.0f));
 
-        ImGui::SetNextWindowBgAlpha(t);
+        ImGui::SetNextWindowBgAlpha(alpha);
 
         opened = ImGui::Begin("##DebuggerToolbar", nullptr,
             ImGuiWindowFlags_NoTitleBar  | ImGuiWindowFlags_NoResize  |
@@ -202,13 +209,11 @@ void RenderDebuggerToolbar() {
             ImGuiWindowFlags_NoDocking   | ImGuiWindowFlags_NavFlattened |
             ImGuiWindowFlags_AlwaysAutoResize);
 
-        // Đưa toolbar lên trên cùng
+        // Always keep toolbar on top
         ImGuiWindow* toolbar_win = ImGui::FindWindowByName("##DebuggerToolbar");
-        if (toolbar_win) {
-            ImGui::BringWindowToDisplayFront(toolbar_win);
-        }
+        if (toolbar_win) ImGui::BringWindowToDisplayFront(toolbar_win);
 
-        // ── Drag handle ────────────────────────────────────────
+        // ── Drag handle (invisible button covering full toolbar) ─
         ImVec2 winSize = ImGui::GetWindowSize();
         ImGui::SetCursorPos(ImVec2(0, 0));
         ImGui::InvisibleButton("##toolbar_drag_handle", winSize);
@@ -216,23 +221,20 @@ void RenderDebuggerToolbar() {
         ImGuiIO& io = ImGui::GetIO();
         if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 4.0f)) {
             if (!g_toolbar_dragging) {
-                g_toolbar_dragging     = true;
-                g_toolbar_drag_startY  = io.MousePos.y;
-                g_toolbar_drag_origY   = g_toolbar_targetY;
+                g_toolbar_dragging    = true;
+                g_toolbar_drag_startY = io.MousePos.y;
+                g_toolbar_drag_origY  = g_toolbar_targetY;
             }
             float delta = io.MousePos.y - g_toolbar_drag_startY;
             g_toolbar_targetY = std::clamp(g_toolbar_drag_origY + delta, minY, maxY);
         } else {
             if (g_toolbar_dragging) {
                 g_toolbar_dragging = false;
+                // Snap to nearest edge (top or bottom)
                 float centerY = (minY + maxY) / 2.0f;
-                if (g_toolbar_targetY < centerY) {
-                    g_toolbar_targetY = minY;
-                } else {
-                    g_toolbar_targetY = maxY;
-                }
-                g_toolbar_posY = g_toolbar_targetY;
-                SaveToolbarPos(g_toolbar_targetY, g_toolbar_visible);
+                g_toolbar_targetY = (g_toolbar_targetY < centerY) ? minY : maxY;
+                g_toolbar_posY    = g_toolbar_targetY;
+                SaveToolbarPos(g_toolbar_targetY);
             }
         }
 #endif
@@ -248,12 +250,7 @@ void RenderDebuggerToolbar() {
             if (ImGui::BeginTabBar("ToolbarTabs",
                 ImGuiTabBarFlags_FittingPolicyScroll | ImGuiTabBarFlags_NoTooltip))
             {
-#if defined(__IOS__)
-                if (ImGui::TabItemButton(g_toolbar_visible ? "[–] Hide" : "[+] Show")) {
-                    g_toolbar_visible = !g_toolbar_visible;
-                    SaveToolbarPos(g_toolbar_targetY, g_toolbar_visible);
-                }
-#endif
+                // [Hide] button removed — toolbar is always visible on iOS
 
                 if (ImGui::TabItemButton("Debugger Windows"))
                     ImGui::OpenPopup("DebuggerMenuPopup");
@@ -647,27 +644,12 @@ CodeViewer* test_gui(bool* guiCreated, SDL_Window* wnd, SDL_Renderer* rnd) {
     ImGui_ImplSDLRenderer2_Init(renderer);
     if (guiCreated) *guiCreated = true;
 
-    // Load vị trí toolbar đã lưu ngay khi khởi động
-    {
-        float savedY = -1.0f; bool savedVis = true;
-        LoadToolbarPos(savedY, savedVis);
-        if (savedY >= 0.0f) {
-            g_toolbar_posY    = savedY;
-            g_toolbar_targetY = savedY;
-        } else {
-            // Nếu chưa có file lưu, đặt mặc định dưới status bar
-            ImGuiViewport* viewport = ImGui::GetMainViewport();
-#ifdef __IOS__
-            float safeAreaTop = getSafeAreaTop();
-            g_toolbar_posY = viewport->WorkPos.y + safeAreaTop;
-#else
-            g_toolbar_posY = viewport->WorkPos.y + STATUS_BAR_HEIGHT;
-#endif
-            g_toolbar_targetY = g_toolbar_posY;
-        }
-        g_toolbar_visible = savedVis;
-        g_toolbar_anim    = savedVis ? 1.0f : 0.0f;
-    }
+    // Toolbar position is initialized lazily in RenderDebuggerToolbar on first frame.
+    // Resetting to -1 here ensures the intro slide-in animation plays every fresh launch.
+    g_toolbar_posY       = -1.0f;
+    g_toolbar_targetY    = -1.0f;
+    g_toolbar_anim       = 0.0f;
+    g_toolbar_intro_done = false;
 
     for (int i = 0; i < 5000 && !me_mmu; i++)
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
