@@ -610,11 +610,64 @@ namespace casioemu {
 			// Right mouse up does nothing to button.pressed state typically
 			break;
 
+		case SDL_TEXTINPUT: {
+			// FIX: Handle paste / iOS software keyboard text input.
+			// SDL_TEXTINPUT delivers a UTF-8 string (may be >1 char on paste).
+			// We map each printable ASCII character to its SDL_Keycode so that
+			// keyboard_map can find the matching calculator button, then
+			// simulate an instant press+release for each character.
+			const char* text = event.text.text;
+			for (int i = 0; text[i] != '\0'; ++i) {
+				char c = text[i];
+				// Map character to SDL_Keycode (printable ASCII range)
+				SDL_Keycode kc = SDLK_UNKNOWN;
+				if (c >= 'a' && c <= 'z')
+					kc = SDLK_a + (c - 'a');
+				else if (c >= 'A' && c <= 'Z')
+					kc = SDLK_a + (c - 'A'); // treat as lowercase key
+				else if (c >= '0' && c <= '9')
+					kc = SDLK_0 + (c - '0');
+				else if (c == '\r' || c == '\n')
+					kc = SDLK_RETURN;
+				else if (c == ' ')
+					kc = SDLK_SPACE;
+				else if (c == '.')
+					kc = SDLK_PERIOD;
+				else if (c == '+')
+					kc = SDLK_PLUS;
+				else if (c == '-')
+					kc = SDLK_MINUS;
+				else if (c == '*')
+					kc = SDLK_ASTERISK;
+				else if (c == '/')
+					kc = SDLK_SLASH;
+				else if (c == '(')
+					kc = SDLK_LEFTPAREN;
+				else if (c == ')')
+					kc = SDLK_RIGHTPAREN;
+				else if (c == 8 || c == 127) // backspace/del
+					kc = SDLK_BACKSPACE;
+				if (kc == SDLK_UNKNOWN)
+					continue;
+				auto it = keyboard_map.find(kc);
+				if (it == keyboard_map.end())
+					continue;
+				auto& btn = buttons[it->second];
+				// Press
+				PressButton(btn, false, -1);
+				// Release immediately (simulate tap)
+				if (TryReleaseButton(btn)) {
+					if (real_hardware) RecalculateGhost();
+					else RecalculateEmuInput();
+				}
+			}
+			break;
+		}
+
 		case SDL_KEYDOWN:
 		case SDL_KEYUP:
 			SDL_Keycode keycode = event.key.keysym.sym;
 			auto iterator = keyboard_map.find(keycode);
-			// printf("[Keyboard][Info] SDL_Keycode: %x(%s)\n", keycode, SDL_GetKeyName(keycode));
 			if (event.key.keysym.sym == SDLK_F12 && event.key.state == SDL_PRESSED) {
 				if (event.key.keysym.mod & KMOD_CTRL) {
 					return;
