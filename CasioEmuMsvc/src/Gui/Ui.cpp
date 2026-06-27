@@ -112,6 +112,10 @@ static float g_toolbar_collapse_anim  = 0.0f;   // 0 = expanded, 1 = collapsed
 static const float TOOLBAR_COLLAPSE_SPEED = 10.0f;
 static const float TOOLBAR_TAB_W          = 28.0f; // width of the toggle tab when collapsed
 
+// FIX: Persist across test_gui() re-calls (orientation change, etc.)
+// so the intro animation never replays after the first launch.
+static bool  g_toolbar_ever_shown     = false;
+
 static void SaveToolbarPos(float y) {
     std::ofstream f("toolbar_pos.txt");
     if (f.is_open()) f << y;
@@ -274,10 +278,7 @@ void RenderDebuggerToolbar() {
 
         float raw_dt_frame = ImGui::GetIO().DeltaTime;
         static bool first_frame = true;
-        // FIX: Only reset position on the very first frame ever, NOT when the
-        // app returns from background (large dt spike). Previously this caused
-        // the intro animation to replay every time the user left the app.
-        if (first_frame)
+        if (!first_frame && raw_dt_frame > 1.0f)
             g_toolbar_posY = -1.0f;
         first_frame = false;
 
@@ -298,15 +299,23 @@ void RenderDebuggerToolbar() {
             g_toolbar_posY = (g_toolbar_targetY < centerY)
                 ? (g_toolbar_targetY - toolbarH - 20.0f)
                 : (g_toolbar_targetY + toolbarH + 20.0f);
-            g_toolbar_anim       = 0.0f;
-            g_toolbar_intro_done = false;
+            // FIX: If toolbar was already shown before (e.g. after orientation
+            // change), snap directly to target — no intro animation replay.
+            if (g_toolbar_ever_shown) {
+                g_toolbar_posY       = g_toolbar_targetY;
+                g_toolbar_anim       = 1.0f;
+                g_toolbar_intro_done = true;
+            } else {
+                g_toolbar_anim       = 0.0f;
+                g_toolbar_intro_done = false;
+            }
         }
 
         g_toolbar_targetY = std::clamp(g_toolbar_targetY, minY, maxY);
 
         float animSpeed = g_toolbar_intro_done ? TOOLBAR_ANIM_SPEED : TOOLBAR_INTRO_SPEED;
         g_toolbar_anim  = std::min(g_toolbar_anim + animSpeed * dt, 1.0f);
-        if (g_toolbar_anim >= 1.0f) g_toolbar_intro_done = true;
+        if (g_toolbar_anim >= 1.0f) { g_toolbar_intro_done = true; g_toolbar_ever_shown = true; }
 
         float introT = EaseOut3(g_toolbar_anim);
 
@@ -714,7 +723,15 @@ CodeViewer* test_gui(bool* guiCreated, SDL_Window* wnd, SDL_Renderer* rnd) {
     g_toolbar_posY          = -1.0f;
     g_toolbar_targetY       = -1.0f;
     g_toolbar_anim          = 0.0f;
-    g_toolbar_intro_done    = false;
+    // FIX: Only reset intro_done on very first launch; if the toolbar was
+    // already shown (e.g. orientation change re-calls test_gui), skip the
+    // intro animation entirely by restoring the completed state.
+    if (!g_toolbar_ever_shown) {
+        g_toolbar_intro_done = false;
+    } else {
+        g_toolbar_intro_done = true;
+        g_toolbar_anim       = 1.0f;
+    }
     g_toolbar_collapsed     = false;
     g_toolbar_collapse_anim = 0.0f;
 
