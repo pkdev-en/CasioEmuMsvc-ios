@@ -274,7 +274,10 @@ void RenderDebuggerToolbar() {
 
         float raw_dt_frame = ImGui::GetIO().DeltaTime;
         static bool first_frame = true;
-        if (!first_frame && raw_dt_frame > 1.0f)
+        // FIX: Only reset position on the very first frame ever, NOT when the
+        // app returns from background (large dt spike). Previously this caused
+        // the intro animation to replay every time the user left the app.
+        if (first_frame)
             g_toolbar_posY = -1.0f;
         first_frame = false;
 
