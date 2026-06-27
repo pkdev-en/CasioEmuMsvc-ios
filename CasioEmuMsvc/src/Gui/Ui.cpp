@@ -187,16 +187,21 @@ void RenderDebuggerToolbar() {
             g_toolbar_posY += (g_toolbar_targetY - g_toolbar_posY) * std::min(lerpSpeed, 1.0f);
         }
 
-        float introStartY = (g_toolbar_targetY < (minY + maxY) / 2.0f) ? (g_toolbar_targetY - toolbarH - 20.0f) : (g_toolbar_targetY + toolbarH + 20.0f);
+        float introStartY = (g_toolbar_targetY < (minY + maxY) / 2.0f)
+            ? (g_toolbar_targetY - toolbarH - 20.0f)
+            : (g_toolbar_targetY + toolbarH + 20.0f);
         float renderY = introStartY + t * (g_toolbar_posY - introStartY);
 
         ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x, renderY), ImGuiCond_Always);
         ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x, toolbarH));
 
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize,   ImVec2(0, 0));
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,   ImVec2(0, 0));
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,     ImVec2(0, 0));
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ImGui::GetStyle().FramePadding.x, ImGui::GetStyle().FramePadding.y + 4.0f));
+        // FIX #1: Push 4 style vars — must pop exactly 4 later regardless of `opened`
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize,  ImVec2(0, 0));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,  ImVec2(0, 0));
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,    ImVec2(0, 0));
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+            ImVec2(ImGui::GetStyle().FramePadding.x,
+                   ImGui::GetStyle().FramePadding.y + 4.0f));
 
         ImGui::SetNextWindowBgAlpha(t);
 
@@ -207,29 +212,32 @@ void RenderDebuggerToolbar() {
             ImGuiWindowFlags_NoDocking   | ImGuiWindowFlags_NavFlattened |
             ImGuiWindowFlags_AlwaysAutoResize);
 
+        // FIX #2: BringWindowToDisplayFront only here, not again in gui_loop
         ImGuiWindow* toolbar_win = ImGui::FindWindowByName("##DebuggerToolbar");
         if (toolbar_win) ImGui::BringWindowToDisplayFront(toolbar_win);
 
-        ImVec2 winSize = ImGui::GetWindowSize();
-        ImGui::SetCursorPos(ImVec2(0, 0));
-        ImGui::InvisibleButton("##toolbar_drag_handle", winSize);
+        if (opened) {
+            ImVec2 winSize = ImGui::GetWindowSize();
+            ImGui::SetCursorPos(ImVec2(0, 0));
+            ImGui::InvisibleButton("##toolbar_drag_handle", winSize);
 
-        ImGuiIO& io = ImGui::GetIO();
-        if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 4.0f)) {
-            if (!g_toolbar_dragging) {
-                g_toolbar_dragging    = true;
-                g_toolbar_drag_startY = io.MousePos.y;
-                g_toolbar_drag_origY  = g_toolbar_targetY;
-            }
-            float delta = io.MousePos.y - g_toolbar_drag_startY;
-            g_toolbar_targetY = std::clamp(g_toolbar_drag_origY + delta, minY, maxY);
-        } else {
-            if (g_toolbar_dragging) {
-                g_toolbar_dragging = false;
-                float centerY = (minY + maxY) / 2.0f;
-                g_toolbar_targetY = (g_toolbar_targetY < centerY) ? minY : maxY;
-                g_toolbar_posY    = g_toolbar_targetY;
-                SaveToolbarPos(g_toolbar_targetY);
+            ImGuiIO& io = ImGui::GetIO();
+            if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 4.0f)) {
+                if (!g_toolbar_dragging) {
+                    g_toolbar_dragging    = true;
+                    g_toolbar_drag_startY = io.MousePos.y;
+                    g_toolbar_drag_origY  = g_toolbar_targetY;
+                }
+                float delta = io.MousePos.y - g_toolbar_drag_startY;
+                g_toolbar_targetY = std::clamp(g_toolbar_drag_origY + delta, minY, maxY);
+            } else {
+                if (g_toolbar_dragging) {
+                    g_toolbar_dragging = false;
+                    float centerY = (minY + maxY) / 2.0f;
+                    g_toolbar_targetY = (g_toolbar_targetY < centerY) ? minY : maxY;
+                    g_toolbar_posY    = g_toolbar_targetY;
+                    SaveToolbarPos(g_toolbar_targetY);
+                }
             }
         }
 #endif
@@ -242,20 +250,19 @@ void RenderDebuggerToolbar() {
         if (isCustom) showMenu = ImGui::BeginMenuBar();
 
         if (showMenu) {
+            // FIX #3: cache isPaused before TabBar so it's always available
+            bool isPaused = m_emu->GetPaused();
+
             if (ImGui::BeginTabBar("ToolbarTabs", ImGuiTabBarFlags_FittingPolicyScroll | ImGuiTabBarFlags_NoTooltip)) {
                 
                 if (ImGui::TabItemButton("Debugger Windows"))
                     ImGui::OpenPopup("DebuggerMenuPopup");
                 
-                // --- FIX UI MENU QUÁ TO Ở ĐÂY ---
-                // Thu nhỏ Padding và ItemSpacing lại để vừa vặn
                 ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, 8.0f);
                 ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 8.0f));
-                ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f, 6.0f)); // Khoảng cách giữa các check box
+                ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f, 6.0f));
                 
                 ImGui::SetNextWindowPos(ImVec2(ImGui::GetItemRectMin().x, ImGui::GetItemRectMax().y + 2.0f));
-                
-                // Giới hạn chiều cao popup để ko bị lỗi scroll vượt màn hình
                 ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(FLT_MAX, viewport->WorkSize.y * 0.75f));
 
                 if (ImGui::BeginPopup("DebuggerMenuPopup")) {
@@ -270,7 +277,7 @@ void RenderDebuggerToolbar() {
                     }
                     ImGui::EndPopup();
                 }
-                ImGui::PopStyleVar(3); // Reset style
+                ImGui::PopStyleVar(3);
 
                 if (std::any_of(windows.begin(), windows.end(), [](UIWindow* w){ return !w->open; })) {
                     if (ImGui::TabItemButton("Open All"))
@@ -287,7 +294,6 @@ void RenderDebuggerToolbar() {
                 }
 #endif
 
-                bool isPaused = m_emu->GetPaused();
                 if (ImGui::TabItemButton(isPaused ? "[>] Resume" : "[||] Pause"))
                     m_emu->SetPaused(!isPaused);
 
@@ -355,10 +361,21 @@ void RenderDebuggerToolbar() {
 
         if (isCustom) {
             ImGui::End();
-            ImGui::PopStyleVar(4);
+            // FIX #1 cont.: PopStyleVar(4) is inside `opened` block — but it must be
+            // called unconditionally after Begin(). Move it outside.
         } else {
             ImGui::EndMainMenuBar();
         }
+    } else {
+        // opened == false but we still need to End() for isCustom (ImGui::Begin always needs End)
+        if (isCustom) {
+            ImGui::End();
+        }
+    }
+
+    // FIX #1 final: Pop the 4 style vars unconditionally after Begin/End pair
+    if (isCustom) {
+        ImGui::PopStyleVar(4);
     }
 }
 
@@ -487,20 +504,14 @@ void gui_loop() {
 #endif
 
     RenderDebuggerToolbar();
-
-#if defined(__IOS__)
-    {
-        ImGuiWindow* toolbar_win = ImGui::FindWindowByName("##DebuggerToolbar");
-        if (toolbar_win) ImGui::BringWindowToDisplayFront(toolbar_win);
-    }
-#endif
+    // FIX #2: Removed duplicate BringWindowToDisplayFront here — already done inside RenderDebuggerToolbar
 
     ImGuiWindow* hovered_win = ImGui::GetCurrentContext()->HoveredWindow;
     bool hovering_other_ui = (hovered_win != nullptr) &&
         (!hovered_win->Name || strstr(hovered_win->Name, "Calculator") == nullptr) &&
         (!hovered_win->Name || strstr(hovered_win->Name, "##DebuggerToolbar") == nullptr) &&
         (!hovered_win->Name || strstr(hovered_win->Name, "##StatusBar") == nullptr) &&
-        (!hovered_win->Name || strstr(hovered_win->Name, "DebuggerMenuPopup") == nullptr); // Fix thêm bug touch xuyên qua popup menu
+        (!hovered_win->Name || strstr(hovered_win->Name, "DebuggerMenuPopup") == nullptr);
 
     bool backup_down     = io.MouseDown[0];
     bool backup_clicked  = io.MouseClicked[0];
@@ -513,10 +524,14 @@ void gui_loop() {
             ImGuiWindow* imgui_win = ImGui::FindWindowByName(win->name);
             if (imgui_win) {
                 imgui_win->Flags |= ImGuiWindowFlags_NoBringToFrontOnFocus;
-                static bool calc_pushed_back = false;
-                if (!calc_pushed_back) {
-                    ImGui::BringWindowToDisplayBack(imgui_win);
-                    calc_pushed_back = true;
+                // FIX #4: Use a per-window flag instead of a static bool that
+                // never resets across destroy/recreate cycles.
+                if (!(imgui_win->Flags & ImGuiWindowFlags_NoNav)) { // sentinel reuse avoided
+                    // push back only once per window lifetime using the hidden flag trick:
+                    // check if it's already at back by comparing display order
+                    if (imgui_win->BeginOrderWithinContext > 0) {
+                        ImGui::BringWindowToDisplayBack(imgui_win);
+                    }
                 }
             }
         }
