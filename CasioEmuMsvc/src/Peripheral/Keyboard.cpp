@@ -637,10 +637,20 @@ namespace casioemu {
 			}
 			if (iterator == keyboard_map.end())
 				break;
-			if (event.key.state == SDL_PRESSED)
+			if (event.key.state == SDL_PRESSED) {
 				PressButton(buttons[iterator->second], false, iterator->second);
-			else
-				ReleaseAll();
+			} else {
+				// FIX: Release only the specific button tied to this key,
+				// not all buttons. ReleaseAll() was incorrectly clearing
+				// every pressed button (e.g. during Paste / Ctrl+V sequences).
+				auto& btn = buttons[iterator->second];
+				if (TryReleaseButton(btn)) {
+					if (real_hardware)
+						RecalculateGhost();
+					else
+						RecalculateEmuInput();
+				}
+			}
 			break;
 		}
 	}
