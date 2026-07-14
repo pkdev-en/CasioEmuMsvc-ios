@@ -2,7 +2,11 @@
 #include "Compiler.h"
 #include "Localization.h"
 #include "Models.h"
+#ifdef CASIOEMU_CORE_WEB
+#include "WebDebuggerGui.h"
+#else
 #include "SysDialog.h"
+#endif
 #include "TextEditor.h"
 #include "Ui.hpp"
 #include "hex.hpp"
@@ -55,32 +59,29 @@ public:
 	}
 
 	void RenderCore() override {
+#ifdef CASIOEMU_CORE_WEB
+		checkWebDatabaseImportResult();
+#endif
 		drawMenuBar();
 		drawToolbar();
-		ImGuiIO& io = ImGui::GetIO();
-
-		if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
-			io.WantTextInput = true;
-		}
-		ImGui::Spacing();
+		ImGui::Separator();
 
 		// Show database prompt banner if no database loaded
 		if (!databaseLoaded_) {
 			drawNoDatabaseBanner();
 		}
 
-		static bool showDiagnostics = true;
-		float diagnosticsHeight = showDiagnostics ? 120.0f : 0.0f;
-		float mainHeight = ImGui::GetContentRegionAvail().y - (showDiagnostics ? (diagnosticsHeight + 25.0f) : 25.0f);
-		mainHeight = std::max(10.0f, mainHeight);
+		const float diagnosticsHeight = 135.0f;
+		const float mainHeight =
+			ImGui::GetContentRegionAvail().y - diagnosticsHeight - ImGui::GetStyle().ItemSpacing.y;
 
 		if (ImGui::BeginTable("##compiler_layout", 2,
 				ImGuiTableFlags_Resizable |
 					ImGuiTableFlags_BordersInnerV |
 					ImGuiTableFlags_SizingStretchProp,
 				ImVec2(-1, mainHeight))) {
-			ImGui::TableSetupColumn("Source", ImGuiTableColumnFlags_WidthStretch, 0.55f);
-			ImGui::TableSetupColumn("Output", ImGuiTableColumnFlags_WidthStretch, 0.45f);
+			ImGui::TableSetupColumn("Source", ImGuiTableColumnFlags_WidthStretch, 0.58f);
+			ImGui::TableSetupColumn("Output", ImGuiTableColumnFlags_WidthStretch, 0.42f);
 			ImGui::TableNextRow();
 
 			ImGui::TableSetColumnIndex(0);
@@ -92,17 +93,7 @@ public:
 			ImGui::EndTable();
 		}
 
-		// Diagnostics collapsible header/toggle
-		ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0,0,0,0));
-		if (ImGui::Selectable(showDiagnostics ? "▼ Diagnostics" : "▶ Diagnostics", false, 0, ImVec2(100, 20))) {
-			showDiagnostics = !showDiagnostics;
-		}
-		ImGui::PopStyleColor();
-
-		if (showDiagnostics) {
-			drawDiagnosticsPanel(diagnosticsHeight);
-		}
-
+		drawDiagnosticsPanel(diagnosticsHeight);
 		handleShortcuts();
 	}
 
@@ -130,6 +121,9 @@ private:
 	// Database state
 	bool databaseLoaded_ = false;
 	std::string databasePath_;
+#ifdef CASIOEMU_CORE_WEB
+	std::filesystem::path webDatabaseImportPath_;
+#endif
 	lc::CommandDatabase db_;
 	int dbCommandCount_ = 0;
 	int dbDataLabelCount_ = 0;
@@ -213,10 +207,32 @@ private:
 	// Database loading
 	// ============================================================
 	void openDatabaseDialog() {
+#ifdef CASIOEMU_CORE_WEB
+		const auto dir = std::filesystem::path("/tmp/imports");
+		std::filesystem::create_directories(dir);
+		webDatabaseImportPath_ = dir / "rop_database.txt";
+		WebDebuggerQueueOpenFile(webDatabaseImportPath_.string().c_str(), "rop_database.txt");
+#else
 		SystemDialogs::OpenFileDialog([this](std::filesystem::path f) {
 			loadDatabase(f.string());
 		});
+#endif
 	}
+
+#ifdef CASIOEMU_CORE_WEB
+	void checkWebDatabaseImportResult() {
+		if (webDatabaseImportPath_.empty())
+			return;
+		int result = 0;
+		if (!WebDebuggerConsumeFileResult(webDatabaseImportPath_.string().c_str(), &result))
+			return;
+		const auto importPath = webDatabaseImportPath_;
+		webDatabaseImportPath_.clear();
+		if (result == 0) {
+			loadDatabase(importPath.string());
+		}
+	}
+#endif
 
 	void loadDatabase(const std::string& path) {
 		db_ = lc::CommandDatabase();
@@ -338,38 +354,20 @@ private:
 	// UI
 	// ============================================================
 	void drawNoDatabaseBanner() {
-		ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.20f, 0.15f, 0.05f, 1.0f));
-		ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.60f, 0.45f, 0.10f, 1.0f));
-		ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 4.0f);
-		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0f, 8.0f));
-		
-		ImGui::BeginChild("##no_db_banner", ImVec2(0, 0), ImGuiChildFlags_Border | ImGuiChildFlags_AutoResizeY, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+		ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.15f, 0.12f, 0.0f, 1.0f));
+		ImGui::BeginChild("##no_db_banner", ImVec2(-1, 50), true);
 
-		ImGui::AlignTextToFramePadding();
 		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.85f, 0.3f, 1.0f));
-		ImGui::TextUnformatted("\xEF\xBA\x8F"); // Fallback alert symbol or just empty space, actually better to just use text:
-		ImGui::SameLine(0, 0);
-		ImGui::TextUnformatted(" ⚠  ");
-		ImGui::SameLine(0, 0);
 		ImGui::TextUnformatted("RopCompiler.NoDatabaseWarning"_lc);
 		ImGui::PopStyleColor();
 
-		// Push button to right if there is enough space
-		float btn_width = 150.0f;
-		float avail = ImGui::GetContentRegionAvail().x;
-		if (avail > btn_width + 20.0f) {
-			ImGui::SameLine(ImGui::GetCursorPosX() + avail - btn_width);
-		} else {
-			ImGui::SameLine();
-		}
-		
-		if (ImGui::Button("RopCompiler.SelectDatabase"_lc, ImVec2(btn_width, 24.0f))) {
+		ImGui::SameLine();
+		if (ImGui::SmallButton("RopCompiler.SelectDatabase"_lc)) {
 			openDatabaseDialog();
 		}
 
 		ImGui::EndChild();
-		ImGui::PopStyleVar(2);
-		ImGui::PopStyleColor(2);
+		ImGui::PopStyleColor();
 	}
 
 	void drawMenuBar() {
@@ -441,25 +439,8 @@ private:
 	}
 
 	void drawToolbar() {
-		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0f, 10.0f));
-		ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f, 8.0f));
-		ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.12f, 0.12f, 0.14f, 1.0f));
-		ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.25f, 0.25f, 0.30f, 1.0f));
-		ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 6.0f);
-		
-		ImGui::BeginChild("##toolbar", ImVec2(0, 0), ImGuiChildFlags_Border | ImGuiChildFlags_AutoResizeY, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-
-		auto WrapSameLine = [](float expected_width, float spacing = -1.0f) {
-			ImGuiStyle& style = ImGui::GetStyle();
-			float window_visible_x2 = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
-			float last_item_x2 = ImGui::GetItemRectMax().x;
-			float next_item_x2 = last_item_x2 + (spacing >= 0 ? spacing : style.ItemSpacing.x) + expected_width;
-			if (next_item_x2 < window_visible_x2)
-				ImGui::SameLine(0, spacing);
-		};
-
-		// ── Group 1: Primary Actions ──
-		ImGui::BeginGroup();
+		// ── Primary actions ──────────────────────────────────────
+		// Compile button: green tint on OK, red tint on error
 		if (lastCompileOk_) {
 			ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.15f, 0.55f, 0.15f, 1.0f));
 			ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.20f, 0.70f, 0.20f, 1.0f));
@@ -469,7 +450,7 @@ private:
 			ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.70f, 0.18f, 0.18f, 1.0f));
 			ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.45f, 0.08f, 0.08f, 1.0f));
 		}
-		if (ImGui::Button(" Compile ", ImVec2(0, 24))) {
+		if (ImGui::Button("RopCompiler.Compile"_lc)) {
 			compile();
 		}
 		ImGui::PopStyleColor(3);
@@ -481,122 +462,135 @@ private:
 		}
 
 		ImGui::SameLine();
+
+		// Inject to RAM button (only enabled when there is output)
 		bool canInject = !outputBytes_.empty() && n_ram_buffer != nullptr;
 		if (!canInject) ImGui::BeginDisabled();
-		if (ImGui::Button(" Inject to RAM ", ImVec2(0, 24))) {
+		if (ImGui::Button("RopCompiler.InjectToRam"_lc)) {
 			injectToRam();
 		}
 		if (!canInject) ImGui::EndDisabled();
 		if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
 			ImGui::BeginTooltip();
-			ImGui::Text("RopCompiler.InjectToRamTooltip"_lc, static_cast<unsigned>(outputBytes_.size()), baseAddress_);
+			ImGui::Text("RopCompiler.InjectToRamTooltip"_lc,
+				static_cast<unsigned>(outputBytes_.size()), baseAddress_);
 			ImGui::EndTooltip();
 		}
-		ImGui::EndGroup();
 
-		WrapSameLine(220.0f, 20.0f);
+		ImGui::SameLine();
+		ImGui::TextDisabled("|");
+		ImGui::SameLine();
 
-		// ── Group 2: Configuration ──
-		ImGui::BeginGroup();
-		ImGui::AlignTextToFramePadding();
-		ImGui::TextDisabled("Base:");
+		// ── Database badge ────────────────────────────────────────
+		if (databaseLoaded_) {
+			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.25f, 0.95f, 0.35f, 1.0f));
+			ImGui::TextUnformatted("[DB]");
+			ImGui::PopStyleColor();
+			if (ImGui::IsItemHovered()) {
+				ImGui::BeginTooltip();
+				auto tipText = g_local.Format("RopCompiler.DbTooltip",
+					std::filesystem::path(databasePath_).filename().string().c_str(),
+					dbCommandCount_, dbDataLabelCount_);
+				ImGui::TextUnformatted(tipText.c_str());
+				ImGui::EndTooltip();
+			}
+		} else {
+			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.6f, 0.2f, 1.0f));
+			ImGui::TextUnformatted("[No DB]");
+			ImGui::PopStyleColor();
+			if (ImGui::IsItemHovered()) {
+				ImGui::BeginTooltip();
+				ImGui::TextUnformatted("RopCompiler.NoDbTooltip"_lc);
+				ImGui::EndTooltip();
+			}
+		}
+
+		ImGui::SameLine();
+		if (ImGui::SmallButton("RopCompiler.LoadDatabase"_lc)) {
+			openDatabaseDialog();
+		}
+
+		ImGui::SameLine();
+		ImGui::TextDisabled("|");
+		ImGui::SameLine();
+
+		// ── Base address + length ─────────────────────────────────
+		ImGui::TextUnformatted("RopCompiler.Base"_lc);
 		ImGui::SameLine();
 		int base = static_cast<int>(baseAddress_);
-		ImGui::SetNextItemWidth(80.0f);
+		ImGui::SetNextItemWidth(90.0f);
 		if (ImGui::InputInt("##base_address", &base, 0, 0, ImGuiInputTextFlags_CharsHexadecimal)) {
 			if (base < 0) base = 0;
 			baseAddress_ = static_cast<uint32_t>(base);
 		}
 		ImGui::SameLine();
-		ImGui::TextDisabled("(%zu bytes)", outputBytes_.size());
-		ImGui::EndGroup();
+		ImGui::TextDisabled("%s 0x%04X / %zu bytes",
+			"RopCompiler.Length"_lc,
+			static_cast<unsigned>(outputBytes_.size()),
+			outputBytes_.size());
 
-		WrapSameLine(150.0f, 20.0f);
+		ImGui::SameLine();
+		ImGui::TextDisabled("|");
+		ImGui::SameLine();
 
-		// ── Group 3: Output Management ──
-		ImGui::BeginGroup();
-		if (ImGui::Button(" Copy Hex ", ImVec2(0, 24))) {
+		// ── Secondary actions ─────────────────────────────────────
+		if (ImGui::SmallButton("RopCompiler.CopyHex"_lc)) {
 			copyOutputHexToClipboard();
 		}
 		ImGui::SameLine();
-		if (ImGui::Button(" Clear ", ImVec2(0, 24))) {
+		if (ImGui::SmallButton("Paste")) {
+			pasteSourceFromClipboard();
+		}
+		if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+			ImGui::BeginTooltip();
+			ImGui::TextDisabled("Paste clipboard text into source editor (Ctrl+V)");
+			ImGui::EndTooltip();
+		}
+		ImGui::SameLine();
+		if (ImGui::SmallButton("RopCompiler.ClearOutput"_lc)) {
 			outputBytes_.clear();
 			diagnosticsText_.clear();
 			editor_.SetErrorMarkers({});
 			lastCompileOk_ = true;
 		}
-		ImGui::EndGroup();
 
-		// ── Group 4: Status / Feedback ──
-		if (databaseLoaded_ || !dbLoadError_.empty() || injectFeedbackTimer_ > 0.0) {
-			WrapSameLine(180.0f, 20.0f);
-			ImGui::BeginGroup();
-			ImGui::AlignTextToFramePadding();
-			
-			if (!dbLoadError_.empty()) {
-				ImGui::TextColored(UIHelpers::kColorError, "\xE2\x9A\xA0 %s", dbLoadError_.c_str());
-			} else if (injectFeedbackTimer_ > 0.0) {
-				double elapsed = ImGui::GetTime() - injectFeedbackTimer_;
-				if (elapsed < 3.0) {
-					float alpha = (float)std::max(0.0, 1.0 - elapsed / 1.5);
-					ImGui::TextColored(ImVec4(UIHelpers::kColorSuccess.x, UIHelpers::kColorSuccess.y, UIHelpers::kColorSuccess.z, alpha), 
-						"\xE2\x9C\x93 %s", injectFeedbackText_.c_str());
-				} else {
-					injectFeedbackTimer_ = 0.0;
-				}
-			} else if (databaseLoaded_) {
-				std::filesystem::path p(databasePath_);
-				ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), "\xE2\x9C\x93 DB: %s", p.filename().string().c_str());
-			}
-			ImGui::EndGroup();
+		// Show database load error if any (inline red badge)
+		if (!dbLoadError_.empty()) {
+			ImGui::SameLine();
+			ImGui::PushStyleColor(ImGuiCol_Text, UIHelpers::kColorError);
+			ImGui::TextUnformatted(dbLoadError_.c_str());
+			ImGui::PopStyleColor();
 		}
 
-		ImGui::EndChild();
-		ImGui::PopStyleVar(3);
-		ImGui::PopStyleColor(2);
+		// Show inject feedback
+		if (injectFeedbackTimer_ > 0.0) {
+			double elapsed = ImGui::GetTime() - injectFeedbackTimer_;
+			if (elapsed < 3.0) {
+				ImGui::SameLine();
+				float alpha = (float)std::max(0.0, 1.0 - elapsed / 1.5);
+				ImGui::PushStyleColor(ImGuiCol_Text,
+					ImVec4(UIHelpers::kColorSuccess.x, UIHelpers::kColorSuccess.y,
+						UIHelpers::kColorSuccess.z, alpha));
+				ImGui::TextUnformatted(injectFeedbackText_.c_str());
+				ImGui::PopStyleColor();
+			} else {
+				injectFeedbackTimer_ = 0.0;
+			}
+		}
 	}
 
 
 	void drawSourcePanel(float height) {
 		ImGui::BeginChild("##source_panel", ImVec2(-1, height), true);
-
 		ImGui::TextUnformatted("RopCompiler.SourceTitle"_lc);
 		ImGui::Separator();
-
 		const float footerHeight = 24.0f;
-
 		editor_.Render("##source_editor",
 			ImVec2(-1, ImGui::GetContentRegionAvail().y - footerHeight), true);
-
-		// Context menu for Copy/Paste
-		if (ImGui::BeginPopupContextItem("##source_editor_context")) {
-			if (ImGui::MenuItem("Copy")) {
-				editor_.Copy();
-			}
-			if (ImGui::MenuItem("Cut")) {
-				editor_.Cut();
-			}
-			if (ImGui::MenuItem("Paste")) {
-				editor_.Paste();
-			}
-			ImGui::Separator();
-			if (ImGui::MenuItem("Select All")) {
-				editor_.SelectAll();
-			}
-			ImGui::EndPopup();
-		}
-
-		// 🔥 FORCE FOCUS VÀO EDITOR
-		if (ImGui::IsWindowHovered() && ImGui::IsMouseClicked(0)) {
-			ImGui::SetWindowFocus(); // quan trọng hơn SetKeyboardFocusHere
-		}
-
 		auto cpos = editor_.GetCursorPosition();
 		auto statusText = g_local.Format("RopCompiler.CursorStatus",
 			cpos.mLine + 1, cpos.mColumn + 1, editor_.GetTotalLines());
-
 		ImGui::TextUnformatted(statusText.c_str());
-
 		ImGui::EndChild();
 	}
 
@@ -646,6 +640,8 @@ private:
 
 	void drawDiagnosticsPanel(float height) {
 		ImGui::BeginChild("##diagnostics_panel", ImVec2(-1, height), true);
+		ImGui::TextUnformatted("RopCompiler.DiagnosticsTitle"_lc);
+		ImGui::Separator();
 
 		if (diagnosticsText_.empty()) {
 			ImGui::TextDisabled("%s", "RopCompiler.NoDiagnostics"_lc);
@@ -673,6 +669,22 @@ private:
 		if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Enter)) {
 			compile();
 		}
+		// Ctrl+V: paste clipboard into source editor when editor is not focused
+		// (when editor IS focused, TextEditor handles it natively)
+		if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_V) && !editor_.IsFocused()) {
+			pasteSourceFromClipboard();
+		}
+	}
+
+	// ============================================================
+	// Paste
+	// ============================================================
+	void pasteSourceFromClipboard() {
+		const char* text = ImGui::GetClipboardText();
+		if (!text || text[0] == '\0')
+			return;
+		// Replace entire editor content with clipboard text
+		editor_.SetText(text);
 	}
 
 	// ============================================================
