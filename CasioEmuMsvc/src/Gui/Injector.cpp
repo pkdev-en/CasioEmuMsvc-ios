@@ -5,6 +5,9 @@
 #include "Peripheral/BatteryBackedRAM.hpp"
 #include "Theme.h"
 #include "Ui.hpp"
+#ifdef CASIOEMU_CORE_WEB
+#include "WebDebuggerGui.h"
+#endif
 #include "hex.hpp"
 #include "imgui/imgui.h"
 #include <Gui.h>
@@ -26,7 +29,9 @@ Injector::Injector() : UIWindow("Rop"), needsReload(false), isReloading(false), 
 	injectors.push_back(InjectorData());
 	injectionFilePath = ThemeManager::Instance().Settings().injectionFilePath;
 	InitCustomInjectionsFile();
+#ifndef CASIOEMU_CORE_WEB
 	AsyncLoadCustomInjections();
+#endif
 }
 
 Injector::~Injector() {
@@ -100,6 +105,9 @@ bool Injector::IsHexString(const std::string& str) {
 
 void Injector::InitCustomInjectionsFile() {
 	const std::filesystem::path filepath = injectionFilePath;
+	if (filepath.has_parent_path()) {
+		std::filesystem::create_directories(filepath.parent_path());
+	}
 
 	if (std::filesystem::exists(filepath)) {
 		return;
@@ -119,6 +127,9 @@ void Injector::InitCustomInjectionsFile() {
 		}
 		file << template_content;
 		file.close();
+#ifdef CASIOEMU_CORE_WEB
+		WebDebuggerRequestFsSync();
+#endif
 	}
 	catch (const std::exception& e) {
 		// Handle error
@@ -458,19 +469,17 @@ bool Injector::ApplyInjection(const CustomInjection& inj, bool& show_info, std::
 }
 
 void Injector::RenderCustomInjectTab(bool& show_info, std::string& info_msg) {
-	ImGui::Spacing();
-	ImGui::TextDisabled("File: %s", injectionFilePath.c_str());
+	ImGui::TextUnformatted(("Rop.CurrentInjectFile"_l + ": " + injectionFilePath).c_str());
 
 	static bool autoCheckFileChanges = true;
-	ImGui::AlignTextToFramePadding();
 	if (ImGui::Checkbox("Rop.AutoReload"_lc, &autoCheckFileChanges)) {
 		if (autoCheckFileChanges) {
 			needsReload = true;
 		}
 	}
 
-	ImGui::SameLine(0, 15.0f);
-	if (ImGui::Button("Rop.ReloadCustomInjects"_lc, ImVec2(150, 0))) {
+	ImGui::SameLine();
+	if (ImGui::Button("Rop.ReloadCustomInjects"_lc)) {
 		if (!isReloading.load() && !isShuttingDown.load()) {
 			std::string currentFilePath = ThemeManager::Instance().Settings().injectionFilePath;
 			if (currentFilePath != injectionFilePath) {
@@ -486,13 +495,11 @@ void Injector::RenderCustomInjectTab(bool& show_info, std::string& info_msg) {
 	}
 
 	if (isReloading.load()) {
-		ImGui::SameLine(0, 15.0f);
-		ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "%s", "Rop.Loading"_lc);
+		ImGui::SameLine();
+		ImGui::TextUnformatted("Rop.Loading"_lc);
 	}
 
-	ImGui::Spacing();
 	ImGui::Separator();
-	ImGui::Spacing();
 
 	for (const auto& inj : customInjections) {
 		if (ImGui::CollapsingHeader(inj.name.c_str())) {
@@ -529,35 +536,105 @@ void Injector::RenderInjectorTab(InjectorData& inj, int index, bool& show_info, 
 			   (c >= 'A' && c <= 'F');
 	};
 
-	ImGui::AlignTextToFramePadding();
+	// ── Địa chỉ inject ──────────────────────────────────────────
 	ImGui::TextUnformatted("Rop.InjectAddr"_lc);
-	ImGui::SameLine(0, 10.0f);
-	ImGui::SetNextItemWidth(120.0f);
-	ImGui::InputText(("##addr" + std::to_string(index)).c_str(), inj.addr, 10);
+	ImGui::SameLine();
+	ImGui::SetNextItemWidth(100);
+	ImGui::InputText(("##addr" + std::to_string(index)).c_str(), inj.addr, 10,
+		ImGuiInputTextFlags_CharsHexadecimal);
+	ImGui::SameLine();
+	// Nút Dán cho ô địa chỉ
+	if (ImGui::SmallButton(("Dán##addr" + std::to_string(index)).c_str())) {
+		const char* clip = ImGui::GetClipboardText();
+		if (clip) {
+			strncpy(inj.addr, clip, sizeof(inj.addr) - 1);
+			inj.addr[sizeof(inj.addr) - 1] = '\0';
+		}
+	}
 
-	ImGui::SameLine(0, 20.0f);
+	// ── Toolbar cho ô hex data ───────────────────────────────────
+	ImGui::Spacing();
 
-	if (ImGui::Button(("Rop.Paste"_l + "##" + std::to_string(index)).c_str(), ImVec2(80, 0))) {
-		if (ImGui::GetClipboardText() != nullptr) {
-			strncpy(inj.data, ImGui::GetClipboardText(), sizeof(inj.data) - 1);
+	// Dán (paste toàn bộ clipboard vào textarea)
+	if (ImGui::Button(("Dán##data" + std::to_string(index)).c_str())) {
+		const char* clip = ImGui::GetClipboardText();
+		if (clip) {
+			strncpy(inj.data, clip, sizeof(inj.data) - 1);
 			inj.data[sizeof(inj.data) - 1] = '\0';
 		}
 	}
-	ImGui::SameLine(0, 5.0f);
-	if (ImGui::Button(("Rop.Clear"_l + "##" + std::to_string(index)).c_str(), ImVec2(80, 0))) {
-		memset(inj.data, 0, sizeof(inj.data));
+	if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+		ImGui::SetTooltip("Dán clipboard vào ô hex");
 	}
 
-	ImGui::Spacing();
-	ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+	ImGui::SameLine();
+	// Sao chép nội dung hex ra clipboard
+	if (ImGui::Button(("Sao chép##data" + std::to_string(index)).c_str())) {
+		ImGui::SetClipboardText(inj.data);
+	}
+	if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+		ImGui::SetTooltip("Sao chép hex vào clipboard");
+	}
+
+	ImGui::SameLine();
+	// Xoá sạch
+	if (ImGui::Button(("Xoá##data" + std::to_string(index)).c_str())) {
+		memset(inj.data, 0, sizeof(inj.data));
+	}
+	if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+		ImGui::SetTooltip("Xoá toàn bộ nội dung");
+	}
+
+	ImGui::SameLine();
+	// Hiển thị số byte đã nhập (đếm cặp hex hợp lệ)
+	{
+		size_t byte_count = 0;
+		const char* p = inj.data;
+		while (*p && *(p + 1)) {
+			if (valid_hex(*p) && valid_hex(*(p + 1))) {
+				byte_count++;
+				p += 2;
+			} else {
+				p++;
+			}
+		}
+		ImGui::TextDisabled("(%zu bytes)", byte_count);
+	}
+
+	// ── Ô nhập hex ──────────────────────────────────────────────
+	// Dùng PushStyleVar để tăng padding, giúp touch/click dễ hơn
+	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6, 6));
+	float textarea_height = ImGui::GetTextLineHeight() * 8 + ImGui::GetStyle().FramePadding.y * 2;
 	ImGui::InputTextMultiline(
 		("##hex" + std::to_string(index)).c_str(),
 		inj.data,
 		IM_ARRAYSIZE(inj.data) - 1,
-		ImVec2(-1, ImGui::GetTextLineHeight() * 8));
+		ImVec2(-1, textarea_height),
+		ImGuiInputTextFlags_None  // Không dùng AlwaysOverwrite, không giới hạn ký tự
+	);
+	ImGui::PopStyleVar();
+
+	// Context menu chuột phải / long-press cho textarea
+	if (ImGui::BeginPopupContextItem(("##ctx_hex" + std::to_string(index)).c_str())) {
+		if (ImGui::MenuItem("Dán")) {
+			const char* clip = ImGui::GetClipboardText();
+			if (clip) {
+				strncpy(inj.data, clip, sizeof(inj.data) - 1);
+				inj.data[sizeof(inj.data) - 1] = '\0';
+			}
+		}
+		if (ImGui::MenuItem("Sao chép")) {
+			ImGui::SetClipboardText(inj.data);
+		}
+		if (ImGui::MenuItem("Xoá")) {
+			memset(inj.data, 0, sizeof(inj.data));
+		}
+		ImGui::EndPopup();
+	}
 
 	ImGui::Spacing();
-	if (ImGui::Button(("Rop.Inject"_l + "##" + std::to_string(index)).c_str(), ImVec2(120, 30))) {
+
+	if (ImGui::Button(("Rop.Inject"_l + "##" + std::to_string(index)).c_str())) {
 		auto plc = strtol(inj.addr, 0, 16);
 		size_t i = 0, j = 0;
 		char hex_buf[3];
@@ -589,7 +666,7 @@ void Injector::RenderInjectorTab(InjectorData& inj, int index, bool& show_info, 
 		}
 	exit:
 		char buf[128];
-		snprintf(buf, sizeof(buf), "[v] Injected %zu bytes at 0x%05X", j, (unsigned int)plc);
+		snprintf(buf, sizeof(buf), "✔ Injected %zu bytes at 0x%05X", j, (unsigned int)plc);
 		SetFeedback(buf, false);
 		show_info = false;
 	}
@@ -601,6 +678,14 @@ void Injector::RenderCore() {
 	static MemoryEditor editor;
 	static bool show_info = false;
 	static std::string info_msg;
+	if (!initialLoadRequested) {
+		initialLoadRequested = true;
+		AsyncLoadCustomInjections();
+	}
+	if (!m_emu || !me_mmu || !n_ram_buffer) {
+		ImGui::TextDisabled("Injector is unavailable until the emulator RAM is ready.");
+		return;
+	}
 	auto inputbase = m_emu->hardware_id == casioemu::HardwareId::HW_CLASSWIZ_II ? 0x9268 : 0xD180;
 	char* base_addr = n_ram_buffer - casioemu::GetRamBaseAddr(m_emu->hardware_id);
 
@@ -608,6 +693,7 @@ void Injector::RenderCore() {
 	std::string currentFilePath = ThemeManager::Instance().Settings().injectionFilePath;
 	if (currentFilePath != injectionFilePath) {
 		injectionFilePath = currentFilePath;
+		InitCustomInjectionsFile();
 		needsReload = true;
 		if (!isReloading.load()) {
 			AsyncLoadCustomInjections();
@@ -615,87 +701,53 @@ void Injector::RenderCore() {
 	}
 
 	if (ImGui::BeginTabBar("Rop.TabBar"_lc)) {
-		if (ImGui::BeginTabItem("Rop.Inject"_lc)) {
-			// ================= AN MODE =================
-			ImGui::Spacing();
-			ImGui::TextDisabled("Inject an arbitrary size block into memory. Useful for basic overflows.");
-			ImGui::Separator();
-			ImGui::Spacing();
-
-			ImGui::AlignTextToFramePadding();
+		if (ImGui::BeginTabItem("Rop.XAnMode"_lc)) {
 			ImGui::TextUnformatted("Rop.InputSize"_lc);
-			ImGui::SameLine(0, 10.0f);
-			ImGui::SetNextItemWidth(120.0f);
+			ImGui::SameLine();
+			ImGui::SetNextItemWidth(80);
 			ImGui::InputText("##off", buf, 9);
-			ImGui::SameLine(0, 15.0f);
+			ImGui::SameLine();
 
-			if (ImGui::Button("Rop.InputAn"_lc, ImVec2(100, 0))) {
+			if (ImGui::Button("Rop.InputAn"_lc)) {
 				int off = atoi(buf);
-
 				if (off > 100) {
 					memset(base_addr + inputbase, 0x31, 100);
 					memset(base_addr + inputbase + 100, 0xa6, 1);
 					memset(base_addr + inputbase + 101, 0x31, off - 100);
-				} else {
+				}
+				else {
 					memset(base_addr + inputbase, 0x31, off);
 				}
-
 				*(base_addr + inputbase + off) = 0xfd;
 				*(base_addr + inputbase + off + 1) = 0x20;
-
-				SetFeedback("[v] " + "Rop.AnInputed"_l, false);
+				SetFeedback("✔ " + "Rop.AnInputed"_l, false);
 				show_info = false;
 			}
 
-			// ================= HEX INJECTOR =================
-			ImGui::Spacing();
-			ImGui::Separator();
-			ImGui::Spacing();
+			ImGui::EndTabItem();
+		}
 
-			if (ImGui::Button("Rop.AddInjector"_lc, ImVec2(150, 0))) {
+		if (ImGui::BeginTabItem("Rop.InjectHex"_lc)) {
+			if (ImGui::Button("Rop.AddInjector"_lc)) {
 				injectors.push_back(InjectorData());
 			}
 
-			ImGui::Spacing();
-			ImGui::Separator();
-			ImGui::Spacing();
-
 			ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-
 			for (size_t i = 0; i < injectors.size(); i++) {
 				ImGui::PushID(static_cast<int>(i));
 
-				std::string header =
-					"Rop.InjectorNum"_l + " " + std::to_string(i + 1);
+				std::string header = "Rop.InjectorNum"_l + " " + std::to_string(i + 1);
 
 				if (injectors.size() > 1) {
-					ImGui::PushStyleColor(ImGuiCol_Button, UIHelpers::kColorError);
-
-					if (ImGui::Button(("X##" + std::to_string(i)).c_str())) {
+					if (ImGui::Button(("Rop.RemoveInjector"_l + "##" + std::to_string(i)).c_str())) {
 						injectors.erase(injectors.begin() + i);
-						ImGui::PopStyleColor();
 						ImGui::PopID();
 						break;
 					}
-
-					ImGui::PopStyleColor();
-					ImGui::SameLine();
 				}
 
-				if (ImGui::CollapsingHeader(
-						header.c_str(),
-						ImGuiTreeNodeFlags_DefaultOpen)) {
-					ImGui::Indent();
-					ImGui::Spacing();
-
-					RenderInjectorTab(
-						injectors[i],
-						i,
-						show_info,
-						info_msg);
-
-					ImGui::Spacing();
-					ImGui::Unindent();
+				if (ImGui::CollapsingHeader(header.c_str())) {
+					RenderInjectorTab(injectors[i], i, show_info, info_msg);
 				}
 
 				ImGui::PopID();
@@ -705,24 +757,16 @@ void Injector::RenderCore() {
 		}
 
 		if (ImGui::BeginTabItem("Rop.Input"_lc)) {
-			ImGui::Spacing();
-			ImGui::TextDisabled("Load custom buffer into RAM");
-			ImGui::Separator();
-			
-			ImGui::BeginChild("RopInput", ImVec2(0, ImGui::GetContentRegionAvail().y - 45), true);
+			ImGui::BeginChild("RopInput");
 			editor.DrawContents(data_buf, range);
 			ImGui::EndChild();
 
-			ImGui::AlignTextToFramePadding();
-			ImGui::TextUnformatted("Rop.InputSize"_lc);
-			ImGui::SameLine(0, 10.0f);
-			ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 180.0f);
-			ImGui::SliderInt("##RopInputSize", &range, 64, 1024);
+			ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+			ImGui::SliderInt("Rop.InputSize"_lc, &range, 64, 1024);
 
-			ImGui::SameLine(0, 15.0f);
-			if (ImGui::Button("Rop.LoadToInputArea"_lc, ImVec2(-1, 0))) {
+			if (ImGui::Button("Rop.LoadToInputArea"_lc)) {
 				memcpy(base_addr + inputbase, data_buf, range);
-				SetFeedback("[v] " + "Rop.LoadedTip"_l, false);
+				SetFeedback("✔ " + "Rop.LoadedTip"_l, false);
 				show_info = false;
 			}
 
