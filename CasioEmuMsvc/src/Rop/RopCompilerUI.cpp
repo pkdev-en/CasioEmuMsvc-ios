@@ -669,9 +669,8 @@ private:
 		if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Enter)) {
 			compile();
 		}
-		// Ctrl+V: paste clipboard into source editor when editor is not focused
-		// (when editor IS focused, TextEditor handles it natively)
-		if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_V) && !editor_.IsFocused()) {
+		// Ctrl+V: paste clipboard into source editor
+		if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_V)) {
 			pasteSourceFromClipboard();
 		}
 	}
