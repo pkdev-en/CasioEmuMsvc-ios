@@ -581,12 +581,19 @@ private:
 
 
 	void drawSourcePanel(float height) {
-		ImGui::BeginChild("##source_panel", ImVec2(-1, height), true);
+		// border=false: tranh them clip layer lam mat hit-test tren touch iOS/Android
+		ImGui::BeginChild("##source_panel", ImVec2(-1, height), false,
+			ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 		ImGui::TextUnformatted("RopCompiler.SourceTitle"_lc);
 		ImGui::Separator();
-		const float footerHeight = 24.0f;
-		editor_.Render("##source_editor",
-			ImVec2(-1, ImGui::GetContentRegionAvail().y - footerHeight), true);
+		const float footerHeight = ImGui::GetFrameHeightWithSpacing();
+		const float editorHeight = ImGui::GetContentRegionAvail().y - footerHeight;
+		// Render truc tiep, khong co child wrapper bo sung
+		editor_.Render("##source_editor", ImVec2(-1, editorHeight));
+		// Set focus chu dong khi user tap vao editor tren mobile
+		if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(0)) {
+			ImGui::SetKeyboardFocusHere(-1);
+		}
 		auto cpos = editor_.GetCursorPosition();
 		auto statusText = g_local.Format("RopCompiler.CursorStatus",
 			cpos.mLine + 1, cpos.mColumn + 1, editor_.GetTotalLines());
@@ -663,14 +670,16 @@ private:
 
 	void handleShortcuts() {
 		ImGuiIO& io = ImGui::GetIO();
-		if (ImGui::IsKeyPressed(ImGuiKey_F5)) {
+		// Dung ImGuiKey thay vi io.KeysDown de tuong thich iOS/Android
+		const bool ctrl = io.KeyCtrl || io.KeySuper; // Super = Cmd tren iOS
+		if (ImGui::IsKeyPressed(ImGuiKey_F5, false)) {
 			compile();
 		}
-		if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Enter)) {
+		if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Enter, false)) {
 			compile();
 		}
-		// Ctrl+V: paste clipboard into source editor
-		if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_V)) {
+		// Ctrl+V / Cmd+V: paste vao editor (chi khi editor khong tu xu ly)
+		if (ctrl && ImGui::IsKeyPressed(ImGuiKey_V, false)) {
 			pasteSourceFromClipboard();
 		}
 	}
