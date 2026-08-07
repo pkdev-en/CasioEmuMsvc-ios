@@ -1,33 +1,18 @@
 <div align="center">
 <img src="CasioEmuMsvc/icon.ico" width="96" alt="CasioEmuMsvc Logo"/>
-
 # CasioEmuMsvc
 **A high-performance emulator and developer toolkit for the nX-U8/100 & nX-U16/100 MCU series.**
-
 [![License](https://img.shields.io/github/license/telecomadm1145/CasioEmuMsvc?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20Android%20%7C%20iOS-blue?style=flat-square)](docs/README.en.md#-platform-support)
 [![Stars](https://img.shields.io/github/stars/telecomadm1145/CasioEmuMsvc?style=flat-square)](https://github.com/telecomadm1145/CasioEmuMsvc/stargazers)
 [![Discord](https://img.shields.io/discord/NM39VPdJTf?label=Discord&logo=discord&style=flat-square)](https://discord.gg/NM39VPdJTf)
-
 </div>
 
 ---
 
-<div align="center">
-<table>
-<tr>
-<td align="center">
-⚠️ <b>IMPORTANT</b>
-</td>
-</tr>
-<tr>
-<td>
-<b>iOS support is currently unavailable as a pre-built release.</b><br/>
-There is no Xcode build at this time. iOS builds are only generated via <b>GitHub Actions</b> and are not distributed as ready-to-install packages. You will need to build from source using the workflow files provided in the repository.
-</td>
-</tr>
-</table>
-</div>
+> [!IMPORTANT]
+> **iOS support is currently unavailable as a pre-built release.**
+> There is no Xcode build at this time. iOS builds are only generated via **GitHub Actions** and are not distributed as ready-to-install packages. You will need to build from source using the workflow files provided in the repository.
 
 ---
 
