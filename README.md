@@ -44,4 +44,4 @@
 - 💬 **Discord**: [discord.gg/NM39VPdJTf](https://discord.gg/NM39VPdJTf)
 - 📧 **Email**: [telecomadm1919@gmail.com](mailto:telecomadm1919@gmail.com)
 - 🐛 **Issues**: [GitHub Issues](https://github.com/telecomadm1145/CasioEmuMsvc/issues)
-- 🐛 **Issues ios**: [GitHub Issues](https://github.com/telecomadm1145/CasioEmuMsvc/issues)
+- 🐛 **Issues ios**: [GitHub Issues](https://github.com/pkdev-en/CasioEmuMsvc-ios/issues)
