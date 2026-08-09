@@ -42,6 +42,10 @@
 #include <limits.h>
 #endif
 
+#ifdef __IOS__
+#include "Ext/iOSNativeBridge.h"
+#endif
+
 #ifdef __ANDROID__
 #include "../Gui/ThemeManager.h"
 #include <SDL.h>
@@ -1587,6 +1591,19 @@ std::string sui_loop() {
 				viewport->WorkPos = ImVec2((float)bounds.x, (float)bounds.y);
 				viewport->WorkSize = ImVec2((float)bounds.w, (float)bounds.h);
 			}
+#ifdef __IOS__
+			{
+				// Đẩy WorkPos và thu hẹp WorkSize để toàn bộ ImGui nằm trong safe area
+				float sT = getSafeTop();
+				float sB = getSafeBottom();
+				float sL = getSafeLeft();
+				float sR = getSafeRight();
+				viewport->WorkPos.x  += sL;
+				viewport->WorkPos.y  += sT;
+				viewport->WorkSize.x -= (sL + sR);
+				viewport->WorkSize.y -= (sT + sB);
+			}
+#endif
 			ImGui::DockSpaceOverViewport(0, viewport, ImGuiDockNodeFlags_PassthruCentralNode);
 			ImGui::SetNextWindowDockID(ImGui::GetCurrentContext()->DockContext.Nodes.Data[0].key, ImGuiCond_FirstUseEver); // TODO: ????????
 			ui.Render();
