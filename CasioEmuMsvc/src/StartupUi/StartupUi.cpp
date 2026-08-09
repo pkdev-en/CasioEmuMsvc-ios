@@ -1425,14 +1425,13 @@ public:
 	void Render() override {
 		if (!open)
 			return;
-		SDL_Rect bounds;
-		if (SDL_GetDisplayUsableBounds(0, &bounds) != 0) {
-			auto& io = ImGui::GetIO();
-			bounds.x = 0; bounds.y = 0;
-			bounds.w = io.DisplaySize.x; bounds.h = io.DisplaySize.y;
-		}
-		ImGui::SetNextWindowSize({(float)bounds.w, (float)bounds.h}, ImGuiCond_Appearing);
-		ImGui::SetNextWindowPos({(float)bounds.x, (float)bounds.y});
+		auto& io = ImGui::GetIO();
+		// Dùng DisplaySize (kích thước SDL window thực tế) thay vì
+		// SDL_GetDisplayUsableBounds — hàm đó trả về bounds tuyệt đối của
+		// màn hình vật lý, sai khi app chạy trong Split View / Slide Over
+		// trên iPadOS hoặc bất kỳ windowed mode nào.
+		ImGui::SetNextWindowSize({io.DisplaySize.x, io.DisplaySize.y}, ImGuiCond_Always);
+		ImGui::SetNextWindowPos({0.0f, 0.0f});
 		if (ImGui::Begin(name, &open, flags)) {
 			RenderCore();
 		}
@@ -1459,14 +1458,9 @@ public:
 	void Render() override {
 		if (!open)
 			return;
-		SDL_Rect bounds;
-		if (SDL_GetDisplayUsableBounds(0, &bounds) != 0) {
-			auto& io = ImGui::GetIO();
-			bounds.x = 0; bounds.y = 0;
-			bounds.w = io.DisplaySize.x; bounds.h = io.DisplaySize.y;
-		}
-		ImGui::SetNextWindowSize({(float)bounds.w, (float)bounds.h}, ImGuiCond_Appearing);
-		ImGui::SetNextWindowPos({(float)bounds.x, (float)bounds.y});
+		auto& io = ImGui::GetIO();
+		ImGui::SetNextWindowSize({io.DisplaySize.x, io.DisplaySize.y}, ImGuiCond_Always);
+		ImGui::SetNextWindowPos({0.0f, 0.0f});
 		if (ImGui::Begin(name, &open, flags)) {
 			RenderCore();
 		}
@@ -1586,14 +1580,18 @@ std::string sui_loop() {
 			ImGui::NewFrame();
 			
 			ImGuiViewport* viewport = ImGui::GetMainViewport();
-			SDL_Rect bounds;
-			if (SDL_GetDisplayUsableBounds(0, &bounds) == 0) {
-				viewport->WorkPos = ImVec2((float)bounds.x, (float)bounds.y);
-				viewport->WorkSize = ImVec2((float)bounds.w, (float)bounds.h);
+			{
+				// Dùng DisplaySize — luôn là kích thước SDL window thực tế,
+				// đúng trong cả Split View / Slide Over trên iPadOS.
+				// SDL_GetDisplayUsableBounds trả về bounds màn hình vật lý,
+				// sai trong mọi windowed/split-screen context.
+				auto& io2 = ImGui::GetIO();
+				viewport->WorkPos  = ImVec2(0.0f, 0.0f);
+				viewport->WorkSize = ImVec2(io2.DisplaySize.x, io2.DisplaySize.y);
 			}
 #ifdef __IOS__
 			{
-				// Đẩy WorkPos và thu hẹp WorkSize để toàn bộ ImGui nằm trong safe area
+				// Đẩy WorkPos và thu hẹp WorkSize để ImGui nằm trong safe area
 				float sT = getSafeTop();
 				float sB = getSafeBottom();
 				float sL = getSafeLeft();
