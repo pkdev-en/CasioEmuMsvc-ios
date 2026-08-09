@@ -81,24 +81,60 @@
     return scene.windows.firstObject.rootViewController;
 }
 
-#pragma mark - System Dialogs (File & Folder Pickers)
+// Helper: lấy key window theo cách tương thích iOS 13+
+static UIWindow* getKeyWindow() {
+    if (@available(iOS 13.0, *)) {
+        for (UIWindowScene *scene in UIApplication.sharedApplication.connectedScenes) {
+            if (scene.activationState == UISceneActivationStateForegroundActive &&
+                [scene isKindOfClass:[UIWindowScene class]]) {
+                for (UIWindow *window in ((UIWindowScene *)scene).windows) {
+                    if (window.isKeyWindow) return window;
+                }
+            }
+        }
+    }
+    // Fallback iOS 12 trở xuống
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    return UIApplication.sharedApplication.keyWindow;
+#pragma clang diagnostic pop
+}
 
+#pragma mark - Safe Area Insets
 
 float getSafeTop() {
     if (@available(iOS 11.0, *)) {
-        UIWindow *window = UIApplication.sharedApplication.windows.firstObject;
-        return window.safeAreaInsets.top;
+        UIWindow *window = getKeyWindow();
+        if (window) return window.safeAreaInsets.top;
     }
-    return 20.0f;
+    return 20.0f; // status bar fallback
 }
 
 float getSafeBottom() {
     if (@available(iOS 11.0, *)) {
-        UIWindow *window = UIApplication.sharedApplication.windows.firstObject;
-        return window.safeAreaInsets.bottom;
+        UIWindow *window = getKeyWindow();
+        if (window) return window.safeAreaInsets.bottom;
     }
     return 0.0f;
 }
+
+float getSafeLeft() {
+    if (@available(iOS 11.0, *)) {
+        UIWindow *window = getKeyWindow();
+        if (window) return window.safeAreaInsets.left;
+    }
+    return 0.0f;
+}
+
+float getSafeRight() {
+    if (@available(iOS 11.0, *)) {
+        UIWindow *window = getKeyWindow();
+        if (window) return window.safeAreaInsets.right;
+    }
+    return 0.0f;
+}
+
+#pragma mark - System Dialogs (File & Folder Pickers)
 
 - (void)openFileDialog {
     dispatch_async(dispatch_get_main_queue(), ^{
