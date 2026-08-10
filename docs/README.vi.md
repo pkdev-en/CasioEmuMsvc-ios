@@ -17,9 +17,11 @@
 
 ---
 
-> [!QUAN TRỌNG]
-> **Hiện tại chưa có bản dựng sẵn hỗ trợ iOS.**
-> Hiện chưa có bản dựng Xcode. Các bản dựng iOS chỉ được tạo thông qua **GitHub Actions** và không được phân phối dưới dạng gói sẵn sàng cài đặt. Bạn cần phải xây dựng từ mã nguồn bằng cách sử dụng các tệp quy trình làm việc được cung cấp trong kho lưu trữ.
+> [!IMPORTANT]
+> **Hiện tại chưa có bản phát hành dựng sẵn (pre-built release) hỗ trợ iOS.**
+> Chưa có bản dựng Xcode tại thời điểm này. Các bản dựng iOS chỉ được khởi tạo thông qua **GitHub Actions** và không được phân phối dưới dạng các gói cài đặt sẵn. Bạn sẽ cần phải tự biên dịch từ mã nguồn (build from source) bằng cách sử dụng các tệp quy trình làm việc (workflow files) được cung cấp trong kho lưu trữ (repository).
+>
+> 
 
 ---
 
