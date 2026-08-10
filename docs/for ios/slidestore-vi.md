@@ -26,7 +26,7 @@ hãy truy cập vào [SlideStore.io](https://sidestore.io) và làm theo hướn
 1. Truy cập trang **Releases** của repo:  
    👉 [github.com/pkdev-en/CasioEmuMsvc-ios/releases](https://github.com/pkdev-en/CasioEmuMsvc-ios/releases)
 
-2. Tải về file **`CasioEmuMsvc.ipa`** phiên bản mới nhất.
+2. Tải về file **`CasioEmuMsvc`** phiên bản mới nhất.
 
 3. Lưu file vào **Files → Trên iPhone này** (hoặc iCloud Drive).
 
