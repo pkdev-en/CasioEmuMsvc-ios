@@ -4,59 +4,56 @@
 <dict>
     <key>CFBundleDisplayName</key>
     <string>CasioEmuMsvc</string>
-
     <key>CFBundleIdentifier</key>
     <string>com.pkdevvn.casioemu</string>
-
     <key>CFBundleExecutable</key>
     <string>CasioEmuMsvc</string>
-
     <key>CFBundleVersion</key>
     <string>1</string>
-
     <key>CFBundleShortVersionString</key>
     <string>1.0</string>
-
     <key>UILaunchStoryboardName</key>
     <string>LaunchScreen</string>
-
     <key>UIApplicationSupportsIndirectInputEvents</key>
     <true/>
-
     <key>UISupportedInterfaceOrientations</key>
     <array>
         <string>UIInterfaceOrientationPortrait</string>
         <string>UIInterfaceOrientationLandscapeLeft</string>
         <string>UIInterfaceOrientationLandscapeRight</string>
     </array>
-
-    
     <key>UIStatusBarHidden</key>
     <true/>
     <key>UIViewControllerBasedStatusBarAppearance</key>
     <false/>
 
-    <!-- App icon -->
-    <key>CFBundleIconName</key>
-    <string>AppIcon</string>
+    <!-- Icon: dÃ¹ng CFBundleIconFiles thay vÃ¬ xcassets -->
     <key>CFBundleIcons</key>
     <dict>
         <key>CFBundlePrimaryIcon</key>
         <dict>
-            <key>CFBundleIconName</key>
-            <string>AppIcon</string>
             <key>CFBundleIconFiles</key>
             <array>
-                <string>AppIcon</string>
+                <string>20.png</string>
+                <string>29.png</string>
+                <string>40.png</string>
+                <string>58.png</string>
+                <string>60.png</string>
+                <string>80.png</string>
+                <string>87.png</string>
+                <string>120.png</string>
+                <string>180.png</string>
+                <string>1024.png</string>
             </array>
+            <key>UIPrerenderedIcon</key>
+            <false/>
         </dict>
     </dict>
 
-    <!-- Hiá»n thá» thÆ° má»¥c app trong Files -->
+    <!-- Hien thi thu muc app trong Files -->
     <key>UIFileSharingEnabled</key>
     <true/>
     <key>LSSupportsOpeningDocumentsInPlace</key>
     <true/>
-
 </dict>
 </plist>
