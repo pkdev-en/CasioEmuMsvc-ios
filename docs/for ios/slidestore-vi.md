@@ -17,14 +17,7 @@
 
 > Nếu đã có SideStore, bỏ qua bước này và đến thẳng Bước 2.
 
-### Dùng AltServer trên máy tính
-
-1. Tải **AltServer** tại [altstore.io](https://altstore.io) và cài trên máy tính.
-2. Tải file **SideStore.ipa** từ [github.com/SideStore/SideStore/releases](https://github.com/SideStore/SideStore/releases).
-3. Kết nối iPhone vào máy tính qua cáp USB.
-4. Click vào icon AltServer trong thanh taskbar → **Sideload .ipa** → chọn file `SideStore.ipa`.
-5. Nhập Apple ID và mật khẩu → chờ cài xong.
-6. Vào **Cài đặt → Cài đặt chung → VPN & Quản lý thiết bị**, tin tưởng chứng chỉ.
+hãy truy cập vào [SlideStore.io](https://sidestore.io) và làm theo hướng dẫn 
 
 ---
 
@@ -43,17 +36,17 @@
 
 1. Mở app **SideStore** trên iPhone.
 
-2. Kết nối VPN của SideStore: nhấn vào nút **Connect** / **WireGuard** ở góc trên (cần thiết để ký và cài app).
-
 3. Chuyển sang tab **My Apps** (biểu tượng ứng dụng ở thanh dưới).
 
 4. Nhấn dấu **＋** ở góc trên bên phải.
 
-5. Chọn **File** → duyệt đến file `CasioEmuMsvc.ipa` vừa tải → nhấn **Open**.
+5. Chọn file mình vừa tải → nhấn **Mở**.
 
 6. Đăng nhập Apple ID nếu được yêu cầu, rồi nhấn **Install**.
 
 7. Chờ vài giây — ứng dụng sẽ xuất hiện trên màn hình chính.
+
+> nếu bạn đang ở khu vực Việt Nam hãy tải **VPN Super** rồi mở lên và chọn **Vương Quốc Anh** rồi bật sau đó mới bật **LocalDevVPN**
 
 ---
 
@@ -74,16 +67,17 @@
 7. tận hưởng 🥳
 
 ---
+# NOTE:
 
 ## 🔄 Gia hạn app (tránh hết hạn sau 7 ngày)
 
 Apple ID miễn phí chỉ ký app có hiệu lực **7 ngày**. Để gia hạn:
 
-- Mở **SideStore**, kết nối VPN, vào **My Apps**.
+- Mở **SideStore**, kết nối vpn của **LocalDevVPN**, vào **My Apps**.
 - Nhấn **Refresh All** hoặc nhấn vào tên app rồi chọn **Refresh**.
 - Bật **Background Refresh** trong Cài đặt SideStore để tự động gia hạn.
 
-> **Mẹo:** Dùng **LiveContainer** nếu bạn muốn cài nhiều app vượt giới hạn 3 app của Apple ID miễn phí.
+> **Mẹo:** Dùng **LiveContainer** nếu bạn muốn cài nhiều app vượt giới hạn 3 app của Apple ID miễn phí :)
 
 ---
 
@@ -97,11 +91,12 @@ Apple ID miễn phí chỉ ký app có hiệu lực **7 ngày**. Để gia hạn
 
 ---
 
-## 💬 Hỗ trợ & Cộng đồng
+## 💬 Hỗ trợ & Cộng đồng cho ios
 
-- 💬 **Discord**: [discord.gg/NM39VPdJTf](https://discord.gg/NM39VPdJTf)
-- 🐛 **Báo lỗi**: [GitHub Issues](https://github.com/pkdev-en/CasioEmuMsvc-ios/issues)
-- 📖 **README đầy đủ**: [docs/README.vi.md](docs/README.vi.md)
+- 💬 **Discord**: [discord.gg/tEMNCgBGeB](https://discord.gg/tEMNCgBGeB)
+- 📧 **Email**: [khaiphu2015@gmail.com](mailto:khaiphu2015@gmail.com)
+- 🐛 **Issues**: [GitHub Issues](https://github.com/pkdev-en/CasioEmuMsvc-ios/issues)
+
 
 ---
 
