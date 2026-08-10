@@ -193,8 +193,9 @@ static void RenderToolbarContent(ImGuiViewport* viewport) {
 
         if (ImGui::TabItemButton("[C] Screenshot"))
             ImGui::OpenPopup("ScreenshotMenuPopup");
-        ImGui::SetNextWindowPos(ImVec2(ImGui::GetItemRectMin().x, ImGui::GetItemRectMax().y));
-        if (ImGui::BeginPopup("ScreenshotMenuPopup")) {
+        ImGui::SetNextWindowPos(ImVec2(ImGui::GetItemRectMin().x, ImGui::GetItemRectMax().y + 4.0f));
+        ImGui::SetNextWindowSize(ImVec2(0, 0));
+        if (ImGui::BeginPopup("ScreenshotMenuPopup", ImGuiWindowFlags_NoMove)) {
             if (ImGui::MenuItem("Full Calculator")) {
                 m_emu->screenshot_full_ui = true;
                 m_emu->screenshot_requested = true;
@@ -212,8 +213,9 @@ static void RenderToolbarContent(ImGuiViewport* viewport) {
         } else {
             if (ImGui::TabItemButton("[O] Record"))
                 ImGui::OpenPopup("RecordMenuPopup");
-            ImGui::SetNextWindowPos(ImVec2(ImGui::GetItemRectMin().x, ImGui::GetItemRectMax().y));
-            if (ImGui::BeginPopup("RecordMenuPopup")) {
+            ImGui::SetNextWindowPos(ImVec2(ImGui::GetItemRectMin().x, ImGui::GetItemRectMax().y + 4.0f));
+            ImGui::SetNextWindowSize(ImVec2(0, 0));
+            if (ImGui::BeginPopup("RecordMenuPopup", ImGuiWindowFlags_NoMove)) {
                 if (ImGui::MenuItem("Full Calculator")) {
                     m_emu->recording_full_ui = true;
                     m_emu->recording_requested = true;
