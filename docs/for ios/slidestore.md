@@ -17,9 +17,7 @@
 
 > Nếu đã có SideStore, bỏ qua bước này và đến thẳng Bước 2.
 
-SideStore là app sideload không cần kết nối máy tính sau khi thiết lập. Có hai cách cài:
-
-### Dùng AltServer trên máy tính (cách truyền thống)
+### Dùng AltServer trên máy tính
 
 1. Tải **AltServer** tại [altstore.io](https://altstore.io) và cài trên máy tính.
 2. Tải file **SideStore.ipa** từ [github.com/SideStore/SideStore/releases](https://github.com/SideStore/SideStore/releases).
