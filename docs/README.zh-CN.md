@@ -194,6 +194,9 @@ git submodule update --init --recursive
 
 ## 💬 交流与反馈
 
-- 💬 **Discord 社区**: [discord.gg/NM39VPdJTf](https://discord.gg/NM39VPdJTf)
-- 📧 **邮件**: [telecomadm1919@gmail.com](mailto:telecomadm1919@gmail.com)
-- 🐛 **Issues**: [GitHub Issues](https://github.com/telecomadm1145/CasioEmuMsvc/issues)
+- 💬 **Discord**: [discord.gg/NM39VPdJTf](https://discord.gg/NM39VPdJTf)
+- 💬 **Discord iOS**: [discord.gg/tEMNCgBGeB](https://discord.gg/tEMNCgBGeB)
+- 📧 **电子邮箱**: [telecomadm1919@gmail.com](mailto:telecomadm1919@gmail.com)
+- 📧 **电子邮箱 iOS**: [khaiphu2015@gmail.com](mailto:khaiphu2015@gmail.com)
+- 🐛 **反馈与问题**: [GitHub Issues](https://github.com/telecomadm1145/CasioEmuMsvc/issues)
+- 🐛 **反馈与问题 iOS**: [GitHub Issues](https://github.com/pkdev-en/CasioEmuMsvc-ios/issues)
