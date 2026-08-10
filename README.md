@@ -32,7 +32,7 @@
 
 | 🇺🇸 English | 🇨🇳 中文 | 🇻🇳 Tiếng Việt |
 |:---:|:---:|:---:|
-| [Read →](docs/README.en.md) | [阅读 →](docs/README.zh-CN.md) | [Đọc →](docs/forios/slidestore-vi.md) |
+| [Read →](docs/forios/slidestore-en.md) | [阅读 →](docs/forios/slidestore-cn.md) | [Đọc →](docs/forios/slidestore-vi.md) |
 
 
 ## ✨ At a Glance
