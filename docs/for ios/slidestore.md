@@ -61,12 +61,17 @@
 
 1. Mở **CasioEmuMsvc** từ màn hình chính.
 
-2. Ứng dụng sẽ hiện giao diện **Startup UI** — chọn mô hình Casio bạn muốn mô phỏng.
+2. Bấm vào nút **Nhập**
 
-3. Cung cấp file **ROM** tương ứng khi được yêu cầu.  
-   _(Ứng dụng hỗ trợ: fx-9860G, fx-CG50, và nhiều mô hình khác dùng chip nX-U8/100 hoặc nX-U16/100)_
+3. Chọn emu casio mà mình muốn nhập (đuôi .package)
 
-4. Nhấn **Start** để bắt đầu giả lập.
+4. Nhập mật khẩu
+
+5. Nhập mật khẩu xong, hãy bấm vào **tất cả** và bạn sẽ thấy emu của mình
+
+6. nhấp vào emu mình chọn và bấm khởi chạy
+
+7. tận hưởng 🥳
 
 ---
 
