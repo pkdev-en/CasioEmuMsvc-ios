@@ -196,5 +196,8 @@ git submodule update --init --recursive
 ## 💬 Cộng đồng & Phản hồi
 
 - 💬 **Discord**: [discord.gg/NM39VPdJTf](https://discord.gg/NM39VPdJTf)
+- 💬 **Discord iOS**: [discord.gg/tEMNCgBGeB](https://discord.gg/tEMNCgBGeB)
 - 📧 **Email**: [telecomadm1919@gmail.com](mailto:telecomadm1919@gmail.com)
+- 📧 **Email iOS**: [khaiphu2015@gmail.com](mailto:khaiphu2015@gmail.com)
 - 🐛 **Issues**: [GitHub Issues](https://github.com/telecomadm1145/CasioEmuMsvc/issues)
+- 🐛 **Issues iOS**: [GitHub Issues](https://github.com/pkdev-en/CasioEmuMsvc-ios/issues)
