@@ -16,6 +16,7 @@
 </div>
 
 ---
+
 > [!QUAN TRỌNG]
 > **Hiện tại chưa có bản dựng sẵn hỗ trợ iOS.**
 > Hiện chưa có bản dựng Xcode. Các bản dựng iOS chỉ được tạo thông qua **GitHub Actions** và không được phân phối dưới dạng gói sẵn sàng cài đặt. Bạn cần phải xây dựng từ mã nguồn bằng cách sử dụng các tệp quy trình làm việc được cung cấp trong kho lưu trữ.
