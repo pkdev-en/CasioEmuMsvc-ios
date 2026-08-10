@@ -113,6 +113,12 @@ public:
 	float windowHeight = 0.0f;
 	float aspectRatio = 1.0f;
 
+	// Safe area insets (points, iOS only — zero on other platforms)
+	float safeTop    = 0.0f;
+	float safeBottom = 0.0f;
+	float safeLeft   = 0.0f;
+	float safeRight  = 0.0f;
+
 	// —— 主题切换 ——
 	void SetDarkMode();
 	void SetLightMode();

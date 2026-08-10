@@ -19,6 +19,10 @@
 using namespace material_color_utilities;
 #endif
 
+#ifdef __IOS__
+#include "Ext/iOSNativeBridge.h"
+#endif
+
 // ============================================================================
 // 设置持久化
 // ============================================================================
@@ -135,6 +139,19 @@ void ThemeManager::UpdateUIScale() {
 	ImGuiIO& io = ImGui::GetIO();
 	windowWidth = io.DisplaySize.x;
 	windowHeight = io.DisplaySize.y;
+
+#ifdef __IOS__
+	// Trừ safe area insets để layout không bị che bởi notch/Dynamic Island/home indicator
+	safeTop    = getSafeTop();
+	safeBottom = getSafeBottom();
+	safeLeft   = getSafeLeft();
+	safeRight  = getSafeRight();
+	windowWidth  -= (safeLeft + safeRight);
+	windowHeight -= (safeTop  + safeBottom);
+#else
+	safeTop = safeBottom = safeLeft = safeRight = 0.0f;
+#endif
+
 	aspectRatio = windowWidth / windowHeight;
 
 	float densityDpi = GetDensityDpi();

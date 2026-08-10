@@ -11,8 +11,8 @@
 #include <sstream>
 #include <string>
 
-#ifdef IOS
-#include "iOSNativeBridge.h"
+#ifdef __IOS__
+#include "Ext/iOSNativeBridge.h"
 #endif
 
 namespace casioemu {
@@ -447,8 +447,28 @@ namespace casioemu {
 		if (!calculator_as_tab.load()) {
 			SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
 			SDL_RenderClear(renderer);
+#ifdef __IOS__
+			// Thu hẹp vùng render vào safe zone để tránh notch, Dynamic Island và home indicator
+			float sT = getSafeTop();
+			float sB = getSafeBottom();
+			float sL = getSafeLeft();
+			float sR = getSafeRight();
+			int safeW = w - (int)(sL + sR);
+			int safeH = h - (int)(sT + sB);
+			auto wf2 = (double)safeW / interface_background.src.w;
+			auto hf2 = (double)safeH / interface_background.src.h;
+			auto uf2 = std::min(wf2, hf2);
+			SDL_Rect safeDest{};
+			safeDest.w = (int)(interface_background.src.w * uf2);
+			safeDest.h = (int)(interface_background.src.h * uf2);
+			safeDest.x = (int)sL + (safeW - safeDest.w) / 2;
+			safeDest.y = (int)sT + (safeH - safeDest.h) / 2;
+			SDL_RenderCopy(renderer, tx, nullptr, &safeDest);
+			emu_rect = safeDest;
+#else
 			SDL_RenderCopy(renderer, tx, nullptr, &dest);
 			emu_rect = dest;
+#endif
 		}
 
 		Repaint();
