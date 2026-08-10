@@ -176,7 +176,7 @@ if(BUILD_EXECUTABLE)
         if(IOS)
             # 1. Trỏ thẳng vào FOLDER Assets.xcassets (không GLOB bên trong)
             #    Xcode cần nhận folder .xcassets để compile thành Assets.car
-            set(IOS_ASSET_CATALOG "${CMAKE_CURRENT_SOURCE_DIR}/iOSResources/Assets.xcassets")
+            set(IOS_ASSET_CATALOG "${CMAKE_CURRENT_SOURCE_DIR}/iOSresources/Assets.xcassets")
             set_source_files_properties(${IOS_ASSET_CATALOG} PROPERTIES
                 XCODE_LAST_KNOWN_FILE_TYPE "folder.assetcatalog"
             )
