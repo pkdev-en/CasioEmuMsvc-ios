@@ -174,37 +174,37 @@ if(BUILD_EXECUTABLE)
         set(TARGET_NAME "CasioEmuMsvc")
     
         if(IOS)
-            # 1. Thu thập TẤT CẢ các file bên trong Assets.xcassets (bao gồm .json và .png)
-            file(GLOB_RECURSE IOS_ASSETS_FILES "${CMAKE_CURRENT_SOURCE_DIR}/iOSResources/Assets.xcassets/*")
-            
-            # 2. Định nghĩa vị trí đóng gói cho các file asset này trong App Bundle
-            set_source_files_properties(${IOS_ASSETS_FILES} PROPERTIES
-                MACOSX_PACKAGE_LOCATION "Resources"
+            # 1. Trỏ thẳng vào FOLDER Assets.xcassets (không GLOB bên trong)
+            #    Xcode cần nhận folder .xcassets để compile thành Assets.car
+            set(IOS_ASSET_CATALOG "${CMAKE_CURRENT_SOURCE_DIR}/iOSresources/Assets.xcassets")
+            set_source_files_properties(${IOS_ASSET_CATALOG} PROPERTIES
+                XCODE_LAST_KNOWN_FILE_TYPE "folder.assetcatalog"
             )
-    
-            # Cấu hình tương tự cho LaunchScreen nếu có
+
+            # 2. Cấu hình LaunchScreen
             set(LAUNCH_SCREEN ${CMAKE_SOURCE_DIR}/MacResources/LaunchScreen.storyboard)
             set_source_files_properties(${LAUNCH_SCREEN} PROPERTIES
                 MACOSX_PACKAGE_LOCATION "Resources"
             )
-    
+
             # Kiểm tra khẩn cấp xem MAIN_SOURCES có bị trống do filter trước đó không
             if(NOT MAIN_SOURCES)
                 message(FATAL_ERROR "MAIN_SOURCES is empty before creating iOS executable!")
             endif()
-    
-            # 3. Tạo executable bằng cách truyền danh sách file asset cụ thể thay vì folder
+
+            # 3. Tạo executable — truyền folder .xcassets trực tiếp
             add_executable(${TARGET_NAME}
                 MACOSX_BUNDLE
                 ${MAIN_SOURCES}
-                ${IOS_ASSETS_FILES}
+                ${IOS_ASSET_CATALOG}
                 ${LAUNCH_SCREEN}
             )
-    
-            # 4. Chỉ định cho Xcode biết tên của AppIcon set nằm trong .xcassets
+
+            # 4. Chỉ định cho Xcode compile AppIcon từ .xcassets
             set_target_properties(${TARGET_NAME} PROPERTIES
                 XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET "14.0"
                 XCODE_ATTRIBUTE_ASSETCATALOG_COMPILER_APPICON_NAME "AppIcon"
+                XCODE_ATTRIBUTE_ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS "YES"
             )
     
         else()
