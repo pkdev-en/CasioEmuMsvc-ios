@@ -93,7 +93,8 @@ Apple ID miễn phí chỉ ký app có hiệu lực **7 ngày**. Để gia hạn
 
 ## 💬 Hỗ trợ & Cộng đồng cho ios
 
-- 💬 **Discord**: [discord.gg/tEMNCgBGeB](https://discord.gg/tEMNCgBGeB)
+- 💬 **Discord**: [discord.gg/hCEBVQMcmX](https://discord.gg/hCEBVQMcmX)
+- 💬 **Discord(Server phụ)**: [discord.gg/tEMNCgBGeB](https://discord.gg/tEMNCgBGeB)
 - 📧 **Email**: [khaiphu2015@gmail.com](mailto:khaiphu2015@gmail.com)
 - 🐛 **Issues**: [GitHub Issues](https://github.com/pkdev-en/CasioEmuMsvc-ios/issues)
 
