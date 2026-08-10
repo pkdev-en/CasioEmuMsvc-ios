@@ -105,4 +105,7 @@
 ---
 
 > ⚠️ **法律声明**：本应用依据 **GPL-3.0** 协议授权。用户须自行承担其所在地区使用 ROM 文件的法律责任。
+
+---
+
 > If anything is wrong, please let me know because I am not Chinese.
