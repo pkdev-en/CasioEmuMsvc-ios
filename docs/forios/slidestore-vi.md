@@ -1,4 +1,4 @@
-# 📲 Hướng dẫn cài CasioEmuMsvc trên iOS bằng SideStore
+# 📲 Hướng dẫn cài CasioEmuMsvc trên iOS
 > Hướng dẫn này dành cho người dùng **iPhone/iPad** muốn cài trình giả lập Casio cho iOS.
 ---
 ## 📋 Yêu cầu
