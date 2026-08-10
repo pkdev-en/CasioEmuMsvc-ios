@@ -28,6 +28,13 @@
 
 ---
 
+## Install for ios 📱
+
+| 🇺🇸 English | 🇨🇳 中文 | 🇻🇳 Tiếng Việt |
+|:---:|:---:|:---:|
+| [Read →](docs/README.en.md) | [阅读 →](docs/README.zh-CN.md) | [Đọc →](docs/forios/slidestore-vi.md) |
+
+
 ## ✨ At a Glance
 
 - 🖥️ **Full emulation** of nX-U8/100 & nX-U16/100 MCUs
