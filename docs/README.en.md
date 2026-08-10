@@ -16,6 +16,10 @@
 </div>
 
 ---
+> [!IMPORTANT]
+> **iOS support is currently unavailable as a pre-built release.**
+> There is no Xcode build at this time. iOS builds are only generated via **GitHub Actions** and are not distributed as ready-to-install packages. You will need to build from source using the workflow files provided in the repository.
+——-
 
 ## Overview
 
