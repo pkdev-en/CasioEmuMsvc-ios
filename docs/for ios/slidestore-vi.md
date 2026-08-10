@@ -94,8 +94,6 @@ Apple ID miễn phí chỉ ký app có hiệu lực **7 ngày**. Để gia hạn
 | App bị xóa sau 7 ngày | Gia hạn qua SideStore trước khi hết hạn |
 | Không kết nối được VPN SideStore | Kiểm tra lại **pairing file** trong Settings của SideStore |
 | Lỗi "App could not be installed" | Đảm bảo đã tin tưởng chứng chỉ trong Cài đặt iOS |
-| Màn hình trắng / crash khi mở | Kiểm tra lại file ROM — đảm bảo đúng mô hình |
-| Không tìm thấy ROM | Đặt file ROM cùng thư mục với app hoặc import thủ công qua Files |
 
 ---
 
