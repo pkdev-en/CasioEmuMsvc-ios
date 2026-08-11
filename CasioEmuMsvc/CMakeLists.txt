@@ -167,57 +167,48 @@ if(BUILD_EXECUTABLE)
     message(STATUS "Building executable")
     set(TARGET_NAME "CasioEmuMsvc")
     if(NOT MAIN_SOURCES)
-        message(FATAL_ERROR "MAIN_SOURCES is EMPTY on this platform 💀")
+        message(FATAL_ERROR "MAIN_SOURCES is EMPTY on this platform ð")
     endif()
 
     if(APPLE)
         set(TARGET_NAME "CasioEmuMsvc")
     
         if(IOS)
-            # 1. Copy PNG icon trực tiếp vào bundle (không dùng xcassets)
-            set(IOS_ICON_DIR "${CMAKE_SOURCE_DIR}/iOSresources/Assets.xcassets/AppIcon.appiconset")
-            set(IOS_ICON_FILES
-                "${IOS_ICON_DIR}/180.png"
-                "${IOS_ICON_DIR}/120.png"
-                "${IOS_ICON_DIR}/87.png"
-                "${IOS_ICON_DIR}/80.png"
-                "${IOS_ICON_DIR}/60.png"
-                "${IOS_ICON_DIR}/58.png"
-                "${IOS_ICON_DIR}/40.png"
-                "${IOS_ICON_DIR}/29.png"
-                "${IOS_ICON_DIR}/20.png"
-                "${IOS_ICON_DIR}/1024.png"
-            )
-            set_source_files_properties(${IOS_ICON_FILES} PROPERTIES
-                MACOSX_PACKAGE_LOCATION "Resources"
+            # 1. Asset catalog â dÃ¹ng CMAKE_SOURCE_DIR (repo root), KHÃNG dÃ¹ng CMAKE_CURRENT_SOURCE_DIR
+            #    vÃ¬ iOSresources/ náº±m á» root chá»© khÃ´ng pháº£i trong CasioEmuMsvc/
+            set(IOS_ASSET_CATALOG "${CMAKE_SOURCE_DIR}/iOSresources/Assets.xcassets")
+            set_source_files_properties(${IOS_ASSET_CATALOG} PROPERTIES
+                XCODE_LAST_KNOWN_FILE_TYPE "folder.assetcatalog"
             )
 
-            # 2. Cấu hình LaunchScreen
+            # 2. Cáº¥u hÃ¬nh LaunchScreen
             set(LAUNCH_SCREEN ${CMAKE_SOURCE_DIR}/MacResources/LaunchScreen.storyboard)
             set_source_files_properties(${LAUNCH_SCREEN} PROPERTIES
                 MACOSX_PACKAGE_LOCATION "Resources"
             )
 
-            # Kiểm tra khẩn cấp xem MAIN_SOURCES có bị trống do filter trước đó không
+            # Kiá»m tra kháº©n cáº¥p xem MAIN_SOURCES cÃ³ bá» trá»ng do filter trÆ°á»c ÄÃ³ khÃ´ng
             if(NOT MAIN_SOURCES)
                 message(FATAL_ERROR "MAIN_SOURCES is empty before creating iOS executable!")
             endif()
 
-            # 3. Tạo executable với icon PNG trực tiếp
+            # 3. Táº¡o executable â Xcode sáº½ compile .xcassets thÃ nh Assets.car
             add_executable(${TARGET_NAME}
                 MACOSX_BUNDLE
                 ${MAIN_SOURCES}
-                ${IOS_ICON_FILES}
+                ${IOS_ASSET_CATALOG}
                 ${LAUNCH_SCREEN}
             )
 
-            # 4. Deployment target
+            # 4. Chá» Äá»nh cho Xcode compile AppIcon tá»« .xcassets
             set_target_properties(${TARGET_NAME} PROPERTIES
                 XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET "14.0"
+                XCODE_ATTRIBUTE_ASSETCATALOG_COMPILER_APPICON_NAME "AppIcon"
+                XCODE_ATTRIBUTE_ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS "YES"
             )
     
         else()
-            # Cấu hình giữ nguyên cho macOS
+            # Cáº¥u hÃ¬nh giá»¯ nguyÃªn cho macOS
             set(APP_ICON ${CMAKE_SOURCE_DIR}/MacResources/AppIcon.icns)
             set_source_files_properties(${APP_ICON} PROPERTIES
                 MACOSX_PACKAGE_LOCATION "Resources"
@@ -272,7 +263,7 @@ if(APPLE AND NOT IOS)
 elseif(IOS)
     set_target_properties(${TARGET_NAME} PROPERTIES
         MACOSX_BUNDLE_INFO_PLIST
-        ${CMAKE_SOURCE_DIR}/iOSResources/Info.plist
+        ${CMAKE_SOURCE_DIR}/iOSresources/Info.plist
         XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.pkdevvn.casioemu"
 
         INSTALL_RPATH "@executable_path/Frameworks"
