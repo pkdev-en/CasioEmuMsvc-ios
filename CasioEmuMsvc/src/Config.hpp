@@ -1,8 +1,8 @@
 #pragma once
 
+// ── iOS / macOS platform detection (phải đứng đầu tiên) ──────────────────────
 #if defined(__APPLE__)
 #include <TargetConditionals.h>
-
 #if TARGET_OS_IPHONE
     #ifndef IOS
     #define IOS
@@ -11,9 +11,12 @@
     #define __IOS__
     #endif
 #elif TARGET_OS_MAC
+    #ifndef MACOS
     #define MACOS
+    #endif
 #endif
 #endif
+// ─────────────────────────────────────────────────────────────────────────────
 
 #include "Containers/ConcurrentObject.h"
 #include <cstdint>
@@ -61,19 +64,26 @@
 	std::lock_guard<std::mutex> lock_##x{x};
 
 // Enable debug feature
-
 #define DBG
 
 #ifdef min
 #undef min
-#endif 
+#endif
 #ifdef max
 #undef max
-#endif 
+#endif
 
+// SINGLE_WINDOW: iOS và Android dùng cùng cửa sổ SDL với emulator
 // #define SINGLE_WINDOW
 #if !defined(SINGLE_WINDOW) && (defined(__ANDROID__) || defined(IOS))
 #define SINGLE_WINDOW
+#endif
+
+// Disable Sentry trên iOS (không hỗ trợ)
+#if defined(IOS)
+#ifndef DISABLE_SENTRY
+#define DISABLE_SENTRY
+#endif
 #endif
 
 #if defined(_MSC_VER) || (defined(__clang__) && defined(_WIN32))
@@ -97,13 +107,9 @@ public:                       \
 	virtual y Get##x##() = 0; \
 	virtual void Set##x##(y a) = 0;
 
-#include "git_info.h"
+#include <git_info.h>
 
 #define EMULATOR_VERSION GIT_COMMIT_HASH
-
-#ifndef DISABLE_SENTRY
-#define DISABLE_SENTRY
-#endif
 
 #if !defined(__ANDROID__) && !defined(__EMSCRIPTEN__) && !defined(DISABLE_SENTRY)
 #define ENABLE_SENTRY
