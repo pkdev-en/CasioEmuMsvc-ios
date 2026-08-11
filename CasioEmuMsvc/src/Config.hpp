@@ -73,11 +73,33 @@
 #undef max
 #endif
 
+// ── SINGLE_WINDOW guard ───────────────────────────────────────────────────
+// SINGLE_WINDOW drives the compact single-viewport overlay toolbar built for
+// touch/small-screen targets (iOS, Android). It must never be hand-defined --
+// the line below stays commented out on purpose. It is only ever turned on
+// automatically, and only for __ANDROID__ or IOS.
+//
+// If it ever gets defined for a desktop target -- an accidental uncomment, a
+// bad merge, a stray -DSINGLE_WINDOW passed to the compiler, a stale build
+// cache from a mobile config -- every Windows/Linux/macOS build will silently
+// ship the mobile overlay UI instead of the docked debugger panels. The
+// static_assert below turns that mistake into a compile error the moment it
+// happens, instead of a silent bug someone has to spot by eye in a running
+// app.
 // SINGLE_WINDOW: iOS và Android dùng cùng cửa sổ SDL với emulator
 // #define SINGLE_WINDOW
 #if !defined(SINGLE_WINDOW) && (defined(__ANDROID__) || defined(IOS))
 #define SINGLE_WINDOW
 #endif
+
+#if defined(SINGLE_WINDOW) && !defined(__ANDROID__) && !defined(IOS)
+static_assert(false,
+	"SINGLE_WINDOW is defined on a non-mobile target. This macro must only "
+	"ever be active for __ANDROID__ or IOS builds. Check for an accidental "
+	"uncomment on the '#define SINGLE_WINDOW' line above, or check the "
+	"compiler invocation / build cache for a stray -DSINGLE_WINDOW flag.");
+#endif
+// ─────────────────────────────────────────────────────────────────────────
 
 // Disable Sentry trên iOS (không hỗ trợ)
 #if defined(IOS)
