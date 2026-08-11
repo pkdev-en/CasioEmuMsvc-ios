@@ -1,4 +1,7 @@
 #pragma once
+// CalculatorWindow.h — Hiển thị màn hình calculator trong một ImGui window.
+// Chỉ hoạt động trên iOS (m_emu->tx được set bởi Emulator khi build iOS).
+// Trên các platform khác, Render() là no-op hoàn toàn.
 #include "Ui.hpp"
 #include "Emulator.hpp"
 #include "imgui/imgui.h"
@@ -22,7 +25,11 @@ public:
 
 	void Render() override {
 #if !defined(__ANDROID__) && !defined(IOS)
+		// Trên desktop và web: no-op.
+		// Calculator vẫn render thẳng ra SDL window như bình thường.
 		if (!m_emu || !m_emu->tx || !m_emu->calculator_as_tab.load()) return;
+		UIWindow::Render();
+#else
 		UIWindow::Render();
 #endif
 	}
