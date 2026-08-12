@@ -64,7 +64,6 @@ Apple ID miễn phí chỉ ký app có hiệu lực **7 ngày**. Để gia hạn
 - Nhấn **Refresh All** hoặc nhấn vào tên app rồi chọn **Refresh**.
 - Bật **Background Refresh** trong Cài đặt SideStore để tự động gia hạn.
 
-> **Mẹo:** Dùng **LiveContainer** nếu bạn muốn cài nhiều app vượt giới hạn 3 app của Apple ID miễn phí :)
 ---
 ## ❗ Xử lý lỗi thường gặp
 | Lỗi | Giải pháp |
@@ -81,3 +80,5 @@ Apple ID miễn phí chỉ ký app có hiệu lực **7 ngày**. Để gia hạn
 - 🐛 **Issues**: [GitHub Issues](https://github.com/pkdev-en/CasioEmuMsvc-ios/issues)
 ---
 > ⚠️ **Lưu ý pháp lý**: Ứng dụng này được cấp phép theo **GPL-3.0**. Người dùng tự chịu trách nhiệm về tính hợp pháp của các file ROM sử dụng tại khu vực của mình.
+---
+> last updated: 11:21 pm gmt +7 | 8/12/2026
