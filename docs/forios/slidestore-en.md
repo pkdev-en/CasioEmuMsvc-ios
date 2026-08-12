@@ -41,7 +41,6 @@ Go to [sidestore.io](https://sidestore.io) and follow the instructions.
 5. Log in with your Apple ID if prompted, then tap **Install**.
 6. Wait a few seconds — the app will appear on your home screen.
 
-> If you are in **Vietnam**, download **VPN Super**, open it, select **United Kingdom**, turn it on, and then enable **LocalDevVPN**.
 
 ---
 
@@ -115,3 +114,6 @@ Free Apple ID only signs apps valid for **7 days**. To renew:
 ---
 
 > ⚠️ **Legal Note**: This application is licensed under **GPL-3.0**. Users are solely responsible for the legality of the ROM files they use in their region.
+
+---
+> last updated: 11:23 pm gmt +7 | 8/12/2026
