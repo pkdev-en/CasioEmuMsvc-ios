@@ -68,7 +68,13 @@ jobs:
           echo "::error::Submodule checkout failed after 3 attempts"
           exit 1
 
+      # ================= WINDOWS =================
       - name: Configure CMake
+        if: matrix.platform == 'windows'
+        working-directory: ${{ env.GITHUB_WORKSPACE }}
+        run: cmake -S . -B build -A ${{ matrix.platform_arch == 'x86' && 'Win32' || 'x64' }} -DCMAKE_BUILD_TYPE=${{ env.BUILD_CONFIGURATION }} -DBUILD_EXECUTABLE=ON
+
+      - name: Build with CMake
         if: matrix.platform == 'windows'
         working-directory: ${{ env.GITHUB_WORKSPACE }}
         run: cmake --build build --config ${{ env.BUILD_CONFIGURATION }} --parallel
