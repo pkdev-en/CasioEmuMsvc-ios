@@ -36,310 +36,312 @@ jobs:
           - platform: ios
             os: macos-latest
             name: "iOS"
-    
+
     runs-on: ${{ matrix.os }}
     name: Build ${{ matrix.name }}
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@v6
-      with:
-        submodules: recursive
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: false
 
-    - name: Configure CMake
-      if: matrix.platform == 'windows'
-      working-directory: ${{env.GITHUB_WORKSPACE}}
-      run: cmake -S . -B build -A ${{ matrix.platform_arch == 'x86' && 'Win32' || 'x64' }} -DCMAKE_BUILD_TYPE=${{ env.BUILD_CONFIGURATION }} -DBUILD_EXECUTABLE=ON
+      # ── Submodule checkout: skip libjxl, retry the rest ──────────────────
+      - name: Checkout submodules (skip libjxl, with retry)
+        shell: bash
+        run: |
+          git submodule sync --recursive
+          for attempt in 1 2 3; do
+            echo "Submodule sync attempt $attempt/3"
+            if git submodule update --init --recursive --depth 1 \
+                -- SDL discord-rpc sentry-native CasioEmuMsvc/third_party/asmjit && \
+               git submodule update --init --depth 1 -- SDL_image && \
+               git -C SDL_image submodule update --init --recursive --depth 1 \
+                -- external/dav1d external/jpeg external/libavif external/libpng \
+                   external/libtiff external/libwebp external/zlib; then
+              echo "Submodules synced successfully (libjxl skipped -- disabled in CMakeLists.txt)"
+              exit 0
+            fi
+            echo "Attempt $attempt failed, waiting before retry..."
+            sleep $((attempt * 10))
+          done
+          echo "::error::Submodule checkout failed after 3 attempts"
+          exit 1
 
-    - name: Build with CMake
-      if: matrix.platform == 'windows'
-      working-directory: ${{env.GITHUB_WORKSPACE}}
-      run: cmake --build build --config ${{ env.BUILD_CONFIGURATION }} --parallel
+      - name: Configure CMake
+        if: matrix.platform == 'windows'
+        working-directory: ${{ env.GITHUB_WORKSPACE }}
+        run: cmake --build build --config ${{ env.BUILD_CONFIGURATION }} --parallel
 
-    # - name: Upload PDBs to Sentry
-    #   if: matrix.platform == 'windows'
-    #   env:
-    #     SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_TOKEN }}
-    #     SENTRY_ORG: "t5-j7"
-    #     SENTRY_PROJECT: "native"
-    #     COMMIT_HASH: ${{ github.sha }}
-    #     RELEASE_TAG: "CasioEmuMsvc@${{ github.sha }}"
-    #   working-directory: build/CasioEmuMsvc/${{ env.BUILD_CONFIGURATION }}
-    #   run: |
-    #         $sentry_cli = "${{ github.workspace }}\CasioEmuMsvc\sentry-cli.exe"
-    #         & $sentry_cli debug-files upload -o $env:SENTRY_ORG -p $env:SENTRY_PROJECT .
+      - name: Upload ${{ matrix.platform_arch }} Build Artifact
+        if: matrix.platform == 'windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Release-${{ matrix.platform_arch }}
+          path: build/CasioEmuMsvc/${{ env.BUILD_CONFIGURATION }}
+          if-no-files-found: error
 
-    - name: Upload ${{ matrix.platform_arch }} Build Artifact
-      if: matrix.platform == 'windows'
-      uses: actions/upload-artifact@v7
-      with:
-        name: Release-${{ matrix.platform_arch }}
-        path: build/CasioEmuMsvc/${{ env.BUILD_CONFIGURATION }}
-        if-no-files-found: error
-    
-    # ================= MACOS =================
-    - name: Install dependencies (macOS)
-      if: matrix.platform == 'mac'
-      run: |
-        brew install cmake sdl2 sdl2_image ccache ninja
-    
-    - name: Build icons for macOS
-      if: matrix.platform == 'mac'
-      run: |
-        set -e
-    
-        ICONSET=AppIcon.iconset
-        IMG=resources/new-logo.png
-    
-        rm -rf $ICONSET
-        mkdir $ICONSET
-    
-        # generate iconset (macOS standard sizes)
-        sips -z 16 16     "$IMG" --out $ICONSET/icon_16x16.png
-        sips -z 32 32     "$IMG" --out $ICONSET/icon_16x16@2x.png
-    
-        sips -z 32 32     "$IMG" --out $ICONSET/icon_32x32.png
-        sips -z 64 64     "$IMG" --out $ICONSET/icon_32x32@2x.png
-    
-        sips -z 128 128   "$IMG" --out $ICONSET/icon_128x128.png
-        sips -z 256 256   "$IMG" --out $ICONSET/icon_128x128@2x.png
-    
-        sips -z 256 256   "$IMG" --out $ICONSET/icon_256x256.png
-        sips -z 512 512   "$IMG" --out $ICONSET/icon_256x256@2x.png
-    
-        sips -z 512 512   "$IMG" --out $ICONSET/icon_512x512.png
-        sips -z 1024 1024 "$IMG" --out $ICONSET/icon_512x512@2x.png
-    
-        iconutil -c icns $ICONSET -o AppIcon.icns
-        
-        mkdir -p MacResources
-        cp AppIcon.icns MacResources/AppIcon.icns
-        
-        echo "CCACHE_COMPRESS=1" >> $GITHUB_ENV
-        echo "CCACHE_MAXSIZE=400M" >> $GITHUB_ENV
-    
-    - name: Cache ccache
-      uses: actions/cache@v4
-      with:
-        path: ~/.ccache
-        key: mac-ccache-${{ runner.os }}-${{ hashFiles('**/CMakeLists.txt') }}
-    
-    - name: Build for macOS
-      if: matrix.platform == 'mac'
-      env:
-        MACOSX_DEPLOYMENT_TARGET: 11.0
-      run: |
-        cmake -S . -B build \
-        -G Ninja \
-        -DBUILD_EXECUTABLE=ON \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
-        -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64" \
-        -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-        -DCMAKE_CXX_FLAGS="-fdiagnostics-color=always"
-        
-        cmake --build build --parallel 6
-    
-    - name: Show build tree
-      if: matrix.platform == 'mac'
-      run: |
-        echo "---- BUILD TREE ----"
-        ls -R build
-    
-    - name: Create DMG
-      if: matrix.platform == 'mac'
-      run: |
-        cd build
-        APP=$(find . -name "*.app" | head -n 1)
-        echo "Found app: $APP"
-    
-        mkdir dmg
-        cp -r "$APP" dmg/
-        ln -s /Applications dmg/Applications
-        
-        hdiutil create CasioEmuMsvc.dmg \
-          -volname "CasioEmuMsvc" \
-          -srcfolder dmg \
-          -ov \
-          -format UDZO
-    
-    - name: Upload macOS Build Artifact
-      if: matrix.platform == 'mac'
-      uses: actions/upload-artifact@v7
-      with:
-        path: |
-          build/CasioEmuMsvc.dmg
-        # compression-level: 6
-        retention-days: 1
-        archive: false
-    
+      # ================= MACOS =================
+      - name: Install dependencies (macOS)
+        if: matrix.platform == 'mac'
+        run: |
+          brew install cmake sdl2 sdl2_image ccache ninja
 
-    - name: Set up JDK 21
-      if: matrix.platform == 'android'
-      uses: actions/setup-java@v5
-      with:
-        java-version: '21'
-        distribution: 'temurin'
-        cache: gradle
+      - name: Build icons for macOS
+        if: matrix.platform == 'mac'
+        run: |
+          set -e
 
-    - name: Grant execute permission to gradlew
-      if: matrix.platform == 'android'
-      run: chmod +x gradlew
+          ICONSET=AppIcon.iconset
+          IMG=resources/new-logo.png
 
-    - name: Build with Gradle
-      if: matrix.platform == 'android'
-      run: ./gradlew assembleRelease
+          rm -rf $ICONSET
+          mkdir $ICONSET
 
-    - name: Rename APK
-      if: matrix.platform == 'android'
-      run: |
-        SHORT_HASH=$(git rev-parse --short HEAD)
-        for apk in app/build/outputs/apk/release/*.apk; do
-          if [ -f "$apk" ]; then
-            mv "$apk" "${apk%.apk}-${SHORT_HASH}.apk"
+          sips -z 16 16     "$IMG" --out $ICONSET/icon_16x16.png
+          sips -z 32 32     "$IMG" --out $ICONSET/icon_16x16@2x.png
+
+          sips -z 32 32     "$IMG" --out $ICONSET/icon_32x32.png
+          sips -z 64 64     "$IMG" --out $ICONSET/icon_32x32@2x.png
+
+          sips -z 128 128   "$IMG" --out $ICONSET/icon_128x128.png
+          sips -z 256 256   "$IMG" --out $ICONSET/icon_128x128@2x.png
+
+          sips -z 256 256   "$IMG" --out $ICONSET/icon_256x256.png
+          sips -z 512 512   "$IMG" --out $ICONSET/icon_256x256@2x.png
+
+          sips -z 512 512   "$IMG" --out $ICONSET/icon_512x512.png
+          sips -z 1024 1024 "$IMG" --out $ICONSET/icon_512x512@2x.png
+
+          iconutil -c icns $ICONSET -o AppIcon.icns
+
+          mkdir -p MacResources
+          cp AppIcon.icns MacResources/AppIcon.icns
+
+          echo "CCACHE_COMPRESS=1" >> $GITHUB_ENV
+          echo "CCACHE_MAXSIZE=400M" >> $GITHUB_ENV
+
+      - name: Cache ccache
+        if: matrix.platform == 'mac'
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: mac-ccache-${{ runner.os }}-${{ hashFiles('**/CMakeLists.txt') }}
+
+      - name: Build for macOS
+        if: matrix.platform == 'mac'
+        env:
+          MACOSX_DEPLOYMENT_TARGET: 11.0
+        run: |
+          cmake -S . -B build \
+          -G Ninja \
+          -DBUILD_EXECUTABLE=ON \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+          -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64" \
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+          -DCMAKE_CXX_FLAGS="-fdiagnostics-color=always"
+
+          cmake --build build --parallel 6
+
+      - name: Show build tree
+        if: matrix.platform == 'mac'
+        run: |
+          echo "---- BUILD TREE ----"
+          ls -R build
+
+      - name: Create DMG
+        if: matrix.platform == 'mac'
+        run: |
+          cd build
+          APP=$(find . -name "*.app" | head -n 1)
+          echo "Found app: $APP"
+
+          mkdir dmg
+          cp -r "$APP" dmg/
+          ln -s /Applications dmg/Applications
+
+          hdiutil create CasioEmuMsvc.dmg \
+            -volname "CasioEmuMsvc" \
+            -srcfolder dmg \
+            -ov \
+            -format UDZO
+
+      - name: Upload macOS Build Artifact
+        if: matrix.platform == 'mac'
+        uses: actions/upload-artifact@v4
+        with:
+          path: |
+            build/CasioEmuMsvc.dmg
+          retention-days: 1
+          archive: false
+
+      # ================= ANDROID =================
+      - name: Set up JDK 21
+        if: matrix.platform == 'android'
+        uses: actions/setup-java@v5
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Grant execute permission to gradlew
+        if: matrix.platform == 'android'
+        run: chmod +x gradlew
+
+      - name: Build with Gradle
+        if: matrix.platform == 'android'
+        run: ./gradlew assembleRelease
+
+      - name: Rename APK
+        if: matrix.platform == 'android'
+        run: |
+          SHORT_HASH=$(git rev-parse --short HEAD)
+          for apk in app/build/outputs/apk/release/*.apk; do
+            if [ -f "$apk" ]; then
+              mv "$apk" "${apk%.apk}-${SHORT_HASH}.apk"
+            fi
+          done
+
+      - name: Upload Universal APK
+        if: matrix.platform == 'android'
+        uses: actions/upload-artifact@v4
+        with:
+          path: app/build/outputs/apk/release/*-universal-*.apk
+          archive: false
+
+      - name: Upload arm64-v8a APK
+        if: matrix.platform == 'android'
+        uses: actions/upload-artifact@v4
+        with:
+          path: app/build/outputs/apk/release/*-arm64-v8a-*.apk
+          archive: false
+
+      - name: Upload armeabi-v7a APK
+        if: matrix.platform == 'android'
+        uses: actions/upload-artifact@v4
+        with:
+          path: app/build/outputs/apk/release/*-armeabi-v7a-*.apk
+          archive: false
+
+      # ================= LINUX =================
+      - name: Grant execute permission to build script
+        if: matrix.platform == 'linux'
+        run: chmod +x build-linux.sh
+
+      - name: Build for Linux
+        if: matrix.platform == 'linux'
+        run: sudo DEBIAN_FRONTEND=noninteractive ./build-linux.sh -y
+
+      - name: Upload Linux Build Artifact
+        if: matrix.platform == 'linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Release-Linux-x64
+          path: |
+            build/CasioEmuMsvc/CasioEmuMsvc
+            build/CasioEmuMsvc/crashpad_handler
+            build/CasioEmuMsvc/locales/
+            build/CasioEmuMsvc/roms.db
+          if-no-files-found: error
+
+      # ================= IOS =================
+      - name: Setup certficate for iOS build
+        if: matrix.platform == 'ios'
+        run: |
+          security create-keychain -p "" build.keychain
+          security unlock-keychain -p "" build.keychain
+
+          security set-keychain-settings -lut 21600 build.keychain
+          security list-keychains -d user -s build.keychain
+          security default-keychain -s build.keychain
+
+          security import iOSResources/export_anar.p12 \
+            -k build.keychain \
+            -P "1234" \
+            -A \
+            -T /usr/bin/codesign
+
+          security set-key-partition-list \
+            -S apple-tool:,apple: \
+            -s \
+            -k "" \
+            build.keychain
+
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp iOSResources/export_anar.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/
+
+      - name: Build for iOS
+        if: matrix.platform == 'ios'
+        run: |
+          cmake -S . -B build -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY="" \
+            -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM="4Z7V3V3G9R" \
+            -DCMAKE_CXX_STANDARD=20 \
+            -DSDL_TESTS=OFF \
+            -DSDL_DISABLE_INSTALL=ON \
+            -DSDL2IMAGE_TESTS=OFF \
+            -DSDL2IMAGE_INSTALL=OFF
+
+          cmake --build build --config Release --parallel 6
+
+      - name: Create .ipa
+        if: matrix.platform == 'ios'
+        run: |
+          set -e
+
+          APP=$(find build -type d -name "*.app" | head -n 1)
+          echo "Found app: $APP"
+
+          IDENTITY=$(security find-identity -v -p codesigning build.keychain \
+            | grep -E '"[^"]+"' -o | head -n 1 | tr -d '"')
+
+          if [ -z "$IDENTITY" ]; then
+            echo "No identity found in build.keychain, falling back to ad-hoc signing"
+            IDENTITY="-"
           fi
-        done
 
-    - name: Upload Universal APK
-      if: matrix.platform == 'android'
-      uses: actions/upload-artifact@v7
-      with:
-        path: app/build/outputs/apk/release/*-universal-*.apk
-        archive: false
+          echo "Signing with identity: $IDENTITY"
 
-    - name: Upload arm64-v8a APK
-      if: matrix.platform == 'android'
-      uses: actions/upload-artifact@v7
-      with:
-        path: app/build/outputs/apk/release/*-arm64-v8a-*.apk
-        archive: false
+          if /usr/bin/codesign --force --sign "$IDENTITY" "$APP"; then
+            echo "Signing succeeded"
+          else
+            echo "Signing failed, continuing with unsigned app"
+          fi
 
-    - name: Upload armeabi-v7a APK
-      if: matrix.platform == 'android'
-      uses: actions/upload-artifact@v7
-      with:
-        path: app/build/outputs/apk/release/*-armeabi-v7a-*.apk
-        archive: false
+          mkdir -p build/Payload
+          rm -rf build/Payload/*
+          cp -R "$APP" build/Payload/
 
-    - name: Grant execute permission to build script
-      if: matrix.platform == 'linux'
-      run: chmod +x build-linux.sh
+          cd build
+          zip -r CasioEmuMsvc.ipa Payload
+          cd ..
 
-    - name: Build for Linux
-      if: matrix.platform == 'linux'
-      run: sudo DEBIAN_FRONTEND=noninteractive ./build-linux.sh -y
+      - name: upload build ios
+        if: always() && matrix.platform == 'ios'
+        uses: actions/upload-artifact@v4
+        with:
+          path: build/CasioEmuMsvc.ipa
+          retention-days: 1
+          archive: false
 
-    - name: Upload Linux Build Artifact
-      if: matrix.platform == 'linux'
-      uses: actions/upload-artifact@v7
-      with:
-        name: Release-Linux-x64
-        path: |
-          build/CasioEmuMsvc/CasioEmuMsvc
-          build/CasioEmuMsvc/crashpad_handler
-          build/CasioEmuMsvc/locales/
-          build/CasioEmuMsvc/roms.db
-        if-no-files-found: error
-    
-    - name: Setup certficate for iOS build
-      if: matrix.platform == 'ios'
-      run: |
-        security create-keychain -p "" build.keychain
-        security unlock-keychain -p "" build.keychain
-    
-        security set-keychain-settings -lut 21600 build.keychain
-        security list-keychains -d user -s build.keychain
-        security default-keychain -s build.keychain
-    
-        security import iOSResources/export_anar.p12 \
-          -k build.keychain \
-          -P "1234" \
-          -A \
-          -T /usr/bin/codesign
-    
-        security set-key-partition-list \
-          -S apple-tool:,apple: \
-          -s \
-          -k "" \
-          build.keychain
-        
-        mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-        cp iOSResources/export_anar.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/
-    
-    - name: Build for iOS
-      if: matrix.platform == 'ios'
-      run: |
-        # Build without code signing - sign manually in the .ipa step.
-        # Setting CODE_SIGNING_ALLOWED=NO on ALL_BUILD prevents the
-        # "conflicting provisioning settings" error on SDL subprojects.
-        cmake -S . -B build -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
-          -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
-          -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
-          -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY="" \
-          -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM="4Z7V3V3G9R" \
-          -DCMAKE_CXX_STANDARD=20 \
-          -DSDL_TESTS=OFF \
-          -DSDL_DISABLE_INSTALL=ON \
-          -DSDL2IMAGE_TESTS=OFF \
-          -DSDL2IMAGE_INSTALL=OFF
+      - name: upload build failed ios
+        if: failure() && matrix.platform == 'ios'
+        uses: actions/upload-artifact@v4
+        with:
+          path: build/CasioEmuMsvc.ipa
+          retention-days: 1
+          archive: false
 
-        cmake --build build --config Release --parallel 6
-
-    - name: Create .ipa
-      if: matrix.platform == 'ios'
-      run: |
-        set -e
-
-        APP=$(find build -type d -name "*.app" | head -n 1)
-        echo "Found app: $APP"
-
-        # Find signing identity from keychain (use first available Distribution or Developer cert)
-        IDENTITY=$(security find-identity -v -p codesigning build.keychain \
-          | grep -E '"[^"]+"' -o | head -n 1 | tr -d '"')
-
-        if [ -z "$IDENTITY" ]; then
-          echo "No identity found in build.keychain, falling back to ad-hoc signing"
-          IDENTITY="-"
-        fi
-
-        echo "Signing with identity: $IDENTITY"
-
-        if /usr/bin/codesign --force --sign "$IDENTITY" "$APP"; then
-          echo "Signing succeeded"
-        else
-          echo "Signing failed, continuing with unsigned app"
-        fi
-
-        mkdir -p build/Payload
-        rm -rf build/Payload/*
-        cp -R "$APP" build/Payload/
-
-        cd build
-        zip -r CasioEmuMsvc.ipa Payload
-        cd ..
-        
-    - name: upload build ios
-      if: always() && matrix.platform == 'ios'
-      uses: actions/upload-artifact@v7
-      with:
-        path: build/CasioEmuMsvc.ipa
-        retention-days: 1
-        archive: false
-    - name: upload build failed ios
-      if: failure() && matrix.platform == 'ios'
-      uses: actions/upload-artifact@v7
-      with:
-        path: build/CasioEmuMsvc.ipa
-        retention-days: 1
-        archive: false
-    
-    - name: Dump CMake error
-      if: failure()
-      shell: bash
-      run: |
-        find . -name "CMakeError.log" -exec cat {} \;
-        find . -name "CMakeOutput.log" -exec cat {} \;
+      - name: Dump CMake error
+        if: failure()
+        shell: bash
+        run: |
+          find . -name "CMakeError.log" -exec cat {} \;
+          find . -name "CMakeOutput.log" -exec cat {} \;
 
   release:
     name: Create Release
@@ -348,91 +350,91 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/stable'
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@v6
-      with:
-        fetch-depth: 0
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
-    - name: Download All Artifacts
-      uses: actions/download-artifact@v8
-      with:
-        path: ./artifacts
-        skip-decompress: true
-        merge-multiple: true
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+          skip-decompress: true
+          merge-multiple: true
 
-    - name: Generate Release Details
-      id: release_details
-      run: |
-        SHORT_HASH=$(git rev-parse --short HEAD)
-        echo "COMMIT_HASH=$SHORT_HASH" >> $GITHUB_ENV
-        echo "RELEASE_TAG=stable-$(date +'%Y%m%d%H%M%S')-$SHORT_HASH" >> $GITHUB_ENV
-        echo "RELEASE_DATE=$(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
-        
-        CHANGELOG_CONTENT=$(git log -5 --pretty=format:"- %s (%h)" --abbrev-commit)
-        echo "CHANGELOG<<EOF" >> $GITHUB_ENV
-        echo "$CHANGELOG_CONTENT" >> $GITHUB_ENV
-        echo "EOF" >> $GITHUB_ENV
+      - name: Generate Release Details
+        id: release_details
+        run: |
+          SHORT_HASH=$(git rev-parse --short HEAD)
+          echo "COMMIT_HASH=$SHORT_HASH" >> $GITHUB_ENV
+          echo "RELEASE_TAG=stable-$(date +'%Y%m%d%H%M%S')-$SHORT_HASH" >> $GITHUB_ENV
+          echo "RELEASE_DATE=$(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
 
-    - name: Prepare Release Assets
-      run: |
-        mkdir -p release_assets
-        if ls ./artifacts/*.apk 1> /dev/null 2>&1; then
-          cp ./artifacts/*.apk release_assets/
-        fi
+          CHANGELOG_CONTENT=$(git log -5 --pretty=format:"- %s (%h)" --abbrev-commit)
+          echo "CHANGELOG<<EOF" >> $GITHUB_ENV
+          echo "$CHANGELOG_CONTENT" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
 
-        if [ -f "./artifacts/Release-x86.zip" ]; then
-          mv "./artifacts/Release-x86.zip" "./release_assets/windows-x86-${{ env.COMMIT_HASH }}.zip"
-        fi
-        
-        if [ -f "./artifacts/Release-x64.zip" ]; then
-          mv "./artifacts/Release-x64.zip" "./release_assets/windows-x64-${{ env.COMMIT_HASH }}.zip"
-        fi
-        
-        if [ -f "./artifacts/Release-Linux-x64.zip" ]; then
-          mv "./artifacts/Release-Linux-x64.zip" "./release_assets/linux-x64-${{ env.COMMIT_HASH }}.zip"
-        fi
-        
-        if [ -f "./artifacts/CasioEmuMsvc.dmg" ]; then
-          mv "./artifacts/CasioEmuMsvc.dmg" "./release_assets/macOS-universal-${{ env.COMMIT_HASH }}.dmg"
-        fi
-        
-        if [ -f "./artifacts/CasioEmuMsvc.ipa" ]; then
-          mv "./artifacts/CasioEmuMsvc.ipa" "./release_assets/iOS-build-${{ env.COMMIT_HASH }}.ipa"
-        fi
-        
-        echo "=== ARTIFACTS ==="
-        ls -R ./artifacts
-        
-        echo "=== IPA SEARCH ==="
-        find ./artifacts -name "*.ipa"
-        
-        echo "=== DMG SEARCH ==="
-        find ./artifacts -name "*.dmg"
-        
-        ls -la release_assets/
+      - name: Prepare Release Assets
+        run: |
+          mkdir -p release_assets
+          if ls ./artifacts/*.apk 1> /dev/null 2>&1; then
+            cp ./artifacts/*.apk release_assets/
+          fi
 
-    - name: Create GitHub Release
-      uses: softprops/action-gh-release@v3
-      with:
-        tag_name: ${{ env.RELEASE_TAG }}
-        name: 'Auto Build ${{ env.RELEASE_TAG }} (Pre-release)'
-        body: |
-          ## [WARNING] Pre-release Auto Build
-          
-          > **Warning**: This is an automated pre-release build for testing purposes. 
-          > It may contain bugs and is not recommended for production use.
-          
-          **Build Date:** ${{ env.RELEASE_DATE }}
-          **Commit:** [${{ env.COMMIT_HASH }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
-          
-          ### Recent Changes
-          ${{ env.CHANGELOG }}
-          
-          ### Notes
-          - This is an automated build from the latest commit on the stable branch
-          - Use at your own risk - this is a development build
-        files: release_assets/*
-        draft: false
-        prerelease: true
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          if [ -f "./artifacts/Release-x86.zip" ]; then
+            mv "./artifacts/Release-x86.zip" "./release_assets/windows-x86-${{ env.COMMIT_HASH }}.zip"
+          fi
+
+          if [ -f "./artifacts/Release-x64.zip" ]; then
+            mv "./artifacts/Release-x64.zip" "./release_assets/windows-x64-${{ env.COMMIT_HASH }}.zip"
+          fi
+
+          if [ -f "./artifacts/Release-Linux-x64.zip" ]; then
+            mv "./artifacts/Release-Linux-x64.zip" "./release_assets/linux-x64-${{ env.COMMIT_HASH }}.zip"
+          fi
+
+          if [ -f "./artifacts/CasioEmuMsvc.dmg" ]; then
+            mv "./artifacts/CasioEmuMsvc.dmg" "./release_assets/macOS-universal-${{ env.COMMIT_HASH }}.dmg"
+          fi
+
+          if [ -f "./artifacts/CasioEmuMsvc.ipa" ]; then
+            mv "./artifacts/CasioEmuMsvc.ipa" "./release_assets/iOS-build-${{ env.COMMIT_HASH }}.ipa"
+          fi
+
+          echo "=== ARTIFACTS ==="
+          ls -R ./artifacts
+
+          echo "=== IPA SEARCH ==="
+          find ./artifacts -name "*.ipa"
+
+          echo "=== DMG SEARCH ==="
+          find ./artifacts -name "*.dmg"
+
+          ls -la release_assets/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: 'Auto Build ${{ env.RELEASE_TAG }} (Pre-release)'
+          body: |
+            ## [WARNING] Pre-release Auto Build
+
+            > **Warning**: This is an automated pre-release build for testing purposes. 
+            > It may contain bugs and is not recommended for production use.
+
+            **Build Date:** ${{ env.RELEASE_DATE }}
+            **Commit:** [${{ env.COMMIT_HASH }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
+
+            ### Recent Changes
+            ${{ env.CHANGELOG }}
+
+            ### Notes
+            - This is an automated build from the latest commit on the stable branch
+            - Use at your own risk - this is a development build
+          files: release_assets/*
+          draft: false
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
