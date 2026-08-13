@@ -7,7 +7,7 @@
 
 [![License](https://img.shields.io/github/license/telecomadm1145/CasioEmuMsvc?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20Android%20%7C%20iOS-blue?style=flat-square)](docs/README.en.md#-platform-support)
-[![Stars](https://img.shields.io/github/stars/telecomadm1145/CasioEmuMsvc?style=flat-square)](https://github.com/pkdev-en/CasioEmuMsvc-ios/stargazers)
+[![Stars](https://img.shields.io/github/stars/pkdev-en/CaáioEmuMsvc-ios?style=flat-square)](https://github.com/pkdev-en/CasioEmuMsvc-ios/stargazers)
 [![Discord](https://img.shields.io/discord/NM39VPdJTf?label=Discord&logo=discord&style=flat-square)](https://discord.gg/hCEBVQMcmX)
 
 </div>
