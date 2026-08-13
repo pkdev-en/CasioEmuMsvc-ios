@@ -124,5 +124,6 @@ TrollStore 的安装方式因 iOS 版本和设备型号而异。
 
 > If there are any errors, please let me know.
 
+---
 
-> last updated: 09:59 am gmt +7 | 8/13/2026
+> last updated: 10:01 am gmt +7 | 8/13/2026
