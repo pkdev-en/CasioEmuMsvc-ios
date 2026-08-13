@@ -121,6 +121,5 @@ TrollStore 的安装方式因 iOS 版本和设备型号而异。
 > ⚠️ **法律声明**：本应用依据 **GPL-3.0** 协议授权。用户须自行承担其所在地区使用 ROM 文件的法律责任。
 
 ---
->If there are any errors, please let me know.
----
+> If there are any errors, please let me know.
 > last updated: 09:59 am gmt +7 | 8/13/2026
