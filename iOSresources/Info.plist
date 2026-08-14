@@ -27,7 +27,7 @@
     <key>UIViewControllerBasedStatusBarAppearance</key>
     <false/>
 
-    <!-- Icon: dÃ¹ng CFBundleIconFiles thay vÃ¬ xcassets -->
+    <!-- Icon: dÃÂ¹ng CFBundleIconFiles thay vÃÂ¬ xcassets -->
     <key>CFBundleIcons</key>
     <dict>
         <key>CFBundlePrimaryIcon</key>
@@ -55,5 +55,23 @@
     <true/>
     <key>LSSupportsOpeningDocumentsInPlace</key>
     <true/>
+
+    <!-- LÆ°á»£c Äá» URL riÃªng dÃ¹ng cho lá»i táº¯t mÃ n hÃ¬nh chÃ­nh (Home Screen web clip).
+         Khi ngÆ°á»i dÃ¹ng báº¥m vÃ o lá»i táº¯t ÄÃ£ táº¡o qua "Táº¡o lá»i táº¯t...", iOS sáº½ má»
+         URL dáº¡ng casioemu://launch?model=<ten-thu-muc-model>, vÃ  SDL sáº½ bÃ¡o
+         URL nÃ y vá» app dÆ°á»i dáº¡ng sá»± kiá»n SDL_DROPFILE (xem
+         HandlePotentialShortcutLaunch trong StartupUi.cpp) Äá» app tá»± má» ÄÃºng
+         model ÄÃ³, khÃ´ng cáº§n qua mÃ n hÃ¬nh chá»n model. -->
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>com.pkdevvn.casioemu.shortcut</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>casioemu</string>
+            </array>
+        </dict>
+    </array>
 </dict>
 </plist>
