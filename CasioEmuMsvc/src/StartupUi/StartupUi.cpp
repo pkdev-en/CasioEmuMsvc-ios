@@ -43,7 +43,7 @@
 #endif
 
 #ifdef __IOS__
-#include "Ext/iOSNativeBridge.h"
+#include "Ext/IOSNativeBridge.h"
 #endif
 
 #ifdef __ANDROID__
@@ -709,9 +709,23 @@ static bool CreateDesktopShortcut(const std::filesystem::path& model_path, const
 	return true;
 }
 #elif defined(IOS)
-	static bool CreateDesktopShortcut(const std::filesystem::path& model_path, const std::string& shortcut_name, const std::string& icon_path_str) {
-	return false;
+static bool CreateDesktopShortcut(const std::filesystem::path& model_path, const std::string& shortcut_name, const std::string& icon_path_str) {
+	// iOS has no public API to place an icon on the Home Screen directly.
+	// We follow the same process LiveContainer uses
+	// (https://github.com/LiveContainer/LiveContainer): build a WebClip
+	// configuration profile whose URL calls back into this app via the
+	// casioemu:// scheme, and hand it to an in-app Safari view so iOS routes
+	// it into the system "Install Profile" flow. See
+	// IOSNativeBridge.mm (presentCreateHomeScreenShortcut) for the native
+	// side, and HandlePotentialShortcutLaunch() further down in this file
+	// for how the resulting tap is routed back into a direct model launch.
+	std::string modelId = model_path.filename().string();
+	if (modelId.empty()) {
+		std::cerr << "[Shortcut] Cannot create a shortcut for an unnamed model path: " << model_path << "\n";
+		return false;
 	}
+	return presentCreateHomeScreenShortcut(modelId.c_str(), shortcut_name.c_str(), icon_path_str.c_str());
+}
 #endif
 
 namespace casioemu {
@@ -1153,6 +1167,22 @@ namespace casioemu {
 					if (!name_str.empty()) {
 						try {
 							bool ok = CreateDesktopShortcut(shortcut_model_path, name_str, icon_str);
+#ifdef IOS
+							// On iOS, CreateDesktopShortcut() hands off to an
+							// async in-app Safari presentation that walks the
+							// user through installing the Home Screen web
+							// clip profile (see presentCreateHomeScreenShortcut
+							// in IOSNativeBridge.mm) -- that view IS the
+							// next-step UI. Showing our own "success" alert
+							// immediately after would either be redundant or
+							// race that presentation for the screen, so we
+							// only need to surface the failure case here.
+							if (!ok) {
+								SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
+									"StartupUI.CreateShortcutTitle"_lc,
+									"StartupUI.ShortcutFailed"_lc, nullptr);
+							}
+#else
 							if (ok) {
 								SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION,
 									"StartupUI.CreateShortcutTitle"_lc,
@@ -1163,6 +1193,7 @@ namespace casioemu {
 									"StartupUI.CreateShortcutTitle"_lc,
 									"StartupUI.ShortcutFailed"_lc, nullptr);
 							}
+#endif
 						}
 						catch (const std::exception& e) {
 							std::cerr << "[Shortcut] Error: " << e.what() << std::endl;
@@ -1468,6 +1499,78 @@ public:
 	}
 };
 
+#ifdef IOS
+// Percent-decodes a URL-encoded string (e.g. "%20" -> " "). Used to recover
+// a model's folder name from the casioemu://launch?model=<encoded> URL built
+// in IOSNativeBridge.mm's presentCreateHomeScreenShortcut().
+static std::string UrlPercentDecode(const std::string& in) {
+	std::string out;
+	out.reserve(in.size());
+	for (size_t i = 0; i < in.size(); ++i) {
+		if (in[i] == '%' && i + 2 < in.size() && isxdigit((unsigned char)in[i + 1]) && isxdigit((unsigned char)in[i + 2])) {
+			auto hexval = [](char c) -> int {
+				if (c >= '0' && c <= '9') return c - '0';
+				return tolower((unsigned char)c) - 'a' + 10;
+			};
+			out += (char)((hexval(in[i + 1]) << 4) | hexval(in[i + 2]));
+			i += 2;
+		}
+		else {
+			out += in[i];
+		}
+	}
+	return out;
+}
+
+// Extracts and decodes the "model" query parameter from a
+// casioemu://launch?model=<id> URL string. Returns an empty string if the
+// URL doesn't look like one of our own shortcut launch URLs.
+static std::string ParseShortcutLaunchModelId(const std::string& url) {
+	const std::string prefix = "casioemu://";
+	if (url.compare(0, prefix.size(), prefix) != 0)
+		return "";
+	auto qpos = url.find("model=");
+	if (qpos == std::string::npos)
+		return "";
+	qpos += 6; // strlen("model=")
+	auto end = url.find('&', qpos);
+	std::string raw = (end == std::string::npos) ? url.substr(qpos) : url.substr(qpos, end - qpos);
+	return UrlPercentDecode(raw);
+}
+
+// Checks whether an SDL event is our Home Screen shortcut calling back into
+// the app. SDL's iOS backend forwards *every* application:openURL: call
+// (including custom URL schemes, not just real file URLs) as an
+// SDL_DROPFILE event carrying the full URL string -- see
+// SDL_uikitappdelegate.m's sendDropFileForURL:. If it matches, this resolves
+// it to an on-disk model and sets ui.selected_path so the startup loop below
+// exits straight into that model, the same way tapping a LiveContainer web
+// clip drops you straight into the contained app instead of LiveContainer's
+// own app list.
+static void HandlePotentialShortcutLaunch(const SDL_Event& event, casioemu::StartupUi& ui) {
+	if (event.type != SDL_DROPFILE || !event.drop.file)
+		return;
+
+	std::string dropped = event.drop.file;
+	SDL_free(event.drop.file);
+
+	std::string modelId = ParseShortcutLaunchModelId(dropped);
+	if (modelId.empty())
+		return;
+
+	std::filesystem::path candidate = std::filesystem::path("models") / modelId;
+	std::error_code ec;
+	if (std::filesystem::is_regular_file(candidate / "config.bin", ec)) {
+		ui.selected_path = candidate;
+	}
+	else {
+		std::cerr << "[Shortcut] Launch URL referenced a model that no longer exists: " << modelId << "\n";
+	}
+}
+#else
+static inline void HandlePotentialShortcutLaunch(const SDL_Event&, casioemu::StartupUi&) {}
+#endif
+
 void HandleStartupEvent(const SDL_Event& event) {
 	ImGui_ImplSDL2_ProcessEvent(&event);
 }
@@ -1561,6 +1664,7 @@ std::string sui_loop() {
 			if (event.type == frame_event) {
 				needs_render = true;
 			}
+			HandlePotentialShortcutLaunch(event, ui);
 			while (SDL_PollEvent(&event)) {
 				ImGui_ImplSDL2_ProcessEvent(&event);
 				if (event.type == SDL_QUIT) {
@@ -1572,6 +1676,7 @@ std::string sui_loop() {
 				if (event.type == frame_event) {
 					needs_render = true;
 				}
+				HandlePotentialShortcutLaunch(event, ui);
 			}
 		}
 		if (needs_render) {
