@@ -345,6 +345,12 @@ std::function<void(std::filesystem::path)> SystemDialogs::folderSaveCallback;
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
+// NOTE: the file on disk is "IOSNativeBridge.h" (capital I). The include
+// below must match that case exactly -- macOS's default case-insensitive
+// filesystem hides a mismatch here, but it breaks on a case-sensitive one
+// (e.g. Linux cross-builds, or a case-sensitive APFS volume).
+#include "IOSNativeBridge.h"
+
 @interface SysDialogDelegate : NSObject <UIDocumentPickerDelegate>
 @property (nonatomic, assign) std::function<void(std::filesystem::path)> callback;
 @end
@@ -409,8 +415,48 @@ void SystemDialogs::OpenFileDialog(std::function<void(std::filesystem::path)> ca
 }
 
 void SystemDialogs::SaveFileDialog(std::string preferred_name, std::function<void(std::filesystem::path)> callback) {
-    // Unsupported on basic iOS dialogs without creating temporary file first
-    if (callback) callback(std::filesystem::path(""));
+    // iOS has no dialog that hands back an arbitrary writable destination
+    // path the way the Win32/macOS "Save As" panels do -- a
+    // UIDocumentPickerViewController's export mode can only hand off a file
+    // that already exists on disk with real content. So instead we:
+    //   1. Compute a private temp file path (no picker needed for this --
+    //      the app's own temp directory is always writable).
+    //   2. Call the caller's callback with that temp path *synchronously*,
+    //      exactly like the other platforms do, so the existing call sites
+    //      (RomPackage export, snapshot export, asm export, ...) can write
+    //      their bytes with a plain std::ofstream, unmodified.
+    //   3. Once that write has finished, hand the now-populated temp file to
+    //      the native export/share picker (IOSNativeBridge.mm's
+    //      saveFileDialog:) so the user can choose the real destination
+    //      (Files, iCloud Drive, AirDrop, etc).
+    if (!callback) return;
+
+    std::error_code ec;
+    std::filesystem::path tempDir = std::filesystem::temp_directory_path(ec);
+    if (ec) {
+        std::cerr << "[SystemDialogs] SaveFileDialog: no temp directory available: " << ec.message() << std::endl;
+        return;
+    }
+    tempDir /= "casioemu_export";
+    // Start from a clean slate so a stale file from a previous export never
+    // lingers around or gets offered up by mistake.
+    std::filesystem::remove_all(tempDir, ec);
+    std::filesystem::create_directories(tempDir, ec);
+    if (ec) {
+        std::cerr << "[SystemDialogs] SaveFileDialog: cannot create temp directory: " << ec.message() << std::endl;
+        return;
+    }
+
+    std::string safeName = preferred_name.empty() ? std::string("export.dat") : preferred_name;
+    std::filesystem::path tempPath = tempDir / safeName;
+
+    callback(tempPath); // caller writes the real bytes here (e.g. Binary::Write)
+
+    if (std::filesystem::exists(tempPath, ec)) {
+        saveFileDialog(tempPath.string().c_str());
+    } else {
+        std::cerr << "[SystemDialogs] SaveFileDialog: caller did not write " << tempPath << ", nothing to export.\n";
+    }
 }
 
 void SystemDialogs::OpenFolderDialog(std::function<void(std::filesystem::path)> callback) {
