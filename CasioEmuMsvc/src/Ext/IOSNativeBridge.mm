@@ -4,9 +4,10 @@
 #import <UIKit/UIKit.h>
 #import <AudioToolbox/AudioToolbox.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+#import <SafariServices/SafariServices.h>
 
 // Include the header we just made
-#include "iOSNativeBridge.h"
+#include "IOSNativeBridge.h"
 
 // Singleton to act as the UIDocumentPickerDelegate
 // _isOpenMode tracks whether the last-presented picker was an Open (YES) or Export/Save (NO) picker,
@@ -150,12 +151,21 @@ float getSafeRight() {
     });
 }
 
-- (void)saveFileDialog:(NSString*)preferredName {
+// filePath must already point to a real, already-written file (see the
+// contract documented in IOSNativeBridge.h) -- this presents the system
+// export/share picker so the user can choose where that file actually goes.
+- (void)saveFileDialog:(NSString*)filePath {
     dispatch_async(dispatch_get_main_queue(), ^{
+        if (filePath.length == 0 || ![[NSFileManager defaultManager] fileExistsAtPath:filePath]) {
+            NSLog(@"[iOSNativeBridge] saveFileDialog: no such file to export: %@", filePath);
+            onExportFailed();
+            return;
+        }
         self.isOpenMode = NO; // Track intent: save/export
+        NSURL *fileURL = [NSURL fileURLWithPath:filePath];
         UIDocumentPickerViewController *picker;
         picker = [[UIDocumentPickerViewController alloc]
-            initForExportingURLs:@[] asCopy:NO];
+            initForExportingURLs:@[fileURL] asCopy:YES];
         picker.delegate = self;
         [[self rootViewController] presentViewController:picker animated:YES completion:nil];
     });
@@ -285,9 +295,9 @@ void openFileDialog() {
     [[iOSNativeBridge sharedInstance] openFileDialog];
 }
 
-void saveFileDialog(const char* preferredName) {
-    NSString *name = preferredName ? [NSString stringWithUTF8String:preferredName] : @"Untitled";
-    [[iOSNativeBridge sharedInstance] saveFileDialog:name];
+void saveFileDialog(const char* filePath) {
+    NSString *path = filePath ? [NSString stringWithUTF8String:filePath] : @"";
+    [[iOSNativeBridge sharedInstance] saveFileDialog:path];
 }
 
 void openFolderDialog() {
@@ -296,5 +306,139 @@ void openFolderDialog() {
 
 void saveFolderDialog() {
     [[iOSNativeBridge sharedInstance] saveFolderDialog];
+}
+
+#pragma mark - Home Screen Shortcut (WebClip) Creation
+//
+// iOS has no public API to add an icon to the Home Screen directly. This
+// follows the same process LiveContainer uses
+// (https://github.com/LiveContainer/LiveContainer -- see
+// LCAppInfo.m:generateWebClipConfigWithContainerId:iconStyle: and
+// LCAppListView.swift:installMdm):
+//
+//   1. Build a WebClip configuration profile (PayloadType
+//      com.apple.webClip.managed) whose URL points back into this app via
+//      the private casioemu:// scheme, carrying the target model's folder
+//      name as a query parameter.
+//   2. Serialize the profile to plist XML, base64-encode it, and wrap it in
+//      a "data:application/x-apple-aspen-config;base64,..." URL -- iOS
+//      recognises that MIME type and routes it into the system
+//      "Install Profile" flow.
+//   3. Load that URL in an in-app SFSafariViewController, exactly like
+//      LiveContainer's installMdm(data:).
+//
+// Once the user installs the profile, a Home Screen icon appears with the
+// requested name/icon; tapping it relaunches this app via the casioemu://
+// URL, which SDL's iOS backend forwards as an SDL_DROPFILE event carrying
+// the full URL string (see SDL_uikitappdelegate.m: sendDropFileForURL:).
+// StartupUi.cpp's HandlePotentialShortcutLaunch() parses that back into a
+// direct model launch, the same way tapping a LiveContainer web clip drops
+// you straight into the contained app instead of LiveContainer's own menu.
+
+static NSString *PercentEncodeShortcutQueryValue(NSString *value) {
+    NSMutableCharacterSet *allowed = [[NSCharacterSet URLQueryAllowedCharacterSet] mutableCopy];
+    // Also escape '&' and '=' so the value can never be mistaken for a
+    // second query key/value pair when the C++ side re-parses the URL.
+    [allowed removeCharactersInString:@"&="];
+    NSString *encoded = [value stringByAddingPercentEncodingWithAllowedCharacters:allowed];
+    return encoded ?: @"";
+}
+
+static UIImage* LoadShortcutIcon(const char* iconPathOrNull) {
+    if (iconPathOrNull && iconPathOrNull[0] != '\0') {
+        NSString *path = [NSString stringWithUTF8String:iconPathOrNull];
+        UIImage *custom = [UIImage imageWithContentsOfFile:path];
+        if (custom) return custom;
+        NSLog(@"[Shortcut] Could not load custom icon at %@, falling back to the app icon.", path);
+    }
+    // Fall back to the app's own bundled icon. This project ships raw PNGs
+    // (see iOSresources/Assets.xcassets/AppIcon.appiconset + CMakeLists.txt)
+    // rather than an .xcassets-driven app icon, so we read one of those
+    // directly instead of using +[UIImage imageNamed:].
+    NSString *defaultIconPath = [[NSBundle mainBundle] pathForResource:@"180" ofType:@"png"];
+    if (defaultIconPath) {
+        UIImage *def = [UIImage imageWithContentsOfFile:defaultIconPath];
+        if (def) return def;
+    }
+    return nil;
+}
+
+bool presentCreateHomeScreenShortcut(const char* modelIdentifier, const char* shortcutName, const char* iconPathOrNull) {
+    if (!modelIdentifier || modelIdentifier[0] == '\0') {
+        NSLog(@"[Shortcut] Missing model identifier.");
+        return false;
+    }
+
+    NSString *modelId = [NSString stringWithUTF8String:modelIdentifier];
+    NSString *label = (shortcutName && shortcutName[0] != '\0')
+        ? [NSString stringWithUTF8String:shortcutName]
+        : modelId;
+    NSString *bundleId = [[NSBundle mainBundle] bundleIdentifier];
+    if (bundleId.length == 0) bundleId = @"com.pkdevvn.casioemu";
+
+    UIImage *icon = LoadShortcutIcon(iconPathOrNull);
+    NSData *iconData = icon ? UIImagePNGRepresentation(icon) : [NSData data];
+
+    NSString *launchUrl = [NSString stringWithFormat:@"casioemu://launch?model=%@",
+        PercentEncodeShortcutQueryValue(modelId)];
+    NSString *webClipUUID = [[NSUUID UUID] UUIDString];
+    NSString *profileUUID = [[NSUUID UUID] UUIDString];
+
+    NSDictionary *webClipPayload = @{
+        @"FullScreen": @YES,
+        @"Icon": iconData,
+        @"IgnoreManifestScope": @YES,
+        @"IsRemovable": @YES,
+        @"Label": label,
+        @"PayloadDescription": [NSString stringWithFormat:@"Web Clip for launching \"%@\" in CasioEmuMsvc", label],
+        @"PayloadDisplayName": label,
+        @"PayloadIdentifier": [NSString stringWithFormat:@"%@.shortcut.%@", bundleId, webClipUUID],
+        @"PayloadType": @"com.apple.webClip.managed",
+        @"PayloadUUID": webClipUUID,
+        @"PayloadVersion": @(1),
+        @"Precomposed": @NO,
+        @"URL": launchUrl
+    };
+
+    NSDictionary *profile = @{
+        @"ConsentText": @{
+            @"default": [NSString stringWithFormat:@"This installs a Home Screen shortcut that opens \"%@\" directly in CasioEmuMsvc.", label]
+        },
+        @"PayloadContent": @[webClipPayload],
+        @"PayloadDescription": [NSString stringWithFormat:@"Home Screen shortcut for \"%@\"", label],
+        @"PayloadDisplayName": [NSString stringWithFormat:@"%@ Shortcut", label],
+        @"PayloadIdentifier": [NSString stringWithFormat:@"%@.shortcut.%@", bundleId, profileUUID],
+        @"PayloadOrganization": @"CasioEmuMsvc",
+        @"PayloadRemovalDisallowed": @NO,
+        @"PayloadType": @"Configuration",
+        @"PayloadUUID": profileUUID,
+        @"PayloadVersion": @(1)
+    };
+
+    NSError *plistError = nil;
+    NSData *plistData = [NSPropertyListSerialization dataWithPropertyList:profile
+                                                                     format:NSPropertyListXMLFormat_v1_0
+                                                                    options:0
+                                                                      error:&plistError];
+    if (!plistData || plistError) {
+        NSLog(@"[Shortcut] Failed to serialize the configuration profile: %@", plistError);
+        return false;
+    }
+
+    NSString *dataUrlString = [NSString stringWithFormat:@"data:application/x-apple-aspen-config;base64,%@",
+        [plistData base64EncodedStringWithOptions:0]];
+    NSURL *dataUrl = [NSURL URLWithString:dataUrlString];
+    if (!dataUrl) {
+        NSLog(@"[Shortcut] Failed to build the profile-install URL.");
+        return false;
+    }
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        SFSafariViewController *safari = [[SFSafariViewController alloc] initWithURL:dataUrl];
+        safari.modalPresentationStyle = UIModalPresentationFormSheet;
+        [[[iOSNativeBridge sharedInstance] rootViewController] presentViewController:safari animated:YES completion:nil];
+    });
+
+    return true;
 }
 #endif
