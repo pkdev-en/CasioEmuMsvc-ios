@@ -6,6 +6,18 @@
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <SafariServices/SafariServices.h>
 
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <cerrno>
+#include <cstring>
+#include <thread>
+#include <mutex>
+#include <map>
+#include <vector>
+#include <string>
+
 // Include the header we just made
 #include "IOSNativeBridge.h"
 
@@ -308,10 +320,195 @@ void saveFolderDialog() {
     [[iOSNativeBridge sharedInstance] saveFolderDialog];
 }
 
+#pragma mark - Local Loopback HTTP Server (serves the shortcut profile to Safari)
+//
+// iOS's "download a configuration profile" flow needs Safari to actually
+// fetch the profile over HTTP(S) from somewhere. Rather than the
+// "data:application/x-apple-aspen-config;base64,..." trick (which gets
+// unwieldy once the profile's Icon payload makes the URL long), this app
+// runs a tiny loopback-only HTTP server inside the process: each generated
+// profile is registered under a random one-time path, and
+// presentCreateHomeScreenShortcut() below points an in-app Safari view at
+// "http://localhost:<port>/shortcut/<token>.mobileconfig" -- Safari
+// downloads it like any other configuration-profile link and iOS takes over
+// with the normal "Install Profile" flow in Settings.
+//
+// The listener is bound to 127.0.0.1 only (never 0.0.0.0), so nothing
+// outside the device -- not even other devices on the same Wi-Fi -- can ever
+// reach it; this also keeps it outside the scope of iOS's "Local Network"
+// permission prompt, which only applies to traffic that can reach other
+// devices.
+namespace {
+
+class LocalProfileServer {
+public:
+	static LocalProfileServer& Shared() {
+		static LocalProfileServer instance;
+		return instance;
+	}
+
+	// Registers `data` to be served at
+	// http://localhost:<port>/shortcut/<token>.mobileconfig, starting the
+	// server on first use. Returns that full URL, or an empty string if the
+	// server could not be started.
+	std::string Publish(NSData* data) {
+		if (!EnsureRunning())
+			return "";
+
+		std::string token = [[[NSUUID UUID] UUIDString] lowercaseString].UTF8String;
+
+		const uint8_t* bytes = (const uint8_t*)data.bytes;
+		{
+			std::lock_guard<std::mutex> lock(mutex_);
+			pending_[token] = std::vector<uint8_t>(bytes, bytes + data.length);
+		}
+
+		char urlBuf[128];
+		snprintf(urlBuf, sizeof(urlBuf), "http://localhost:%d/shortcut/%s.mobileconfig", port_, token.c_str());
+		return std::string(urlBuf);
+	}
+
+private:
+	LocalProfileServer() = default;
+	LocalProfileServer(const LocalProfileServer&) = delete;
+	LocalProfileServer& operator=(const LocalProfileServer&) = delete;
+
+	bool EnsureRunning() {
+		std::lock_guard<std::mutex> lock(mutex_);
+		if (running_)
+			return true;
+
+		int fd = socket(AF_INET, SOCK_STREAM, 0);
+		if (fd < 0) {
+			NSLog(@"[Shortcut] LocalProfileServer: socket() failed: %s", strerror(errno));
+			return false;
+		}
+
+		int yes = 1;
+		setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+#ifdef SO_NOSIGPIPE
+		setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &yes, sizeof(yes));
+#endif
+
+		sockaddr_in addr{};
+		addr.sin_family = AF_INET;
+		addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK); // 127.0.0.1 -- device-local only
+		addr.sin_port = 0; // ask the OS for any free port
+
+		if (bind(fd, (sockaddr*)&addr, sizeof(addr)) != 0) {
+			NSLog(@"[Shortcut] LocalProfileServer: bind() failed: %s", strerror(errno));
+			close(fd);
+			return false;
+		}
+
+		socklen_t addrLen = sizeof(addr);
+		if (getsockname(fd, (sockaddr*)&addr, &addrLen) != 0) {
+			NSLog(@"[Shortcut] LocalProfileServer: getsockname() failed: %s", strerror(errno));
+			close(fd);
+			return false;
+		}
+		port_ = ntohs(addr.sin_port);
+
+		if (listen(fd, 8) != 0) {
+			NSLog(@"[Shortcut] LocalProfileServer: listen() failed: %s", strerror(errno));
+			close(fd);
+			return false;
+		}
+
+		listenFd_ = fd;
+		running_ = true;
+		std::thread(&LocalProfileServer::AcceptLoop, this).detach();
+		return true;
+	}
+
+	void AcceptLoop() {
+		while (true) {
+			sockaddr_in clientAddr{};
+			socklen_t clientLen = sizeof(clientAddr);
+			int clientFd = accept(listenFd_, (sockaddr*)&clientAddr, &clientLen);
+			if (clientFd < 0) {
+				if (errno == EINTR)
+					continue;
+				break; // listener was closed or hit a fatal error; stop serving
+			}
+#ifdef SO_NOSIGPIPE
+			int yes = 1;
+			setsockopt(clientFd, SOL_SOCKET, SO_NOSIGPIPE, &yes, sizeof(yes));
+#endif
+			std::thread(&LocalProfileServer::HandleClient, this, clientFd).detach();
+		}
+	}
+
+	void HandleClient(int clientFd) {
+		char request[2048];
+		ssize_t n = recv(clientFd, request, sizeof(request) - 1, 0);
+		if (n > 0) {
+			std::string token = ExtractToken(ExtractPath(std::string(request, (size_t)n)));
+
+			std::vector<uint8_t> bytes;
+			bool found = false;
+			if (!token.empty()) {
+				std::lock_guard<std::mutex> lock(mutex_);
+				auto it = pending_.find(token);
+				if (it != pending_.end()) {
+					bytes = it->second;
+					found = true;
+				}
+			}
+
+			if (found) {
+				std::string header = "HTTP/1.1 200 OK\r\n"
+					"Content-Type: application/x-apple-aspen-config\r\n"
+					"Content-Length: " + std::to_string(bytes.size()) + "\r\n"
+					"Cache-Control: no-store\r\n"
+					"Connection: close\r\n\r\n";
+				send(clientFd, header.data(), header.size(), 0);
+				send(clientFd, bytes.data(), bytes.size(), 0);
+			}
+			else {
+				static const char notFound[] =
+					"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+				send(clientFd, notFound, sizeof(notFound) - 1, 0);
+			}
+		}
+		close(clientFd);
+	}
+
+	static std::string ExtractPath(const std::string& request) {
+		// First line looks like "GET /shortcut/<token>.mobileconfig HTTP/1.1"
+		auto lineEnd = request.find("\r\n");
+		std::string line = (lineEnd == std::string::npos) ? request : request.substr(0, lineEnd);
+		auto sp1 = line.find(' ');
+		if (sp1 == std::string::npos)
+			return "";
+		auto sp2 = line.find(' ', sp1 + 1);
+		if (sp2 == std::string::npos)
+			return "";
+		return line.substr(sp1 + 1, sp2 - sp1 - 1);
+	}
+
+	static std::string ExtractToken(const std::string& path) {
+		auto slash = path.find_last_of('/');
+		std::string file = (slash == std::string::npos) ? path : path.substr(slash + 1);
+		const std::string suffix = ".mobileconfig";
+		if (file.size() <= suffix.size() || file.compare(file.size() - suffix.size(), suffix.size(), suffix) != 0)
+			return "";
+		return file.substr(0, file.size() - suffix.size());
+	}
+
+	std::mutex mutex_;
+	std::map<std::string, std::vector<uint8_t>> pending_;
+	int listenFd_ = -1;
+	int port_ = 0;
+	bool running_ = false;
+};
+
+} // namespace
+
 #pragma mark - Home Screen Shortcut (WebClip) Creation
 //
 // iOS has no public API to add an icon to the Home Screen directly. This
-// follows the same process LiveContainer uses
+// follows the same overall process LiveContainer uses
 // (https://github.com/LiveContainer/LiveContainer -- see
 // LCAppInfo.m:generateWebClipConfigWithContainerId:iconStyle: and
 // LCAppListView.swift:installMdm):
@@ -320,12 +517,11 @@ void saveFolderDialog() {
 //      com.apple.webClip.managed) whose URL points back into this app via
 //      the private casioemu:// scheme, carrying the target model's folder
 //      name as a query parameter.
-//   2. Serialize the profile to plist XML, base64-encode it, and wrap it in
-//      a "data:application/x-apple-aspen-config;base64,..." URL -- iOS
-//      recognises that MIME type and routes it into the system
-//      "Install Profile" flow.
-//   3. Load that URL in an in-app SFSafariViewController, exactly like
-//      LiveContainer's installMdm(data:).
+//   2. Serialize the profile to plist XML and publish it on the loopback
+//      HTTP server above, at "http://localhost:<port>/shortcut/<token>.mobileconfig".
+//   3. Load that URL in an in-app SFSafariViewController; Safari downloads
+//      it, recognises the application/x-apple-aspen-config content type,
+//      and routes it into the system "Install Profile" flow.
 //
 // Once the user installs the profile, a Home Screen icon appears with the
 // requested name/icon; tapping it relaunches this app via the casioemu://
@@ -425,16 +621,20 @@ bool presentCreateHomeScreenShortcut(const char* modelIdentifier, const char* sh
         return false;
     }
 
-    NSString *dataUrlString = [NSString stringWithFormat:@"data:application/x-apple-aspen-config;base64,%@",
-        [plistData base64EncodedStringWithOptions:0]];
-    NSURL *dataUrl = [NSURL URLWithString:dataUrlString];
-    if (!dataUrl) {
+    std::string localUrl = LocalProfileServer::Shared().Publish(plistData);
+    if (localUrl.empty()) {
+        NSLog(@"[Shortcut] Failed to start the local profile server.");
+        return false;
+    }
+
+    NSURL *profileUrl = [NSURL URLWithString:[NSString stringWithUTF8String:localUrl.c_str()]];
+    if (!profileUrl) {
         NSLog(@"[Shortcut] Failed to build the profile-install URL.");
         return false;
     }
 
     dispatch_async(dispatch_get_main_queue(), ^{
-        SFSafariViewController *safari = [[SFSafariViewController alloc] initWithURL:dataUrl];
+        SFSafariViewController *safari = [[SFSafariViewController alloc] initWithURL:profileUrl];
         safari.modalPresentationStyle = UIModalPresentationFormSheet;
         [[[iOSNativeBridge sharedInstance] rootViewController] presentViewController:safari animated:YES completion:nil];
     });
