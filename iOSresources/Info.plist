@@ -56,6 +56,27 @@
     <key>LSSupportsOpeningDocumentsInPlace</key>
     <true/>
 
+    <!-- Cho phÃ©p Safari táº£i há» sÆ¡ qua HTTP tá»« server cá»¥c bá» (127.0.0.1) mÃ 
+         app tá»± cháº¡y khi táº¡o lá»i táº¯t mÃ n hÃ¬nh chÃ­nh (xem LocalProfileServer
+         trong IOSNativeBridge.mm). ATS cháº·n HTTP thÆ°á»ng theo máº·c Äá»nh, nÃªn
+         cáº§n khai bÃ¡o ngoáº¡i lá» riÃªng cho "localhost"; pháº¡m vi nÃ y KHÃNG
+         áº£nh hÆ°á»ng Äáº¿n cÃ¡c káº¿t ná»i máº¡ng khÃ¡c cá»§a app. -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+        <key>NSExceptionDomains</key>
+        <dict>
+            <key>localhost</key>
+            <dict>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key>
+                <true/>
+                <key>NSIncludesSubdomains</key>
+                <false/>
+            </dict>
+        </dict>
+    </dict>
+
     <!-- LÆ°á»£c Äá» URL riÃªng dÃ¹ng cho lá»i táº¯t mÃ n hÃ¬nh chÃ­nh (Home Screen web clip).
          Khi ngÆ°á»i dÃ¹ng báº¥m vÃ o lá»i táº¯t ÄÃ£ táº¡o qua "Táº¡o lá»i táº¯t...", iOS sáº½ má»
          URL dáº¡ng casioemu://launch?model=<ten-thu-muc-model>, vÃ  SDL sáº½ bÃ¡o
