@@ -51,7 +51,8 @@
 #include "TouchMouseTranslator.h"
 
 #ifdef IOS
-#include "iOSNativeBridge.h"
+#include "Ext/IOSNativeBridge.h"
+#include "Ext/ShortcutLaunch.h"
 #endif
 
 using namespace casioemu;
@@ -511,6 +512,23 @@ int main(int argc, char* argv[]) {
 		case SDL_MOUSEBUTTONUP:
 		case SDL_MOUSEMOTION:
 #endif
+#ifdef IOS
+		case SDL_DROPFILE: {
+			// A Home Screen shortcut (see IOSNativeBridge.mm /
+			// presentCreateHomeScreenShortcut) was tapped while this, a
+			// *different*, model is already running. Stash the requested
+			// model and shut down the current session the same way a normal
+			// quit does; main()'s outer loop checks g_pending_shortcut_model
+			// right after this loop ends and, if set, loops back with the
+			// new model instead of exiting. See Ext/ShortcutLaunch.h.
+			auto resolved = ResolveShortcutLaunchEvent(event);
+			if (!resolved.empty()) {
+				g_pending_shortcut_model = resolved.string();
+				emulator.Shutdown();
+			}
+			break;
+		}
+#endif
 		case SDL_KEYDOWN:
 		case SDL_KEYUP:
 		case SDL_TEXTINPUT:
@@ -540,6 +558,17 @@ int main(int argc, char* argv[]) {
 	if (bg_txt) {
 		SDL_DestroyTexture(bg_txt);
 	}
+#ifdef IOS
+	if (!g_pending_shortcut_model.empty()) {
+		// A Home Screen shortcut asked for a different model while this one
+		// was running (see the SDL_DROPFILE case above) -- loop back to the
+		// top of while(true) with the new model already set, instead of
+		// falling through to sui_loop() or exiting.
+		argv_map["model"] = std::move(g_pending_shortcut_model);
+		g_pending_shortcut_model.clear();
+		continue;
+	}
+#endif
 	break;
 	} // end while(true)
 	
