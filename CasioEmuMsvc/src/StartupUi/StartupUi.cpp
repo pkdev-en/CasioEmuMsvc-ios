@@ -44,6 +44,7 @@
 
 #ifdef __IOS__
 #include "Ext/IOSNativeBridge.h"
+#include "Ext/ShortcutLaunch.h"
 #endif
 
 #ifdef __ANDROID__
@@ -906,7 +907,6 @@ namespace casioemu {
 		bool show_shortcut_popup = false;
 		std::filesystem::path shortcut_model_path{};
 		char shortcut_name[260]{};
-		char shortcut_icon[260]{};
 
 		inline std::string generate_random_string(size_t length) {
 			return util::Random::random_string(length);
@@ -1145,25 +1145,13 @@ namespace casioemu {
 				ImGui::SetNextItemWidth(300);
 				ImGui::InputText("##shortcut_name", shortcut_name, sizeof(shortcut_name));
 
-				ImGui::TextUnformatted("StartupUI.ShortcutIconHint"_lc);
-				ImGui::SetNextItemWidth(300);
-				ImGui::InputText("##shortcut_icon", shortcut_icon, sizeof(shortcut_icon));
-				ImGui::SameLine();
-				if (ImGui::Button("...##icon_browse")) {
-					SystemDialogs::OpenFileDialog([&](std::filesystem::path f) {
-						strncpy(shortcut_icon, f.string().c_str(), sizeof(shortcut_icon) - 1);
-						shortcut_icon[sizeof(shortcut_icon) - 1] = '\0';
-					});
-				}
-				ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "%s", "StartupUI.ShortcutIconOptional"_lc); // Make Clang happy.
-
 				ImGui::Spacing();
 				ImGui::Separator();
 				ImGui::Spacing();
 
 				if (ImGui::Button("Button.Positive"_lc, ImVec2(120, 0))) {
 					std::string name_str = shortcut_name;
-					std::string icon_str = shortcut_icon;
+					std::string icon_str; // icon path field removed; always use the default icon
 					if (!name_str.empty()) {
 						try {
 							bool ok = CreateDesktopShortcut(shortcut_model_path, name_str, icon_str);
@@ -1408,7 +1396,6 @@ namespace casioemu {
 					if (ImGui::MenuItem("StartupUI.CreateShortcut"_lc)) {
 						strncpy(shortcut_name, model.name.c_str(), sizeof(shortcut_name) - 1);
 						shortcut_name[sizeof(shortcut_name) - 1] = '\0';
-						shortcut_icon[0] = '\0';
 						shortcut_model_path = model.path;
 						show_shortcut_popup = true;
 					}
@@ -1499,77 +1486,18 @@ public:
 	}
 };
 
-#ifdef IOS
-// Percent-decodes a URL-encoded string (e.g. "%20" -> " "). Used to recover
-// a model's folder name from the casioemu://launch?model=<encoded> URL built
-// in IOSNativeBridge.mm's presentCreateHomeScreenShortcut().
-static std::string UrlPercentDecode(const std::string& in) {
-	std::string out;
-	out.reserve(in.size());
-	for (size_t i = 0; i < in.size(); ++i) {
-		if (in[i] == '%' && i + 2 < in.size() && isxdigit((unsigned char)in[i + 1]) && isxdigit((unsigned char)in[i + 2])) {
-			auto hexval = [](char c) -> int {
-				if (c >= '0' && c <= '9') return c - '0';
-				return tolower((unsigned char)c) - 'a' + 10;
-			};
-			out += (char)((hexval(in[i + 1]) << 4) | hexval(in[i + 2]));
-			i += 2;
-		}
-		else {
-			out += in[i];
-		}
-	}
-	return out;
-}
-
-// Extracts and decodes the "model" query parameter from a
-// casioemu://launch?model=<id> URL string. Returns an empty string if the
-// URL doesn't look like one of our own shortcut launch URLs.
-static std::string ParseShortcutLaunchModelId(const std::string& url) {
-	const std::string prefix = "casioemu://";
-	if (url.compare(0, prefix.size(), prefix) != 0)
-		return "";
-	auto qpos = url.find("model=");
-	if (qpos == std::string::npos)
-		return "";
-	qpos += 6; // strlen("model=")
-	auto end = url.find('&', qpos);
-	std::string raw = (end == std::string::npos) ? url.substr(qpos) : url.substr(qpos, end - qpos);
-	return UrlPercentDecode(raw);
-}
-
 // Checks whether an SDL event is our Home Screen shortcut calling back into
-// the app. SDL's iOS backend forwards *every* application:openURL: call
-// (including custom URL schemes, not just real file URLs) as an
-// SDL_DROPFILE event carrying the full URL string -- see
-// SDL_uikitappdelegate.m's sendDropFileForURL:. If it matches, this resolves
-// it to an on-disk model and sets ui.selected_path so the startup loop below
-// exits straight into that model, the same way tapping a LiveContainer web
-// clip drops you straight into the contained app instead of LiveContainer's
-// own app list.
-static void HandlePotentialShortcutLaunch(const SDL_Event& event, casioemu::StartupUi& ui) {
-	if (event.type != SDL_DROPFILE || !event.drop.file)
-		return;
-
-	std::string dropped = event.drop.file;
-	SDL_free(event.drop.file);
-
-	std::string modelId = ParseShortcutLaunchModelId(dropped);
-	if (modelId.empty())
-		return;
-
-	std::filesystem::path candidate = std::filesystem::path("models") / modelId;
-	std::error_code ec;
-	if (std::filesystem::is_regular_file(candidate / "config.bin", ec)) {
-		ui.selected_path = candidate;
-	}
-	else {
-		std::cerr << "[Shortcut] Launch URL referenced a model that no longer exists: " << modelId << "\n";
-	}
+// the app, and if so sets ui.selected_path so the startup loop below exits
+// straight into that model -- the same way tapping a LiveContainer web clip
+// drops you straight into the contained app instead of LiveContainer's own
+// app list. See Ext/ShortcutLaunch.h for the actual URL resolution (shared
+// with casioemu.cpp, which needs the same check while a *different* model
+// is already running -- see the comment at the top of that header).
+static inline void HandlePotentialShortcutLaunch(const SDL_Event& event, casioemu::StartupUi& ui) {
+	auto resolved = ResolveShortcutLaunchEvent(event);
+	if (!resolved.empty())
+		ui.selected_path = resolved;
 }
-#else
-static inline void HandlePotentialShortcutLaunch(const SDL_Event&, casioemu::StartupUi&) {}
-#endif
 
 void HandleStartupEvent(const SDL_Event& event) {
 	ImGui_ImplSDL2_ProcessEvent(&event);
