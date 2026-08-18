@@ -38,20 +38,20 @@ extern "C" void saveFileDialog(const char* filePath);
 extern "C" void openFolderDialog();
 extern "C" void saveFolderDialog();
 
-// Home Screen shortcut creation, following the same process LiveContainer
-// (https://github.com/LiveContainer/LiveContainer) uses: build a WebClip
-// configuration profile whose URL calls back into this app via the
-// casioemu:// scheme, then hand it to an in-app Safari view so iOS routes it
-// into the system "Install Profile" flow. Returns true once the profile was
-// built and handed to Safari -- actual installation still depends on the
-// user completing the Settings prompt, exactly like on LiveContainer.
+// Home Screen shortcut creation via Quick Actions
+// (UIApplicationShortcutItem / UIApplication.shortcutItems): long-pressing
+// the app's own icon shows up to 4 of these, and tapping one launches
+// straight into the model it names. This is a fully native, synchronous,
+// offline call -- no network, no profile install, no Safari involved.
+// Returns true once the shortcut was actually added to
+// UIApplication.shortcutItems.
 //   modelIdentifier - the model's folder name under "models/" (see
 //                      casioemu::StartupUi::Model::path); must not be
 //                      NULL/empty.
-//   shortcutName    - display label for the Home Screen icon; falls back to
+//   shortcutName    - display label for the Quick Action; falls back to
 //                      modelIdentifier if NULL/empty.
-//   iconPathOrNull  - optional path to a custom icon image; pass NULL or ""
-//                      to use the app's own icon.
+//   iconPathOrNull  - unused (kept for call-site compatibility across
+//                      platforms); Quick Actions use a fixed icon.
 extern "C" bool presentCreateHomeScreenShortcut(const char* modelIdentifier, const char* shortcutName, const char* iconPathOrNull);
 
 #endif /* iOSNativeBridge_h */
