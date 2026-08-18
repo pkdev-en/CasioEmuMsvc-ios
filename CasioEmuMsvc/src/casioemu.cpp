@@ -257,6 +257,9 @@ int main(int argc, char* argv[]) {
 	int sdlFlags = SDL_INIT_VIDEO | SDL_INIT_TIMER;
 	if (SDL_Init(sdlFlags) != 0)
 		PANIC("SDL_Init failed: %s\n", SDL_GetError());
+#ifdef IOS
+	InitShortcutWakeEvent();
+#endif
 
 #ifdef IOS
 	{
@@ -302,6 +305,18 @@ int main(int argc, char* argv[]) {
 	}
 	
 	while (true) {
+#ifdef IOS
+		if (argv_map["model"].empty()) {
+			// A Quick Action may have requested a specific model before
+			// this process's C++ main() even started running (see
+			// CasioEmuAppDelegate.mm's
+			// application:didFinishLaunchingWithOptions:, which iOS calls
+			// earlier, as part of the normal app-launch sequence). Prefer
+			// that over showing the menu, exactly like a command-line model
+			// argument would.
+			argv_map["model"] = TakePendingShortcutModel();
+		}
+#endif
 		if (argv_map["model"].empty()) {
 		auto s = sui_loop();
 		argv_map["model"] = std::move(s);
@@ -404,6 +419,33 @@ int main(int argc, char* argv[]) {
 		if (!SDL_PollEvent(&event))
 			continue;
 		busy = true;
+#ifdef IOS
+		{
+			// A Home Screen shortcut was tapped while this, a *different*,
+			// model is already running -- either a Quick Action
+			// (TakePendingShortcutModel(), set by CasioEmuAppDelegate.mm,
+			// possibly from a different thread) or, for backward
+			// compatibility, a tap on a shortcut created by an older build
+			// of this app (the casioemu:// URL scheme, delivered as this
+			// specific SDL_DROPFILE event and resolved via
+			// ResolveShortcutLaunchEvent()). Either way: stash the
+			// requested model and shut down the current session the same
+			// way a normal quit does; main()'s outer loop calls
+			// TakePendingShortcutModel() right after this loop ends and, if
+			// it returns something, loops back with the new model instead
+			// of exiting. See Ext/ShortcutLaunch.h.
+			std::string pendingModel = TakePendingShortcutModel();
+			if (pendingModel.empty()) {
+				auto resolved = ResolveShortcutLaunchEvent(event);
+				if (!resolved.empty())
+					pendingModel = resolved.string();
+			}
+			if (!pendingModel.empty()) {
+				SetPendingShortcutModel(pendingModel);
+				emulator.Shutdown();
+			}
+		}
+#endif
 		if (event.type == frame_event) {
 			SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
 			SDL_RenderClear(renderer);
@@ -513,21 +555,10 @@ int main(int argc, char* argv[]) {
 		case SDL_MOUSEMOTION:
 #endif
 #ifdef IOS
-		case SDL_DROPFILE: {
-			// A Home Screen shortcut (see IOSNativeBridge.mm /
-			// presentCreateHomeScreenShortcut) was tapped while this, a
-			// *different*, model is already running. Stash the requested
-			// model and shut down the current session the same way a normal
-			// quit does; main()'s outer loop checks g_pending_shortcut_model
-			// right after this loop ends and, if set, loops back with the
-			// new model instead of exiting. See Ext/ShortcutLaunch.h.
-			auto resolved = ResolveShortcutLaunchEvent(event);
-			if (!resolved.empty()) {
-				g_pending_shortcut_model = resolved.string();
-				emulator.Shutdown();
-			}
+		case SDL_DROPFILE:
+			// Already fully handled above (before this switch), together
+			// with Quick Action taps -- see the comment there.
 			break;
-		}
 #endif
 		case SDL_KEYDOWN:
 		case SDL_KEYUP:
@@ -559,14 +590,17 @@ int main(int argc, char* argv[]) {
 		SDL_DestroyTexture(bg_txt);
 	}
 #ifdef IOS
-	if (!g_pending_shortcut_model.empty()) {
-		// A Home Screen shortcut asked for a different model while this one
-		// was running (see the SDL_DROPFILE case above) -- loop back to the
-		// top of while(true) with the new model already set, instead of
-		// falling through to sui_loop() or exiting.
-		argv_map["model"] = std::move(g_pending_shortcut_model);
-		g_pending_shortcut_model.clear();
-		continue;
+	{
+		std::string nextModel = TakePendingShortcutModel();
+		if (!nextModel.empty()) {
+			// A Home Screen shortcut asked for a different model while this
+			// one was running (see the unified check near the top of the
+			// loop above) -- loop back to the top of while(true) with the
+			// new model already set, instead of falling through to
+			// sui_loop() or exiting.
+			argv_map["model"] = std::move(nextModel);
+			continue;
+		}
 	}
 #endif
 	break;
