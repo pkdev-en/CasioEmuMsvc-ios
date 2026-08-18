@@ -56,33 +56,15 @@
     <key>LSSupportsOpeningDocumentsInPlace</key>
     <true/>
 
-    <!-- Cho phÃ©p Safari táº£i há» sÆ¡ qua HTTP tá»« server cá»¥c bá» (127.0.0.1) mÃ 
-         app tá»± cháº¡y khi táº¡o lá»i táº¯t mÃ n hÃ¬nh chÃ­nh (xem LocalProfileServer
-         trong IOSNativeBridge.mm). ATS cháº·n HTTP thÆ°á»ng theo máº·c Äá»nh, nÃªn
-         cáº§n khai bÃ¡o ngoáº¡i lá» riÃªng cho "localhost"; pháº¡m vi nÃ y KHÃNG
-         áº£nh hÆ°á»ng Äáº¿n cÃ¡c káº¿t ná»i máº¡ng khÃ¡c cá»§a app. -->
-    <key>NSAppTransportSecurity</key>
-    <dict>
-        <key>NSAllowsLocalNetworking</key>
-        <true/>
-        <key>NSExceptionDomains</key>
-        <dict>
-            <key>localhost</key>
-            <dict>
-                <key>NSExceptionAllowsInsecureHTTPLoads</key>
-                <true/>
-                <key>NSIncludesSubdomains</key>
-                <false/>
-            </dict>
-        </dict>
-    </dict>
-
-    <!-- LÆ°á»£c Äá» URL riÃªng dÃ¹ng cho lá»i táº¯t mÃ n hÃ¬nh chÃ­nh (Home Screen web clip).
-         Khi ngÆ°á»i dÃ¹ng báº¥m vÃ o lá»i táº¯t ÄÃ£ táº¡o qua "Táº¡o lá»i táº¯t...", iOS sáº½ má»
-         URL dáº¡ng casioemu://launch?model=<ten-thu-muc-model>, vÃ  SDL sáº½ bÃ¡o
-         URL nÃ y vá» app dÆ°á»i dáº¡ng sá»± kiá»n SDL_DROPFILE (xem
-         HandlePotentialShortcutLaunch trong StartupUi.cpp) Äá» app tá»± má» ÄÃºng
-         model ÄÃ³, khÃ´ng cáº§n qua mÃ n hÃ¬nh chá»n model. -->
+    <!-- LÆ°á»£c Äá» URL riÃªng, giá»¯ láº¡i Äá» tÆ°Æ¡ng thÃ­ch ngÆ°á»£c vá»i cÃ¡c lá»i táº¯t ÄÃ£
+         táº¡o báº±ng báº£n build cÅ© (kiá»u WebClip). CÆ¡ cháº¿ táº¡o lá»i táº¯t hiá»n táº¡i
+         dÃ¹ng Home Screen Quick Actions (UIApplication.shortcutItems, xem
+         IOSNativeBridge.mm) nÃªn khÃ´ng cÃ²n cáº§n Äáº¿n scheme nÃ y Äá» táº¡o lá»i táº¯t
+         má»i, nhÆ°ng váº«n cáº§n khai bÃ¡o Äá» cÃ¡c lá»i táº¯t cÅ© (náº¿u ngÆ°á»i dÃ¹ng ÄÃ£ táº¡o
+         tá»« trÆ°á»c) cÃ²n má» ÄÆ°á»£c app ÄÃºng cÃ¡ch thay vÃ¬ bÃ¡o lá»i "khÃ´ng má» ÄÆ°á»£c
+         trang". Xem CasioEmuAppDelegate.mm cho luá»ng Quick Action, vÃ 
+         HandlePotentialShortcutLaunch trong StartupUi.cpp / pháº§n kiá»m tra
+         há»£p nháº¥t trong casioemu.cpp cho luá»ng URL scheme cÅ©. -->
     <key>CFBundleURLTypes</key>
     <array>
         <dict>
