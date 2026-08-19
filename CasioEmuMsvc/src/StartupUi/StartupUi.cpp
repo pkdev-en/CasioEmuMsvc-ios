@@ -44,8 +44,13 @@
 
 #ifdef __IOS__
 #include "Ext/IOSNativeBridge.h"
-#include "Ext/ShortcutLaunch.h"
 #endif
+// Included unconditionally (not just #ifdef __IOS__): ShortcutLaunch.h
+// provides its own internal no-op fallbacks for every other platform, via
+// #ifdef IOS/#else inside the header itself, specifically so call sites
+// like HandlePotentialShortcutLaunch() below don't need their own #ifdef
+// guards.
+#include "Ext/ShortcutLaunch.h"
 
 #ifdef __ANDROID__
 #include "../Gui/ThemeManager.h"
