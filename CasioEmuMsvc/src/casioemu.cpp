@@ -52,8 +52,12 @@
 
 #ifdef IOS
 #include "Ext/IOSNativeBridge.h"
-#include "Ext/ShortcutLaunch.h"
 #endif
+// Included unconditionally (not just #ifdef IOS): ShortcutLaunch.h provides
+// its own internal no-op fallbacks for every other platform, via
+// #ifdef IOS/#else inside the header itself, specifically so the checks in
+// the loops below don't need their own #ifdef guards.
+#include "Ext/ShortcutLaunch.h"
 
 using namespace casioemu;
 SDL_Surface* background;
