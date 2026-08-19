@@ -50,7 +50,7 @@
 #include <mutex>
 #include <string>
 
-#ifdef IOS
+#ifdef __IOS__
 
 // Resolves a model identifier (a folder name under "models/", as handed to
 // us via a shortcut's userInfo or the legacy URL scheme) to an on-disk model
@@ -165,7 +165,7 @@ inline std::filesystem::path ResolveShortcutLaunchEvent(const SDL_Event& event) 
 	return ResolveShortcutModelId(ShortcutLaunch_UrlPercentDecode(raw));
 }
 
-#else // !IOS -- no-ops everywhere else, so call sites don't need #ifdef guards
+#else // !__IOS__ -- no-ops everywhere else, so call sites don't need #ifdef guards
 
 inline void SetPendingShortcutModel(std::string) {}
 inline std::string TakePendingShortcutModel() { return {}; }

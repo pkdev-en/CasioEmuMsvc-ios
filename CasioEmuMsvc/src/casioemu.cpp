@@ -50,12 +50,12 @@
 
 #include "TouchMouseTranslator.h"
 
-#ifdef IOS
+#ifdef __IOS__
 #include "Ext/IOSNativeBridge.h"
 #endif
-// Included unconditionally (not just #ifdef IOS): ShortcutLaunch.h provides
+// Included unconditionally (not just #ifdef __IOS__): ShortcutLaunch.h provides
 // its own internal no-op fallbacks for every other platform, via
-// #ifdef IOS/#else inside the header itself, specifically so the checks in
+// #ifdef __IOS__/#else inside the header itself, specifically so the checks in
 // the loops below don't need their own #ifdef guards.
 #include "Ext/ShortcutLaunch.h"
 
@@ -195,7 +195,7 @@ int main(int argc, char* argv[]) {
             }
         }
     }
-#elif defined(IOS)
+#elif defined(__IOS__)
 	// NOTE: the actual resource copy + chdir for iOS happens further below,
 	// right after SDL_Init(), where SDL_GetBasePath() can reliably resolve
 	// the app bundle's Resources directory. SDL does not chdir into the
@@ -205,7 +205,7 @@ int main(int argc, char* argv[]) {
 	// resolves against the wrong directory and leaves the app without any
 	// models, locales, or fonts after the chdir() below runs.
 #endif
-#ifndef IOS
+#ifndef __IOS__
 	g_local.Load();
 	ThemeManager::Instance().LoadSettings();
 #endif
@@ -213,7 +213,7 @@ int main(int argc, char* argv[]) {
 	DiscordRPC::Init();
   DiscordRPC::UpdatePresence("");
 
-#if !defined(__ANDROID__) && !defined(IOS)
+#if !defined(__ANDROID__) && !defined(__IOS__)
 	std::string rendererDriver = ReadRendererHint();
 	bool previouslyCrashed = std::filesystem::exists(kCrashLockFile);
 	if (previouslyCrashed) {
@@ -261,11 +261,11 @@ int main(int argc, char* argv[]) {
 	int sdlFlags = SDL_INIT_VIDEO | SDL_INIT_TIMER;
 	if (SDL_Init(sdlFlags) != 0)
 		PANIC("SDL_Init failed: %s\n", SDL_GetError());
-#ifdef IOS
+#ifdef __IOS__
 	InitShortcutWakeEvent();
 #endif
 
-#ifdef IOS
+#ifdef __IOS__
 	{
 		// SDL_GetBasePath() is the reliable way to find the app bundle's
 		// Resources directory on iOS/macOS — it does NOT depend on the
@@ -309,7 +309,7 @@ int main(int argc, char* argv[]) {
 	}
 	
 	while (true) {
-#ifdef IOS
+#ifdef __IOS__
 		if (argv_map["model"].empty()) {
 			// A Quick Action may have requested a specific model before
 			// this process's C++ main() even started running (see
@@ -332,7 +332,7 @@ int main(int argc, char* argv[]) {
 
 	// After startupui has done its job:
 	// startupui doesn't need that.
-#if defined(__ANDROID__) || defined(IOS)
+#if defined(__ANDROID__) || defined(__IOS__)
 	SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
 	SDL_SetHint(SDL_HINT_MOUSE_TOUCH_EVENTS, "0");
 #endif
@@ -348,7 +348,7 @@ int main(int argc, char* argv[]) {
 
 	bool guiCreated = false;
 
-#if defined(__ANDROID__) || defined(IOS)
+#if defined(__ANDROID__) || defined(__IOS__)
 	TouchMouseTranslator touchTranslator(
 		SDL_GetWindowID(emulator.window),
 
@@ -385,7 +385,7 @@ int main(int argc, char* argv[]) {
 		while (running) {
 			if (!busy)
 				SDL_PushEvent(&se);
-#if defined(__ANDROID__) || defined(IOS)
+#if defined(__ANDROID__) || defined(__IOS__)
 			SDL_Delay(40);
 #else
 			if (ThemeManager::Instance().Settings().lowPerformanceMode || low_perf_ext)
@@ -423,7 +423,7 @@ int main(int argc, char* argv[]) {
 		if (!SDL_PollEvent(&event))
 			continue;
 		busy = true;
-#ifdef IOS
+#ifdef __IOS__
 		{
 			// A Home Screen shortcut was tapped while this, a *different*,
 			// model is already running -- either a Quick Action
@@ -485,7 +485,7 @@ int main(int argc, char* argv[]) {
 			emulator.Frame();
 			gui_loop();
 
-#if defined(__ANDROID__) || defined(IOS)
+#if defined(__ANDROID__) || defined(__IOS__)
 			touchTranslator.RenderDebug(renderer);
 #endif
 
@@ -528,7 +528,7 @@ int main(int argc, char* argv[]) {
 			case SDL_WINDOWEVENT_CLOSE: {
 				extern SDL_Window* window; // This is the debugger window
 				if (event.window.windowID == SDL_GetWindowID(emulator.window)) {
-#if !defined(__ANDROID__) && !defined(IOS)
+#if !defined(__ANDROID__) && !defined(__IOS__)
 					if (!no_dbg) {
 						emulator.calculator_as_tab.store(true);
 						SDL_HideWindow(emulator.window);
@@ -547,7 +547,7 @@ int main(int argc, char* argv[]) {
 				break;
 			}
 			break;
-#if defined(__ANDROID__) || defined(IOS)
+#if defined(__ANDROID__) || defined(__IOS__)
 		case SDL_FINGERDOWN:
 		case SDL_FINGERUP:
 		case SDL_FINGERMOTION:
@@ -558,7 +558,7 @@ int main(int argc, char* argv[]) {
 		case SDL_MOUSEBUTTONUP:
 		case SDL_MOUSEMOTION:
 #endif
-#ifdef IOS
+#ifdef __IOS__
 		case SDL_DROPFILE:
 			// Already fully handled above (before this switch), together
 			// with Quick Action taps -- see the comment there.
@@ -593,7 +593,7 @@ int main(int argc, char* argv[]) {
 	if (bg_txt) {
 		SDL_DestroyTexture(bg_txt);
 	}
-#ifdef IOS
+#ifdef __IOS__
 	{
 		std::string nextModel = TakePendingShortcutModel();
 		if (!nextModel.empty()) {
@@ -616,7 +616,7 @@ int main(int argc, char* argv[]) {
   DiscordRPC::Shutdown();
 	return 0;
 };
-#ifdef IOS
+#ifdef __IOS__
 #include <chrono>
 #include <thread>
 #include <atomic>

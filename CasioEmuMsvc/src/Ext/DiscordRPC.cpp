@@ -4,7 +4,7 @@
 #include <chrono>
 #include <cstring>
 
-#if !defined(__ANDROID__) && !defined(IOS)
+#if !defined(__ANDROID__) && !defined(__IOS__)
 #include <discord_rpc.h>
 #include "Gui/ThemeManager.h"
 #endif
@@ -13,7 +13,7 @@ namespace DiscordRPC {
     static int64_t StartTime = 0;
 
     void Init() {
-#if !defined(__ANDROID__) && !defined(IOS)
+#if !defined(__ANDROID__) && !defined(__IOS__)
         DiscordEventHandlers handlers;
         std::memset(&handlers, 0, sizeof(handlers));
         Discord_Initialize(DISCORD_APP_ID, &handlers, 1, nullptr);
@@ -23,7 +23,7 @@ namespace DiscordRPC {
     }
 
     void UpdatePresence(const std::string& modelName) {
-#if !defined(__ANDROID__) && !defined(IOS)
+#if !defined(__ANDROID__) && !defined(__IOS__)
         if (!ThemeManager::Instance().Settings().enableDiscordRPC) {
             Discord_ClearPresence();
             return;
@@ -52,13 +52,13 @@ namespace DiscordRPC {
     }
 
     void Update() {
-#if !defined(__ANDROID__) && !defined(IOS)
+#if !defined(__ANDROID__) && !defined(__IOS__)
         Discord_RunCallbacks();
 #endif
     }
 
     void Shutdown() {
-#if !defined(__ANDROID__) && !defined(IOS)
+#if !defined(__ANDROID__) && !defined(__IOS__)
         Discord_ClearPresence();
         Discord_Shutdown();
 #endif
