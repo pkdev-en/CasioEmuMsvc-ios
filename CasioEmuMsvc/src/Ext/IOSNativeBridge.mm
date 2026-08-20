@@ -343,10 +343,27 @@ bool presentCreateHomeScreenShortcut(const char* modelIdentifier, const char* sh
         return false;
     }
 
+    // stringWithUTF8String: returns nil if the C string isn't valid UTF-8.
+    // modelIdentifier comes from a sanitized on-disk folder name so this
+    // shouldn't happen, but shortcutName is whatever the user just typed
+    // into the ImGui text field (unsanitized, and truncated to 260 bytes by
+    // that field's buffer) -- guard both rather than risk passing nil into
+    // a UIKit initializer that doesn't expect it.
     NSString *modelId = [NSString stringWithUTF8String:modelIdentifier];
-    NSString *label = (shortcutName && shortcutName[0] != '\0')
-        ? [NSString stringWithUTF8String:shortcutName]
-        : modelId;
+    if (!modelId) {
+        NSLog(@"[Shortcut] modelIdentifier was not valid UTF-8.");
+        return false;
+    }
+    NSString *label = modelId;
+    if (shortcutName && shortcutName[0] != '\0') {
+        NSString *typed = [NSString stringWithUTF8String:shortcutName];
+        if (typed) {
+            label = typed;
+        }
+        else {
+            NSLog(@"[Shortcut] shortcutName was not valid UTF-8 (likely truncated mid-character); falling back to the model name.");
+        }
+    }
     (void)iconPathOrNull; // Quick Actions use a fixed icon; there's no per-shortcut custom-icon UI anymore.
 
     // UIApplication.shortcutItems must only be touched from the main
@@ -365,39 +382,53 @@ bool presentCreateHomeScreenShortcut(const char* modelIdentifier, const char* sh
     // (confirmed, normal) case where we're already on the main thread, and
     // falls back to a non-deadlocking dispatch_async only as a defensive
     // safety net in case that ever changes.
+    //
+    // Everything UIKit-facing is also wrapped in @try/@catch: if any of
+    // these calls throws an NSException for a reason we haven't
+    // anticipated, this converts that into a logged failure instead of a
+    // hard crash. If shortcut creation is still failing after this change,
+    // the exact reason will now be in the device console/Xcode log instead
+    // of just "the app crashed".
     __block BOOL succeeded = NO;
     void (^addShortcut)(void) = ^{
-        UIMutableApplicationShortcutItem *item = [[UIMutableApplicationShortcutItem alloc]
-            initWithType:kCasioEmuShortcutType
-          localizedTitle:label];
-        item.localizedSubtitle = @"CasioEmuMsvc";
-        item.icon = [UIApplicationShortcutIcon iconWithSystemImageName:@"calculator"];
-        item.userInfo = @{@"model": modelId};
+        @try {
+            UIMutableApplicationShortcutItem *item = [[UIMutableApplicationShortcutItem alloc]
+                initWithType:kCasioEmuShortcutType
+              localizedTitle:label];
+            item.localizedSubtitle = @"CasioEmuMsvc";
+            item.icon = [UIApplicationShortcutIcon iconWithSystemImageName:@"calculator"];
+            item.userInfo = @{@"model": modelId};
 
-        NSMutableArray<UIApplicationShortcutItem *> *items =
-            [UIApplication.sharedApplication.shortcutItems mutableCopy];
-        if (!items) {
-            items = [NSMutableArray array];
+            NSMutableArray<UIApplicationShortcutItem *> *items =
+                [UIApplication.sharedApplication.shortcutItems mutableCopy];
+            if (!items) {
+                items = [NSMutableArray array];
+            }
+
+            // Replace any existing shortcut for this same model instead of
+            // piling up duplicates every time the user re-creates it.
+            NSPredicate *notSameModel = [NSPredicate predicateWithBlock:^BOOL(UIApplicationShortcutItem *existing, NSDictionary *bindings) {
+                return ![existing.userInfo[@"model"] isEqual:modelId];
+            }];
+            [items filterUsingPredicate:notSameModel];
+
+            [items addObject:item];
+
+            // iOS only ever shows the first 4 Quick Actions; keep the array
+            // at that size ourselves (dropping the oldest) so what we hand
+            // back always matches what's actually shown to the user.
+            while (items.count > kMaxShortcutItems) {
+                [items removeObjectAtIndex:0];
+            }
+
+            UIApplication.sharedApplication.shortcutItems = items;
+            succeeded = YES;
         }
-
-        // Replace any existing shortcut for this same model instead of
-        // piling up duplicates every time the user re-creates it.
-        NSPredicate *notSameModel = [NSPredicate predicateWithBlock:^BOOL(UIApplicationShortcutItem *existing, NSDictionary *bindings) {
-            return ![existing.userInfo[@"model"] isEqual:modelId];
-        }];
-        [items filterUsingPredicate:notSameModel];
-
-        [items addObject:item];
-
-        // iOS only ever shows the first 4 Quick Actions; keep the array at
-        // that size ourselves (dropping the oldest) so what we hand back
-        // always matches what's actually shown to the user.
-        while (items.count > kMaxShortcutItems) {
-            [items removeObjectAtIndex:0];
+        @catch (NSException *exception) {
+            NSLog(@"[Shortcut] Exception while creating the shortcut: %@ -- %@\n%@",
+                exception.name, exception.reason, exception.callStackSymbols);
+            succeeded = NO;
         }
-
-        UIApplication.sharedApplication.shortcutItems = items;
-        succeeded = YES;
     };
 
     if ([NSThread isMainThread]) {
