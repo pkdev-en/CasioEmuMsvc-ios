@@ -349,14 +349,24 @@ bool presentCreateHomeScreenShortcut(const char* modelIdentifier, const char* sh
         : modelId;
     (void)iconPathOrNull; // Quick Actions use a fixed icon; there's no per-shortcut custom-icon UI anymore.
 
-    // UIApplication.shortcutItems must only be touched from the main thread,
-    // but this function is called from the SDL/C++ thread. dispatch_sync
-    // (rather than _async) is used deliberately so the return value below
-    // accurately reflects whether the shortcut was actually added -- this
-    // is fast, local, non-blocking-UI work, so waiting for it is cheap and
-    // safe (never called from the main thread itself, so it can't deadlock).
+    // UIApplication.shortcutItems must only be touched from the main
+    // thread. This function is, in fact, *always* called from the main
+    // thread already: SDL's iOS backend runs the app's entire C++ main()
+    // (and therefore sui_loop() and everything it calls, including this)
+    // directly and synchronously on the main thread -- see
+    // SDL_uikitappdelegate.m's postFinishLaunch, which calls forward_main()
+    // right there rather than spawning a separate thread. So this must NOT
+    // use dispatch_sync(dispatch_get_main_queue(), ...): dispatch_sync onto
+    // the main queue while already running on the main thread is a
+    // guaranteed deadlock (the calling thread blocks waiting for the main
+    // queue to run the block, but only the main thread -- which is the one
+    // blocked -- can ever run it), which iOS eventually kills as an
+    // unresponsive app. The block below runs directly/synchronously in the
+    // (confirmed, normal) case where we're already on the main thread, and
+    // falls back to a non-deadlocking dispatch_async only as a defensive
+    // safety net in case that ever changes.
     __block BOOL succeeded = NO;
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    void (^addShortcut)(void) = ^{
         UIMutableApplicationShortcutItem *item = [[UIMutableApplicationShortcutItem alloc]
             initWithType:kCasioEmuShortcutType
           localizedTitle:label];
@@ -388,7 +398,16 @@ bool presentCreateHomeScreenShortcut(const char* modelIdentifier, const char* sh
 
         UIApplication.sharedApplication.shortcutItems = items;
         succeeded = YES;
-    });
+    };
+
+    if ([NSThread isMainThread]) {
+        addShortcut();
+    }
+    else {
+        NSLog(@"[Shortcut] presentCreateHomeScreenShortcut called off the main thread unexpectedly; dispatching asynchronously.");
+        dispatch_async(dispatch_get_main_queue(), addShortcut);
+        succeeded = YES; // optimistic: we can't wait for the async result without risking the same deadlock class of bug
+    }
 
     return succeeded == YES;
 }
