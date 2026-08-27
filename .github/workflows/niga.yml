@@ -24,10 +24,22 @@ jobs:
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
 
-      - name: Fetch iOS CMake toolchain
+      - name: Fetch iOS CMake toolchain (pinned to release tag)
         run: |
-          curl -sSL -o ios.toolchain.cmake \
-            https://raw.githubusercontent.com/leetal/ios-cmake/6a4d0efa2cdf50bfe07124a45d78d541fbf8b3cd/ios.toolchain.cmake
+          curl -sSL -f -o ios.toolchain.cmake \
+            https://raw.githubusercontent.com/leetal/ios-cmake/4.5.0/ios.toolchain.cmake
+
+          # curl -f makes a 404 fail the step outright instead of silently
+          # writing GitHub's HTML/text error body to disk -- that's what
+          # caused CMake to try to `include()` a "404: Not Found" page as
+          # if it were real .cmake source. Belt-and-suspenders check here
+          # in case the response is a 200 with unexpected content (rate
+          # limit page, redirect stub, etc).
+          if ! grep -q "cmake_minimum_required" ios.toolchain.cmake; then
+            echo "Downloaded file doesn't look like ios.toolchain.cmake — first lines:"
+            head -5 ios.toolchain.cmake
+            exit 1
+          fi
 
       - name: Configure — generate Xcode project
         run: |
