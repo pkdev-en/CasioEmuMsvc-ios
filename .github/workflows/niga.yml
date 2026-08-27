@@ -3,66 +3,51 @@ name: Xcode skibidi
 on:
   workflow_dispatch:
   push:
-    branches: [stable]
+    branches: ["stable", "master"]
     paths:
-      - "CMakeLists.txt"
       - "CasioEmuMsvc/**"
+      - "CMakeLists.txt"
       - ".github/workflows/generate-xcodeproj.yml"
 
 jobs:
   generate:
+    runs-on: macos-latest
     name: CMake → Xcode project
-    runs-on: macos-14
 
     steps:
-      - name: Checkout repo with submodules
-        uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v6
         with:
           submodules: recursive
-          fetch-depth: 1
-
-      - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
-
-      - name: Fetch iOS CMake toolchain (pinned to release tag)
-        run: |
-          curl -sSL -f -o ios.toolchain.cmake \
-            https://raw.githubusercontent.com/leetal/ios-cmake/4.5.0/ios.toolchain.cmake
-
-          # curl -f makes a 404 fail the step outright instead of silently
-          # writing GitHub's HTML/text error body to disk -- that's what
-          # caused CMake to try to `include()` a "404: Not Found" page as
-          # if it were real .cmake source. Belt-and-suspenders check here
-          # in case the response is a 200 with unexpected content (rate
-          # limit page, redirect stub, etc).
-          if ! grep -q "cmake_minimum_required" ios.toolchain.cmake; then
-            echo "Downloaded file doesn't look like ios.toolchain.cmake — first lines:"
-            head -5 ios.toolchain.cmake
-            exit 1
-          fi
 
       - name: Configure — generate Xcode project
         run: |
-          cmake -S . -B build-xcode \
-            -G Xcode \
-            -DCMAKE_TOOLCHAIN_FILE="$PWD/ios.toolchain.cmake" \
-            -DPLATFORM=OS64COMBINED \
-            -DDEPLOYMENT_TARGET=13.0 \
-            -DENABLE_BITCODE=OFF \
-            -DENABLE_ARC=ON
+          # Same CMake invocation as the full iOS build job, minus the
+          # build/sign/package steps that come after it. This step alone
+          # is what actually writes the .xcodeproj to disk.
+          cmake -S . -B build -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY="" \
+            -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM="4Z7V3V3G9R" \
+            -DCMAKE_CXX_STANDARD=20 \
+            -DSDL_TESTS=OFF \
+            -DSDL_DISABLE_INSTALL=ON \
+            -DSDL2IMAGE_TESTS=OFF \
+            -DSDL2IMAGE_INSTALL=OFF
 
       - name: Verify project was written
         run: |
-          PROJ=$(find build-xcode -maxdepth 1 -name "*.xcodeproj")
+          PROJ=$(find build -maxdepth 1 -name "*.xcodeproj")
           if [ -z "$PROJ" ]; then
-            echo "No .xcodeproj found — CMake configure step failed silently."
+            echo "No .xcodeproj found in build/ — CMake configure step failed silently."
             exit 1
           fi
           echo "Generated: $PROJ"
 
       - name: Zip the .xcodeproj
         run: |
-          cd build-xcode
+          cd build
           PROJ=$(find . -maxdepth 1 -name "*.xcodeproj")
           zip -r "../CasioEmuMsvc.xcodeproj.zip" "$PROJ"
 
@@ -72,3 +57,10 @@ jobs:
           name: CasioEmuMsvc-xcodeproj
           path: CasioEmuMsvc.xcodeproj.zip
           retention-days: 14
+
+      - name: Dump CMake error on failure
+        if: failure()
+        shell: bash
+        run: |
+          find . -name "CMakeError.log" -exec cat {} \;
+          find . -name "CMakeOutput.log" -exec cat {} \;
