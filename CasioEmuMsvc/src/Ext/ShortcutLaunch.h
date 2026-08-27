@@ -146,23 +146,61 @@ inline std::string ShortcutLaunch_UrlPercentDecode(const std::string& in) {
 // match our URL scheme, or the referenced model no longer exists). Consumes
 // (and SDL_free()s) event.drop.file if present, per SDL's ownership
 // contract for SDL_DROPFILE events.
+// Case-insensitive prefix match against "casioemu://". iOS/Safari/older
+// builds don't guarantee the scheme is handed back in the exact casing it
+// was registered with (URI scheme comparison is case-insensitive per RFC
+// 3986 ยง3.1 -- only the host/path may be case-sensitive) so a strict
+// std::string::compare() here silently drops otherwise-valid legacy
+// shortcuts: the app launches to the normal menu instead of the requested
+// model, with nothing in the console to explain why.
+inline bool ShortcutLaunch_MatchesSchemeCI(const std::string& s, const std::string& prefix) {
+	if (s.size() < prefix.size())
+		return false;
+	for (size_t i = 0; i < prefix.size(); ++i) {
+		if (tolower((unsigned char)s[i]) != tolower((unsigned char)prefix[i]))
+			return false;
+	}
+	return true;
+}
+
+// Resolves an SDL event to an on-disk model path if it is a legacy Home
+// Screen shortcut calling back via the casioemu://launch?model=<id> URL
+// scheme; returns an empty path otherwise (not a DROPFILE event, doesn't
+// match our URL scheme, or the referenced model no longer exists). Consumes
+// (and SDL_free()s) event.drop.file if present, per SDL's ownership
+// contract for SDL_DROPFILE events.
 inline std::filesystem::path ResolveShortcutLaunchEvent(const SDL_Event& event) {
-	if (event.type != SDL_DROPFILE || !event.drop.file)
+	if (event.type != SDL_DROPFILE || !event.drop.file) {
+		if (event.type == SDL_DROPFILE)
+			SDL_free(event.drop.file); // file is non-null but we're not consuming it below; still owned by us
 		return {};
+	}
 
 	std::string dropped = event.drop.file;
 	SDL_free(event.drop.file);
 
 	const std::string prefix = "casioemu://";
-	if (dropped.compare(0, prefix.size(), prefix) != 0)
+	if (!ShortcutLaunch_MatchesSchemeCI(dropped, prefix)) {
+		std::cerr << "[Shortcut] Dropped URL did not match casioemu:// scheme: " << dropped << "\n";
 		return {};
+	}
+
+	// "model=" itself is a fixed query-key name, not the scheme, so it stays
+	// case-sensitive on purpose -- only the scheme portion is normalized.
 	auto qpos = dropped.find("model=");
-	if (qpos == std::string::npos)
+	if (qpos == std::string::npos) {
+		std::cerr << "[Shortcut] casioemu:// URL had no model= parameter: " << dropped << "\n";
 		return {};
+	}
 	qpos += 6; // strlen("model=")
 	auto ampersand = dropped.find('&', qpos);
 	std::string raw = (ampersand == std::string::npos) ? dropped.substr(qpos) : dropped.substr(qpos, ampersand - qpos);
-	return ResolveShortcutModelId(ShortcutLaunch_UrlPercentDecode(raw));
+	std::string decoded = ShortcutLaunch_UrlPercentDecode(raw);
+	if (decoded.empty()) {
+		std::cerr << "[Shortcut] casioemu:// URL had an empty model id: " << dropped << "\n";
+		return {};
+	}
+	return ResolveShortcutModelId(decoded);
 }
 
 #else // !__IOS__ -- no-ops everywhere else, so call sites don't need #ifdef guards
