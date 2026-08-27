@@ -1,0 +1,62 @@
+name: Xcode skibidi
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [stable]
+    paths:
+      - "CMakeLists.txt"
+      - "CasioEmuMsvc/**"
+      - ".github/workflows/generate-xcodeproj.yml"
+
+jobs:
+  generate:
+    name: CMake → Xcode project
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout repo with submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
+
+      - name: Fetch iOS CMake toolchain
+        run: |
+          curl -sSL -o ios.toolchain.cmake \
+            https://raw.githubusercontent.com/leetal/ios-cmake/6a4d0efa2cdf50bfe07124a45d78d541fbf8b3cd/ios.toolchain.cmake
+
+      - name: Configure — generate Xcode project
+        run: |
+          cmake -S . -B build-xcode \
+            -G Xcode \
+            -DCMAKE_TOOLCHAIN_FILE="$PWD/ios.toolchain.cmake" \
+            -DPLATFORM=OS64COMBINED \
+            -DDEPLOYMENT_TARGET=13.0 \
+            -DENABLE_BITCODE=OFF \
+            -DENABLE_ARC=ON
+
+      - name: Verify project was written
+        run: |
+          PROJ=$(find build-xcode -maxdepth 1 -name "*.xcodeproj")
+          if [ -z "$PROJ" ]; then
+            echo "No .xcodeproj found — CMake configure step failed silently."
+            exit 1
+          fi
+          echo "Generated: $PROJ"
+
+      - name: Zip the .xcodeproj
+        run: |
+          cd build-xcode
+          PROJ=$(find . -maxdepth 1 -name "*.xcodeproj")
+          zip -r "../CasioEmuMsvc.xcodeproj.zip" "$PROJ"
+
+      - name: Upload .xcodeproj artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CasioEmuMsvc-xcodeproj
+          path: CasioEmuMsvc.xcodeproj.zip
+          retention-days: 14
