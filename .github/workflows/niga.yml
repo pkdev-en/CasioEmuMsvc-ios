@@ -7,12 +7,12 @@ on:
     paths:
       - "CasioEmuMsvc/**"
       - "CMakeLists.txt"
-      - ".github/workflows/generate-xcodeproj.yml"
+      - ".github/workflows/niga.yml"
 
 jobs:
   generate:
     runs-on: macos-latest
-    name: CMake → Xcode project
+    name: Generate + build (iOS)
 
     steps:
       - name: Checkout
@@ -21,10 +21,10 @@ jobs:
           submodules: recursive
 
       - name: Configure — generate Xcode project
+        id: configure
         run: |
-          # Same CMake invocation as the full iOS build job, minus the
-          # build/sign/package steps that come after it. This step alone
-          # is what actually writes the .xcodeproj to disk.
+          # Same CMake invocation as the full iOS build job. This step is
+          # what actually writes the .xcodeproj to disk.
           cmake -S . -B build -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
@@ -57,10 +57,24 @@ jobs:
           name: CasioEmuMsvc-xcodeproj
           path: CasioEmuMsvc.xcodeproj.zip
           retention-days: 14
+        # Uploaded before the actual build below, so you still get the
+        # project file even if the compile step after this fails.
 
-      - name: Dump CMake error on failure
-        if: failure()
+      - name: Build for iOS
+        run: |
+          # This is the step that was missing before: configure succeeding
+          # only proves CMake could enumerate the targets and write project
+          # files, not that the code compiles. This actually calls xcodebuild
+          # (via CMake) and fails the job on any real compile/link error.
+          cmake --build build --config Release --parallel 6
+
+      - name: Dump CMake configure error
+        if: failure() && steps.configure.outcome == 'failure'
         shell: bash
         run: |
+          # Only useful for CONFIGURE-time failures — these two files only
+          # capture CMake's own compiler-capability checks. If the "Build
+          # for iOS" step failed instead, the real compiler/linker errors
+          # are already printed directly in that step's own log above.
           find . -name "CMakeError.log" -exec cat {} \;
           find . -name "CMakeOutput.log" -exec cat {} \;
