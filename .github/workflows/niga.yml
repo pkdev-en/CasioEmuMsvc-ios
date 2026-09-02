@@ -12,7 +12,7 @@ on:
 jobs:
   generate:
     runs-on: macos-latest
-    name: Generate + build (iOS)
+    name: CMake → Xcode project
 
     steps:
       - name: Checkout
@@ -21,10 +21,10 @@ jobs:
           submodules: recursive
 
       - name: Configure — generate Xcode project
-        id: configure
         run: |
-          # Same CMake invocation as the full iOS build job. This step is
-          # what actually writes the .xcodeproj to disk.
+          # Same CMake invocation as the full iOS build job, minus the
+          # build/sign/package steps that come after it. This step alone
+          # is what actually writes the .xcodeproj to disk.
           cmake -S . -B build -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
@@ -45,11 +45,13 @@ jobs:
           fi
           echo "Generated: $PROJ"
 
-      - name: Zip the .xcodeproj
+      - name: Zip the build directory
         run: |
-          cd build
-          PROJ=$(find . -maxdepth 1 -name "*.xcodeproj")
-          zip -r "../CasioEmuMsvc.xcodeproj.zip" "$PROJ"
+          # Zip the whole build/ dir, not just the .xcodeproj — the project
+          # references CMakeCache.txt / CMakeFiles/ that live alongside it,
+          # so someone who clones the repo and drops this in can open the
+          # .xcodeproj straight away without re-running cmake themselves.
+          zip -r CasioEmuMsvc.xcodeproj.zip build
 
       - name: Upload .xcodeproj artifact
         uses: actions/upload-artifact@v4
@@ -57,24 +59,10 @@ jobs:
           name: CasioEmuMsvc-xcodeproj
           path: CasioEmuMsvc.xcodeproj.zip
           retention-days: 14
-        # Uploaded before the actual build below, so you still get the
-        # project file even if the compile step after this fails.
 
-      - name: Build for iOS
-        run: |
-          # This is the step that was missing before: configure succeeding
-          # only proves CMake could enumerate the targets and write project
-          # files, not that the code compiles. This actually calls xcodebuild
-          # (via CMake) and fails the job on any real compile/link error.
-          cmake --build build --config Release --parallel 6
-
-      - name: Dump CMake configure error
-        if: failure() && steps.configure.outcome == 'failure'
+      - name: Dump CMake error on failure
+        if: failure()
         shell: bash
         run: |
-          # Only useful for CONFIGURE-time failures — these two files only
-          # capture CMake's own compiler-capability checks. If the "Build
-          # for iOS" step failed instead, the real compiler/linker errors
-          # are already printed directly in that step's own log above.
           find . -name "CMakeError.log" -exec cat {} \;
           find . -name "CMakeOutput.log" -exec cat {} \;
