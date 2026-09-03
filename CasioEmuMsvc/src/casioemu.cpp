@@ -386,7 +386,16 @@ int main(int argc, char* argv[]) {
 			if (!busy)
 				SDL_PushEvent(&se);
 #if defined(__ANDROID__) || defined(__IOS__)
-			SDL_Delay(40);
+			// [Perf fix — 2026-09-03 13:44 GMT+7] Was SDL_Delay(40) — hard-capped every device at ~25fps
+			// regardless of what the screen can actually do. Now this
+			// thread just offers a new frame far faster than any real
+			// display refreshes; SDL_RENDERER_PRESENTVSYNC (set in
+			// Emulator.cpp) is what actually blocks SDL_RenderPresent()
+			// until the next vblank, so the real ceiling becomes each
+			// device's own panel rate — 60Hz on older iPhones, up to
+			// 120Hz on ProMotion — instead of one fixed number forced
+			// on every device alike.
+			SDL_Delay(4);
 #else
 			if (ThemeManager::Instance().Settings().lowPerformanceMode || low_perf_ext)
 				SDL_Delay(24);
@@ -420,7 +429,16 @@ int main(int argc, char* argv[]) {
 		SDL_Event event{};
 		busy = false;
 		DiscordRPC::Update();
-		if (!SDL_PollEvent(&event))
+		// [Perf fix — 2026-09-03 13:44 GMT+7] Was SDL_PollEvent() + continue — spins this thread at 100% of
+		// a CPU core with no delay whenever there's nothing to do, since
+		// PollEvent returns immediately either way. WaitEventTimeout
+		// blocks (letting the OS actually idle the core) until either a
+		// real input event or the t3 thread's injected frame_event shows
+		// up, or the 8ms timeout elapses — same return semantics as
+		// PollEvent (nonzero = got an event), just without the spin.
+		// Matters most on older iPhones: less sustained heat means less
+		// thermal throttling over a long session.
+		if (!SDL_WaitEventTimeout(&event, 8))
 			continue;
 		busy = true;
 #ifdef __IOS__
