@@ -90,7 +90,15 @@ namespace casioemu {
 		if (!window)
 			PANIC("SDL_CreateWindow failed: %s\n", SDL_GetError());
 		//renderer = SDL_CreateRenderer(window, -1, 0);
-		renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE);
+		// [Perf fix — 2026-09-03 13:44 GMT+7] VSYNC added: without it, SDL_RenderPresent() pushes frames out
+		// whenever the software timer in casioemu.cpp happens to fire,
+		// completely decoupled from the display's real refresh cycle.
+		// With it, the driver blocks Present() until the next actual
+		// vblank, so output cadence tracks whatever the panel/OS chooses
+		// (60Hz on older iPhones, up to 120Hz on ProMotion) rather than a
+		// hard-coded number — old and new devices each get paced at their
+		// own native rate instead of one being forced above/below it.
+		renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE | SDL_RENDERER_PRESENTVSYNC);
 		if (!renderer)
 			PANIC("SDL_CreateRenderer failed: %s\n", SDL_GetError());
 
