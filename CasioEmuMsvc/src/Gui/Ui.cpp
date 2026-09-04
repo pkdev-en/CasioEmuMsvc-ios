@@ -1,4 +1,9 @@
 #include "Ui.hpp"
+#if defined(__IOS__)
+    #pragma message "DEBUG: __IOS__ IS defined when compiling Ui.cpp"
+#else
+    #pragma message "DEBUG: __IOS__ is NOT defined when compiling Ui.cpp"
+#endif
 #include "hex.hpp"
 #include "5800FileSystem.h"
 #include "AddressWindow.h"
