@@ -203,17 +203,45 @@ if(BUILD_EXECUTABLE)
                 message(FATAL_ERROR "MAIN_SOURCES is empty before creating iOS executable!")
             endif()
 
+            # 2b. GUI shell riêng cho iOS (không dùng chung code cửa sổ desktop) —
+            # port từ app/src/main/java/com/tele/u8emulator/Game.java
+            set(IOS_GUI_DIR "${CMAKE_SOURCE_DIR}/iOSresources/Sources")
+            set(IOS_GUI_SOURCES
+                "${IOS_GUI_DIR}/game_controller_core.cpp"
+                "${IOS_GUI_DIR}/GameViewController.mm"
+            )
+            set(IOS_GUI_HEADERS
+                "${IOS_GUI_DIR}/game_controller_core.hpp"
+                "${IOS_GUI_DIR}/GameViewController.h"
+            )
+            # .mm cần Objective-C ARC bật riêng (không áp dụng cho các file .cpp/.mm khác)
+            set_source_files_properties(${IOS_GUI_DIR}/GameViewController.mm PROPERTIES
+                COMPILE_FLAGS "-fobjc-arc"
+            )
+
             # 3. Tạo executable với icon PNG trực tiếp
             add_executable(${TARGET_NAME}
                 MACOSX_BUNDLE
                 ${MAIN_SOURCES}
+                ${IOS_GUI_SOURCES}
+                ${IOS_GUI_HEADERS}
                 ${IOS_ICON_FILES}
                 ${LAUNCH_SCREEN}
             )
 
+            target_include_directories(${TARGET_NAME} PRIVATE ${IOS_GUI_DIR})
+
             # 4. Deployment target
             set_target_properties(${TARGET_NAME} PROPERTIES
                 XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET "14.0"
+            )
+
+            # 5. Framework UIKit cần cho GameViewController.mm (UNUserNotifications, Photos)
+            target_link_libraries(${TARGET_NAME} PRIVATE
+                "-framework UIKit"
+                "-framework UserNotifications"
+                "-framework Photos"
+                "-framework CoreGraphics"
             )
     
         else()
