@@ -1,9 +1,4 @@
 #include "Ui.hpp"
-#if defined(__IOS__)
-    #pragma message "DEBUG: __IOS__ IS defined when compiling Ui.cpp"
-#else
-    #pragma message "DEBUG: __IOS__ is NOT defined when compiling Ui.cpp"
-#endif
 #include "hex.hpp"
 #include "5800FileSystem.h"
 #include "AddressWindow.h"
@@ -622,7 +617,7 @@ void gui_loop() {
     }
 
     top_bar_size = ImGui::GetCursorPosY();
-#if !defined(__ANDROID__)
+#if !defined(__ANDROID__) && !defined(__IOS__)
     RenderStatusBar();
 #endif
     ImGui::Render();
@@ -779,8 +774,19 @@ CodeViewer* test_gui(bool* guiCreated, SDL_Window* wnd, SDL_Renderer* rnd) {
         windows.push_back(item);
 
     if (!std::filesystem::exists(ui_state_fn)) {
+#if defined(__IOS__) || defined(__ANDROID__)
+        // Mobile: chỉ hiện màn hình máy tính theo mặc định (giống bản gốc),
+        // các cửa sổ debugger phải được mở thủ công qua "Debugger Windows".
+        for (auto* w : windows) {
+            if (!w) continue;
+            bool is_calculator = (w->name && strcmp(w->name, "Calculator") == 0);
+            w->open = is_calculator;
+            w->bring_to_front_requested = false;
+        }
+#else
         for (auto* w : windows)
             if (w) { w->open = true; w->bring_to_front_requested = false; }
+#endif
     }
     LoadUIState();
     ui_ready = true;
@@ -839,7 +845,7 @@ namespace UIHelpers {
 }
 
 void gui_cleanup() {
-#ifndef __ANDROID__
+#if !defined(__ANDROID__) && !defined(__IOS__)
 #ifndef SINGLE_WINDOW
     if (window) {
         int x, y, w, h;
