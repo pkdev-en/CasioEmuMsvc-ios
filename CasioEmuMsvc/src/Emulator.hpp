@@ -3,8 +3,11 @@
 #include <SDL.h>
 #include <SDL_image.h>
 #include <atomic>
+#include <cstdint>
 #include <map>
+#include <memory>
 #include <string>
+#include <vector>
 
 #include <condition_variable>
 #include <mutex>
@@ -12,6 +15,8 @@
 #include <thread>
 
 #include "ModelInfo.h"
+#include "ModelResourceStore.h"
+#include "QrCode.h"
 
 namespace casioemu {
 	class Chipset;
@@ -34,22 +39,34 @@ namespace casioemu {
 		void unlock();
 	};
 
-	class Emulator
-	{
-    public:
-    SDL_Texture* tx = nullptr;
-		SDL_Renderer *renderer;
-		SDL_Surface* interface_surface;
-		SDL_Texture* interface_texture;
+	class Emulator {
+	public:
+		SDL_Texture* tx = nullptr;
+		SDL_Renderer* renderer = nullptr;
+		SDL_Surface* interface_surface = nullptr;
+		SDL_Texture* interface_texture = nullptr;
+		SDL_Texture* scaled_interface_texture = nullptr;
+		int scaled_interface_texture_w = 0;
+		int scaled_interface_texture_h = 0;
+		bool interface_is_svg = false;
+		std::string interface_svg_data;
 		unsigned int cycles_per_second;
+		unsigned int eps_timer1_source_hz = 0;
 		unsigned int timer_interval;
-		bool running, Paused;
+		/* Written by SetClockSpeed (UI thread) and by TimerCallback (timer
+		 * thread); keep it atomic to avoid a data race. */
+		std::atomic<Uint64> eps_frame_cycle_remainder{0};
+		std::atomic<Uint64> eps_timer1_cycle_remainder{0};
+		bool running;
+		std::atomic<bool> Paused;
 		bool headless = false;
 		std::atomic<bool> m_step_requested;
 		unsigned int last_frame_tick_count;
 		std::string model_path;
+		std::shared_ptr<ModelResourceStore> model_resources;
 		bool pause_on_mem_error;
 
+#ifndef CASIOEMU_CORE_WEB
 		std::atomic<bool> screenshot_requested{};
 		std::atomic<bool> screenshot_full_ui{true};
 		std::atomic<bool> screenshot_taken{false};
@@ -61,6 +78,9 @@ namespace casioemu {
 		std::atomic<bool> recording_stop_requested{};
 		std::atomic<bool> recording_active{};
 		std::atomic<unsigned int> recording_frame_count{};
+		std::atomic<int> capture_scale{3};
+		std::atomic<uint32_t> capture_background_rgb{0xd6e3d6};
+#endif
 
 		std::thread* tick_thread;
 
@@ -78,9 +98,10 @@ namespace casioemu {
 
 	public:
 		ModelInfo ModelDefinition{};
-		SDL_Window* window;
-		Emulator(std::map<std::string, std::string>& argv_map, bool Paused = false);
-		Emulator(ModelInfo def, bool paused = false, bool headless = true);
+		SDL_Window* window = nullptr;
+		Emulator(std::map<std::string, std::string>& argv_map, bool Paused = false,
+			std::shared_ptr<ModelResourceStore> resources = {});
+		Emulator(ModelInfo def, bool paused = false, bool headless = true, std::string modelPath = "");
 		~Emulator();
 
 		FairRecursiveMutex access_mx;
@@ -115,6 +136,7 @@ namespace casioemu {
 		Chipset& chipset;
 
 		float BatteryVoltage, SolarPanelVoltage;
+		QrCodeCapture qr_code;
 
 		bool Running();
 		void HandleMemoryError();
@@ -135,7 +157,11 @@ namespace casioemu {
 		void UIEvent(SDL_Event event);
 		SDL_Renderer* GetRenderer();
 		SDL_Texture* GetInterfaceTexture();
-		std::string GetModelFilePath(std::string relative_path);
+		std::string GetModelFilePath(std::string relative_path) const;
+		bool HasModelResource(const std::string& name) const;
+		std::vector<std::uint8_t> ReadModelResource(const std::string& name) const;
+		void WriteModelSessionResource(const std::string& name, const std::vector<std::uint8_t>& data);
+		bool IsMemoryModel() const { return static_cast<bool>(model_resources); }
 
 		friend class CPU;
 		friend class MMU;
