@@ -24,13 +24,9 @@ public:
 
 private:
 	struct TouchState {
-		bool movedBeyondThreshold = false;
-		bool isTapCandidate = true;
 		bool active = false;
 		bool dragging = false;
 		bool suppressTap = false;
-		float scrollAccum = 0;
-		Uint32 lastScrollTime = 0;
 		SDL_FingerID fingerId = 0;
 		float startX = 0.0f;
 		float startY = 0.0f;
@@ -100,7 +96,7 @@ private:
 	const Uint32 trailDurationMs_ = 500;
 	const float scrollPixelsPerWheel_ = 20.0f;
 
-	// ³¤°´»·äÖÈ¾²ÎÊı
+	// é•¿æŒ‰ç¯æ¸²æŸ“å‚æ•°
 	const float ringRadius_ = 80.0f;
 	const float ringThickness_ = 8.0f;
 };

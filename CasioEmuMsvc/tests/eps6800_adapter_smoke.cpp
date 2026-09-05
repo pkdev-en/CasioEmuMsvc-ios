@@ -1,0 +1,2099 @@
+#include "ePSCpu.h"
+#include "Eps6800Display.h"
+#include "ModelInfo.h"
+#include "machine_snapshot_internal.h"
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <fstream>
+#include <iomanip>
+#include <initializer_list>
+#include <iostream>
+#include <sstream>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace {
+	constexpr size_t kRomSize = 0x20000;
+	constexpr size_t kLcdSize = casioemu::EPS6800_LCD_RAW_SIZE;
+
+	uint32_t Fnv1a(const uint8_t* data, size_t size) {
+		uint32_t hash = 2166136261u;
+		for (size_t i = 0; i < size; ++i) {
+			hash ^= data[i];
+			hash *= 16777619u;
+		}
+		return hash;
+	}
+
+	std::vector<unsigned char> ReadRom(const char* path) {
+		std::ifstream stream(path, std::ios::binary);
+		if (!stream)
+			return {};
+		return {std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
+	}
+
+	void Boot(casioemu::ePSCPU& machine) {
+		machine.Reset();
+		machine.OnDown();
+		for (int i = 0; i < 2; ++i)
+			machine.RunFrame();
+		machine.OnUp();
+		for (int i = 0; i < 100; ++i)
+			machine.RunFrame();
+	}
+
+	void Tap(casioemu::ePSCPU& machine, uint8_t key, int settle_frames = 4) {
+		machine.KeyDown(key);
+		for (int i = 0; i < 2; ++i)
+			machine.RunFrame();
+		machine.KeyUp(key);
+		for (int i = 0; i < settle_frames; ++i)
+			machine.RunFrame();
+	}
+
+	casioemu::Eps6800DisplayFrame Capture(casioemu::ePSCPU& machine) {
+		std::array<uint8_t, kLcdSize> lcd{};
+		machine.CopyLcd(lcd.data(), lcd.size());
+		return casioemu::DecodeEps6800Display(lcd.data(), lcd.size());
+	}
+
+	casioemu::Eps6800LcdControl CaptureControl(casioemu::ePSCPU& machine) {
+		std::array<uint8_t, kLcdSize> lcd{};
+		casioemu::Eps6800LcdControl control{};
+		machine.CopyLcd(lcd.data(), lcd.size(), &control);
+		return control;
+	}
+
+	void SetRomWord(std::vector<uint8_t>& rom, uint32_t address, uint16_t word) {
+		const size_t offset = static_cast<size_t>(address) * 4;
+		rom[offset] = static_cast<uint8_t>((word >> 12) & 0x0f);
+		rom[offset + 1] = static_cast<uint8_t>((word >> 8) & 0x0f);
+		rom[offset + 2] = static_cast<uint8_t>((word >> 4) & 0x0f);
+		rom[offset + 3] = static_cast<uint8_t>(word & 0x0f);
+	}
+
+	void SetPackedRomWord(std::vector<uint8_t>& rom, uint32_t address, uint16_t word) {
+		const size_t offset = static_cast<size_t>(address) * 2;
+		rom[offset] = static_cast<uint8_t>(word);
+		rom[offset + 1] = static_cast<uint8_t>(word >> 8);
+	}
+
+	bool Check(bool condition, const char* label, int line) {
+		if (!condition)
+			std::cerr << "[eps6800][fail] line " << line << ": " << label << "\n";
+		return condition;
+	}
+
+	bool LegacyPcDestinationReadSmoke() {
+		constexpr uint8_t kPcl = 0x07;
+		constexpr uint8_t kAccumulator = 0x0a;
+		constexpr uint8_t kStatus = 0x0f;
+		const auto Run = [&](uint16_t instruction, uint8_t accumulator, uint8_t status,
+			uint16_t branch_target = 0) {
+			casioemu::ePSCPU machine;
+			std::vector<uint8_t> rom(0x20000, 0);
+			SetPackedRomWord(rom, 0, instruction);
+			if ((instruction & 0xff00u) == 0x5100u)
+				SetPackedRomWord(rom, 1, branch_target);
+			if (!machine.LoadRom(rom, casioemu::Eps6800RomFormat::PackedLittleEndian))
+				return 0xffffffffu;
+			machine.Reset();
+			machine.WriteByte(kAccumulator, accumulator);
+			machine.WriteByte(kStatus, status);
+			machine.SetPC(0);
+			machine.Next();
+			return machine.ProgramCounter();
+		};
+
+		/* ePS6800's legacy interpreter deliberately mixes the PC+1 direct view
+		 * used by INC/ADD destinations with ordinary SFR reads for ADC/DEC/
+		 * SUB/SUBB/JDNZ. ePS9500's extended-FSR operand fix must not flatten
+		 * those two read modes into one. */
+		return Check(Run(0x1d00u | kPcl, 0, 0) == 0x02u,
+				"legacy INC PCL direct read", __LINE__) &&
+			Check(Run(0x1100u | kPcl, 1, 0) == 0x02u,
+				"legacy ADD PCL direct read", __LINE__) &&
+			Check(Run(0x1300u | kPcl, 1, 0) == 0x01u,
+				"legacy ADC PCL bus read", __LINE__) &&
+			Check(Run(0x1f00u | kPcl, 0, 0) == 0xffffu,
+				"legacy DEC PCL bus read", __LINE__) &&
+			Check(Run(0x1700u | kPcl, 1, 0) == 0xffffu,
+				"legacy SUB PCL bus read", __LINE__) &&
+			Check(Run(0x1900u | kPcl, 1, 0x01u) == 0xffffu,
+				"legacy SUBB PCL bus read", __LINE__) &&
+			Check(Run(0x5100u | kPcl, 0, 0, 0x0042u) == 0xffffu,
+				"legacy JDNZ PCL bus read", __LINE__);
+	}
+
+	bool KeyboardMatrixSmoke() {
+		constexpr uint8_t kPortA = 0x31;
+		constexpr uint8_t kDirectionA = 0x33;
+		constexpr uint8_t kPaInterruptEnable = 0x35;
+		constexpr uint8_t kPaInterruptStatus = 0x36;
+		constexpr uint8_t kPortB = 0x37;
+		constexpr uint8_t kDirectionB = 0x39;
+		constexpr uint8_t kCpuControl = 0x20;
+		constexpr uint8_t kGlobalInterruptEnable = 0x04;
+		constexpr uint8_t kOnMask = 0x80;
+
+		const auto Scan = [&](std::initializer_list<uint8_t> keys, uint8_t selected_pb_mask,
+			bool on = false, uint8_t firmware_ram_40 = 0) {
+			casioemu::ePSCPU machine;
+			std::vector<uint8_t> rom(0x20000, 0);
+			if (!machine.LoadRom(rom, casioemu::Eps6800RomFormat::PackedLittleEndian))
+				return static_cast<uint8_t>(0);
+			machine.Reset();
+			machine.WriteByte(kDirectionA, 0xff); // PA inputs with pull-ups.
+			machine.WriteByte(kDirectionB, 0x00); // PB scan outputs.
+			machine.WriteByte(kPortB, static_cast<uint8_t>(~selected_pb_mask));
+			machine.WriteByte(0x40, firmware_ram_40);
+			for (const auto key : keys)
+				machine.KeyDown(key);
+			if (on)
+				machine.OnDown();
+			for (int i = 0; i < 1100; ++i)
+				machine.Next();
+			return machine.ReadByte(kPortA);
+		};
+
+		const auto OnInterrupt = [&]() {
+			casioemu::ePSCPU machine;
+			std::vector<uint8_t> rom(0x20000, 0);
+			if (!machine.LoadRom(rom, casioemu::Eps6800RomFormat::PackedLittleEndian))
+				return false;
+			machine.Reset();
+			machine.WriteByte(kDirectionA, 0xff);
+			machine.WriteByte(kPaInterruptEnable, kOnMask);
+			machine.WriteByte(kCpuControl, kGlobalInterruptEnable);
+			machine.OnDown();
+			for (int i = 0; i < 1100; ++i)
+				machine.Next();
+			return (machine.ReadByte(kPaInterruptStatus) & kOnMask) != 0;
+		};
+		const auto ShortOnPulseIsObservable = [&]() {
+			casioemu::ePSCPU machine;
+			std::vector<uint8_t> rom(0x20000, 0);
+			if (!machine.LoadRom(rom, casioemu::Eps6800RomFormat::PackedLittleEndian))
+				return false;
+			machine.Reset();
+			machine.WriteByte(kDirectionA, 0xff);
+			machine.OnDown();
+			machine.OnUp();
+			for (int i = 0; i < 1001; ++i)
+				machine.Next();
+			const bool pressed = (machine.ReadByte(kPortA) & kOnMask) == 0;
+			for (int i = 0; i < 1000; ++i)
+				machine.Next();
+			return pressed && (machine.ReadByte(kPortA) & kOnMask) != 0;
+		};
+		const auto OnIgnoresGpioDirection = [&]() {
+			casioemu::ePSCPU machine;
+			std::vector<uint8_t> rom(0x20000, 0);
+			if (!machine.LoadRom(rom, casioemu::Eps6800RomFormat::PackedLittleEndian))
+				return false;
+			machine.Reset();
+			machine.WriteByte(kDirectionA, 0x00);
+			machine.WriteByte(kPortA, 0xff);
+			machine.OnDown();
+			for (int i = 0; i < 1100; ++i)
+				machine.Next();
+			return machine.ReadByte(kPortA) == 0x7f;
+		};
+		const auto KeyEnableWake = [&]() {
+			casioemu::ePSCPU machine;
+			std::vector<uint8_t> rom(0x20000, 0);
+			SetPackedRomWord(rom, 0, 0x0002); // SLEEP
+			SetPackedRomWord(rom, 1, 0x4e5a); // MOV A,#5Ah after wake
+			if (!machine.LoadRom(rom, casioemu::Eps6800RomFormat::PackedLittleEndian))
+				return false;
+			machine.Reset();
+			machine.WriteByte(0x30, 0x80); // STBCON.KE enables PA0-PA6 key wake.
+			machine.WriteByte(kDirectionA, 0xff);
+			machine.WriteByte(kDirectionB, 0x80);
+			machine.WriteByte(kPortB, 0x00);
+			machine.Next();
+			if ((machine.PC() >> 1) != 0)
+				return false;
+			machine.KeyDown(0);
+			for (int i = 0; i < 1100; ++i)
+				machine.Next();
+			return (machine.PC() >> 1) != 0;
+		};
+
+		constexpr uint8_t kPb0 = 1u << 0;
+		constexpr uint8_t kPb1 = 1u << 1;
+		constexpr uint8_t kPb5 = 1u << 5;
+		return
+			Scan({0, 1}, kPb0) == 0xfc &&                 // same PB row
+			Scan({0, 8}, kPb0) == 0xfe &&                 // same PA column, PB0
+			Scan({0, 8}, kPb1) == 0xfe &&                 // same PA column, PB1
+			Scan({0, 1, 8}, kPb1) == 0xfc &&              // 3-key rectangle ghosts PA1
+			Scan({0, 1, 8, 9}, kPb1) == 0xfc &&           // four physical corners
+			Scan({0}, kPb0, true) == 0x7e &&              // independent ON plus matrix key
+			Scan({}, kPb0, true) == 0x7f &&               // ON is independent of PB0
+			Scan({}, kPb5, true) == 0x7f &&               // ON is independent of PB5
+			Scan({3, 46}, kPb0 | kPb5, true) == 0x37 &&   // SHIFT+7+ON, paired rows
+			Scan({3, 46}, kPb5, true) == 0x3f &&          // SHIFT+ON
+			Scan({3, 46}, kPb0, true) == 0x77 &&          // 7+ON
+			Scan({0}, kPb0, false, 0x10) == 0xfe &&       // firmware RAM 40h is not scan state
+			OnInterrupt() &&
+			ShortOnPulseIsObservable() &&
+			OnIgnoresGpioDirection() &&
+			KeyEnableWake();
+	}
+
+	bool TimerSmoke() {
+		constexpr uint8_t kInterruptStatus = 0x24;
+		constexpr uint8_t kTimer0Control = 0x25;
+		constexpr uint8_t kTimer0ReloadLow = 0x26;
+		constexpr uint8_t kTimer0ReloadHigh = 0x27;
+		constexpr uint8_t kTimer0Enable = 0x08;
+		constexpr uint8_t kTimer0Flag = 0x01;
+
+		casioemu::ePSCPU machine;
+		std::vector<uint8_t> rom(0x20000, 0);
+		if (!machine.LoadRom(rom, casioemu::Eps6800RomFormat::PackedLittleEndian)) {
+			std::cerr << "timer packed ROM load failed\n";
+			return false;
+		}
+		machine.Reset();
+		machine.WriteByte(kTimer0ReloadLow, 0x02);
+		machine.WriteByte(kTimer0ReloadHigh, 0x00);
+		machine.WriteByte(kTimer0Control, kTimer0Enable);
+		for (int i = 0; i < 100; ++i)
+			machine.Next();
+		if ((machine.ReadByte(kInterruptStatus) & kTimer0Flag) == 0)
+			return false;
+
+		casioemu::ePSCPU idle_machine;
+		std::vector<uint8_t> idle_rom(0x20000, 0);
+		SetPackedRomWord(idle_rom, 0, 0x0002); // SLEP
+		SetPackedRomWord(idle_rom, 1, 0x4e5a); // MOV A,#5Ah after Timer1 wake
+		if (!idle_machine.LoadRom(idle_rom, casioemu::Eps6800RomFormat::PackedLittleEndian))
+			return false;
+		idle_machine.Reset();
+		idle_machine.WriteByte(0x20, 0x03); // CPUCON.MS1 selects Idle on SLEP.
+		idle_machine.WriteByte(kTimer0ReloadLow, 0x02);
+		idle_machine.WriteByte(kTimer0ReloadHigh, 0x00);
+		idle_machine.WriteByte(kTimer0Control, kTimer0Enable);
+		idle_machine.WriteByte(0x2b, 0x40); // Timer1 reload.
+		idle_machine.WriteByte(0x2a, 0x88); // T1WKEN | T1EN.
+		idle_machine.Next();
+		if ((idle_machine.PC() >> 1) != 0)
+			return false;
+		for (int i = 0; i < 20; ++i)
+			idle_machine.Next();
+		if ((idle_machine.ReadByte(kInterruptStatus) & kTimer0Flag) != 0)
+			return false; // Timer0 is stopped while the CPU is in Idle.
+		for (int i = 0; i < 300; ++i)
+			idle_machine.Next();
+		return (idle_machine.PC() >> 1) != 0;
+	}
+
+	bool IceIdleTimerSchedulingSmoke() {
+		constexpr uint8_t kCpuControl = 0x20;
+		constexpr uint8_t kTimer1Control = 0x2a;
+		constexpr uint8_t kTimer1Reload = 0x2b;
+		constexpr uint8_t kTimer1WakeEnable = 0x80;
+		constexpr uint8_t kTimer1Enable = 0x08;
+		constexpr uint8_t kIdleMode = 0x03;
+
+		casioemu::ePSCPU machine;
+		std::vector<uint8_t> rom(0x20000, 0);
+		SetPackedRomWord(rom, 0, 0x0002); // SLEP
+		SetPackedRomWord(rom, 1, 0x4e5a); // MOV A,#5Ah after Timer1 wake.
+		if (!machine.LoadRom(rom, casioemu::Eps6800RomFormat::PackedLittleEndian))
+			return false;
+		machine.Reset();
+		machine.SetIceTimerScheduling(true);
+		machine.WriteByte(kCpuControl, kIdleMode);
+		machine.WriteByte(kTimer1Reload, 0x40);
+		machine.WriteByte(kTimer1Control, kTimer1WakeEnable | kTimer1Enable);
+		machine.Next();
+		if ((machine.PC() >> 1) != 0)
+			return false;
+		machine.RunFrame(0x40 * 256);
+		return (machine.PC() >> 1) != 0;
+	}
+
+	bool RepeatInterruptDeferralSmoke() {
+		constexpr uint8_t kCpuControl = 0x20;
+		constexpr uint8_t kTimer1Control = 0x2a;
+		constexpr uint8_t kTimer1Reload = 0x2b;
+		constexpr uint8_t kRepeatCount = 0x80;
+		constexpr uint8_t kDestination = 0x81;
+
+		casioemu::ePSCPU machine;
+		std::vector<uint8_t> rom(0x20000, 0);
+		SetPackedRomWord(rom, 0, 0x2780); // RPT 80h
+		SetPackedRomWord(rom, 1, 0x1d81); // INC 81h
+		SetPackedRomWord(rom, 2, 0xc002); // SJMP 2
+		SetPackedRomWord(rom, 8, 0x0001); // RETI
+		if (!machine.LoadRom(rom, casioemu::Eps6800RomFormat::PackedLittleEndian))
+			return false;
+		machine.Reset();
+		machine.SetTimerCycleDivisor(1);
+		machine.WriteByte(kRepeatCount, 10);
+		machine.WriteByte(kDestination, 0);
+		machine.WriteByte(kCpuControl, 0x04); // CPUCON.GLINT
+		machine.WriteByte(kTimer1Reload, 1);
+		machine.WriteByte(kTimer1Control, 0x18); // TMR1IE | T1EN
+		for (int i = 0; i < 20; ++i)
+			machine.Next();
+		return machine.ReadByte(kDestination) == 10;
+	}
+
+	bool InterruptEntryMasksGlobalInterruptSmoke() {
+		constexpr uint8_t kStackPointer = 0x06;
+		constexpr uint8_t kCpuControl = 0x20;
+		constexpr uint8_t kTimer1Control = 0x2a;
+		constexpr uint8_t kTimer1Reload = 0x2b;
+		constexpr uint8_t kGlobalInterruptEnable = 0x04;
+
+		casioemu::ePSCPU machine;
+		std::vector<uint8_t> rom(0x20000, 0);
+		SetPackedRomWord(rom, 0, 0x0000); // NOP
+		SetPackedRomWord(rom, 8, 0x0000); // NOP: keep the ISR active for one step.
+		SetPackedRomWord(rom, 9, 0x2bff); // RETI
+		if (!machine.LoadRom(rom, casioemu::Eps6800RomFormat::PackedLittleEndian))
+			return false;
+		machine.Reset();
+		machine.SetTimerCycleDivisor(1);
+		machine.WriteByte(kCpuControl, kGlobalInterruptEnable);
+		machine.WriteByte(kTimer1Reload, 1);
+		machine.WriteByte(kTimer1Control, 0x18); // TMR1IE | T1EN
+
+		for (int i = 0; i < 32 && machine.ReadByte(kStackPointer) == 0; ++i)
+			machine.Next();
+		if ((machine.ReadByte(kCpuControl) & kGlobalInterruptEnable) != 0 ||
+			machine.ReadByte(kStackPointer) != 1 || (machine.PC() >> 1) != 9) {
+			std::cerr << "interrupt entry state: CPUCON=" << static_cast<unsigned>(machine.ReadByte(kCpuControl))
+				<< " STKPTR=" << static_cast<unsigned>(machine.ReadByte(kStackPointer))
+				<< " PC=" << (machine.PC() >> 1) << '\n';
+			return false;
+		}
+
+		machine.Next(); // Pending timer requests cannot nest; execute RETI instead.
+		const bool returned = machine.ReadByte(kStackPointer) == 0 &&
+			(machine.ReadByte(kCpuControl) & kGlobalInterruptEnable) != 0 &&
+			(machine.PC() >> 1) < 8;
+		if (!returned)
+			std::cerr << "interrupt return state: CPUCON=" << static_cast<unsigned>(machine.ReadByte(kCpuControl))
+				<< " STKPTR=" << static_cast<unsigned>(machine.ReadByte(kStackPointer))
+				<< " PC=" << (machine.PC() >> 1) << '\n';
+		return returned;
+	}
+
+	bool TablePointerSmoke() {
+		constexpr uint8_t kAccumulator = 0x0a;
+		constexpr uint8_t kTablePointerLow = 0x0b;
+		constexpr uint8_t kTablePointerMid = 0x0c;
+		constexpr uint8_t kTablePointerHigh = 0x0d;
+		constexpr uint8_t kTableReadDestination = 0x80;
+		constexpr uint8_t kChecksumHigh = 0x57;
+		constexpr uint8_t kChecksumLow = 0x58;
+
+		casioemu::ePSCPU machine;
+		std::vector<uint8_t> rom(0x30000, 0);
+		SetPackedRomWord(rom, 0, 0x2d80); // TBRD 1,80h: read then increment TABPTR.
+		rom[0x2ffff] = 0x5a;
+		if (!machine.LoadRom(rom, casioemu::Eps6800RomFormat::PackedLittleEndian)) {
+			std::cerr << "192 KiB packed ROM load failed\n";
+			return false;
+		}
+		machine.Reset();
+		machine.WriteByte(kTablePointerLow, 0xff);
+		machine.WriteByte(kTablePointerMid, 0xff);
+		machine.WriteByte(kTablePointerHigh, 0x02);
+		if (machine.ReadByte(kTablePointerHigh) != 0x02) {
+			std::cerr << "TABPTRH did not preserve bit 1\n";
+			return false;
+		}
+		machine.Next();
+		if (machine.ReadByte(kTableReadDestination) != 0x5a ||
+			machine.ReadByte(kTablePointerLow) != 0 ||
+			machine.ReadByte(kTablePointerMid) != 0 ||
+			machine.ReadByte(kTablePointerHigh) != 3) {
+			std::cerr << "upper table read mismatch: value=0x" << std::hex
+				<< static_cast<unsigned>(machine.ReadByte(kTableReadDestination))
+				<< " pointer=" << static_cast<unsigned>(machine.ReadByte(kTablePointerHigh))
+				<< static_cast<unsigned>(machine.ReadByte(kTablePointerMid))
+				<< static_cast<unsigned>(machine.ReadByte(kTablePointerLow)) << std::dec << '\n';
+			return false;
+		}
+
+		casioemu::ePSCPU arithmetic_machine;
+		std::vector<uint8_t> arithmetic_rom(0x20000, 0);
+		SetPackedRomWord(arithmetic_rom, 0, 0x1158); // ADD 58h,A
+		SetPackedRomWord(arithmetic_rom, 1, 0x240a); // CLR A; carry must be preserved.
+		SetPackedRomWord(arithmetic_rom, 2, 0x1357); // ADC 57h,A
+		if (!arithmetic_machine.LoadRom(arithmetic_rom, casioemu::Eps6800RomFormat::PackedLittleEndian))
+			return false;
+		arithmetic_machine.Reset();
+		for (unsigned low = 0; low <= 0xff; ++low) {
+			for (unsigned byte = 0; byte <= 0xff; ++byte) {
+				arithmetic_machine.WriteByte(kChecksumLow, static_cast<uint8_t>(low));
+				arithmetic_machine.WriteByte(kChecksumHigh, 0);
+				arithmetic_machine.WriteByte(kAccumulator, static_cast<uint8_t>(byte));
+				arithmetic_machine.SetPC(0);
+				arithmetic_machine.Next();
+				arithmetic_machine.Next();
+				arithmetic_machine.Next();
+				const unsigned expected = low + byte;
+				if (arithmetic_machine.ReadByte(kChecksumLow) != (expected & 0xff) ||
+					arithmetic_machine.ReadByte(kChecksumHigh) != (expected >> 8))
+					return false;
+			}
+		}
+		return true;
+	}
+
+	bool ArithmeticFlagsSmoke() {
+		constexpr uint8_t kAccumulator = 0x0a;
+		constexpr uint8_t kStatus = 0x0f;
+		constexpr uint8_t kOperand = 0x80;
+		constexpr uint8_t kResetHighBits = 0xc0;
+		constexpr uint8_t kCarry = 0x01;
+		constexpr uint8_t kDigitCarry = 0x02;
+		constexpr uint8_t kZero = 0x04;
+		constexpr uint8_t kOverflow = 0x08;
+		constexpr uint8_t kSignedLessEqual = 0x10;
+		constexpr uint8_t kSignedGreaterEqual = 0x20;
+
+		const auto Run = [&](uint16_t instruction, uint8_t accumulator,
+			uint8_t operand, uint8_t status) {
+			casioemu::ePSCPU machine;
+			std::vector<uint8_t> rom(0x20000, 0);
+			SetPackedRomWord(rom, 0, instruction);
+			if (!machine.LoadRom(rom, casioemu::Eps6800RomFormat::PackedLittleEndian))
+				return std::pair<uint8_t, uint8_t>{0xff, 0xff};
+			machine.Reset();
+			machine.WriteByte(kAccumulator, accumulator);
+			machine.WriteByte(kOperand, operand);
+			machine.WriteByte(kStatus, status);
+			machine.Next();
+			return std::pair<uint8_t, uint8_t>{
+				machine.ReadByte(kAccumulator), machine.ReadByte(kStatus)};
+		};
+
+		const auto add_overflow = Run(0x4a01, 0x7f, 0, kResetHighBits);
+		const auto add_zero = Run(0x4a01, 0xff, 0, kResetHighBits);
+		const auto subtract_negative = Run(0x4c00, 0x01, 0, kResetHighBits);
+		const auto subtract_borrow = Run(0x4d00, 0x01, 0, kResetHighBits);
+		const auto increment_overflow = Run(0x1c80, 0, 0x7f, kResetHighBits);
+		const auto decrement_negative = Run(0x1e80, 0, 0x00, kResetHighBits);
+		const auto bcd_add = Run(0x1480, 0x01, 0x09, kResetHighBits);
+		const auto bcd_subtract = Run(0x1a80, 0x01, 0x10, kResetHighBits | kCarry);
+
+		return
+			add_overflow == std::pair<uint8_t, uint8_t>{
+				0x80, kResetHighBits | kDigitCarry | kOverflow | kSignedGreaterEqual} &&
+			add_zero == std::pair<uint8_t, uint8_t>{
+				0x00, kResetHighBits | kCarry | kDigitCarry | kZero |
+				kSignedLessEqual | kSignedGreaterEqual} &&
+			subtract_negative == std::pair<uint8_t, uint8_t>{
+				0xff, kResetHighBits | kSignedLessEqual} &&
+			subtract_borrow == std::pair<uint8_t, uint8_t>{
+				0xfe, kResetHighBits | kSignedLessEqual} &&
+			increment_overflow == std::pair<uint8_t, uint8_t>{
+				0x80, kResetHighBits | kOverflow} &&
+			decrement_negative == std::pair<uint8_t, uint8_t>{
+				0xff, kResetHighBits} &&
+			bcd_add == std::pair<uint8_t, uint8_t>{0x10, kResetHighBits | kDigitCarry} &&
+			bcd_subtract == std::pair<uint8_t, uint8_t>{0x09, kResetHighBits | kCarry};
+	}
+
+	// F3: 0x0001 (HALT-like) sets STATUS TO/PD; F4: INC/DEC commit only C/Z/OV
+	// and preserve DC/SLE/SGE. Reference behavior from ice.dll (EPS6800).
+	bool HaltAndIncDecSmoke() {
+		constexpr uint8_t kAccumulator = 0x0a;
+		constexpr uint8_t kStatus = 0x0f;
+		constexpr uint8_t kOperand = 0x80;
+		constexpr uint8_t kCarry = 0x01;
+		constexpr uint8_t kDigitCarry = 0x02;
+		constexpr uint8_t kZero = 0x04;
+		constexpr uint8_t kOverflow = 0x08;
+		constexpr uint8_t kSignedLessEqual = 0x10;
+		constexpr uint8_t kSignedGreaterEqual = 0x20;
+		constexpr uint8_t kPowerDown = 0x40;
+		constexpr uint8_t kTimerOverflow = 0x80;
+
+		const auto Run = [&](uint16_t instruction, uint8_t accumulator,
+			uint8_t operand, uint8_t status) {
+			casioemu::ePSCPU machine;
+			std::vector<uint8_t> rom(0x20000, 0);
+			SetPackedRomWord(rom, 0, instruction);
+			if (!machine.LoadRom(rom, casioemu::Eps6800RomFormat::PackedLittleEndian))
+				return std::pair<uint8_t, uint8_t>{0xff, 0xff};
+			machine.Reset();
+			machine.WriteByte(kAccumulator, accumulator);
+			machine.WriteByte(kOperand, operand);
+			machine.WriteByte(kStatus, status);
+			machine.Next();
+			return std::pair<uint8_t, uint8_t>{
+				machine.ReadByte(kAccumulator), machine.ReadByte(kStatus)};
+		};
+
+		// 0x0001: sets TO and PD, leaves other STATUS bits intact, PC advances.
+		const auto halt = Run(0x0001, 0, 0, kZero | kCarry);
+		if (halt != std::pair<uint8_t, uint8_t>{0, kZero | kCarry | kPowerDown | kTimerOverflow}) {
+			std::cerr << "0x0001 did not set STATUS TO/PD\n";
+			return false;
+		}
+		// 0x0001 is not NOP: TO/PD must not be set for NOP.
+		const auto nop = Run(0x0000, 0, 0, kZero | kCarry);
+		if (nop != std::pair<uint8_t, uint8_t>{0, kZero | kCarry}) {
+			std::cerr << "NOP must not set STATUS TO/PD\n";
+			return false;
+		}
+
+		// INC A: 0x7f + 1 = 0x80: OV=1, C=0, Z=0; DC/SLE/SGE preserved.
+		const auto inc_preserve = Run(0x1c80, 0, 0x7f,
+			kDigitCarry | kSignedLessEqual | kSignedGreaterEqual);
+		if (inc_preserve != std::pair<uint8_t, uint8_t>{
+				0x80, kDigitCarry | kSignedLessEqual | kSignedGreaterEqual | kOverflow}) {
+			std::cerr << "INC must not disturb DC/SLE/SGE\n";
+			return false;
+		}
+		// INC A: 0xff + 1 = 0x00: C=1, Z=1.
+		const auto inc_carry = Run(0x1c80, 0, 0xff, kDigitCarry);
+		if (inc_carry != std::pair<uint8_t, uint8_t>{0x00, kDigitCarry | kCarry | kZero}) {
+			std::cerr << "INC carry/zero flags mismatch\n";
+			return false;
+		}
+
+		// DEC A: 0x00 - 1 = 0xff: C=0 (borrow), Z=0, OV=0; DC/SLE/SGE preserved.
+		const auto dec_borrow = Run(0x1e80, 0, 0x00,
+			kDigitCarry | kSignedLessEqual | kSignedGreaterEqual);
+		if (dec_borrow != std::pair<uint8_t, uint8_t>{
+				0xff, kDigitCarry | kSignedLessEqual | kSignedGreaterEqual}) {
+			std::cerr << "DEC must not disturb DC/SLE/SGE\n";
+			return false;
+		}
+		// DEC A: 0x01 - 1 = 0x00: C=1, Z=1.
+		const auto dec_ok = Run(0x1e80, 0, 0x01, kDigitCarry);
+		if (dec_ok != std::pair<uint8_t, uint8_t>{0x00, kDigitCarry | kCarry | kZero}) {
+			std::cerr << "DEC carry/zero flags mismatch\n";
+			return false;
+		}
+		return true;
+	}
+
+	// F5: reset register defaults per the reference ice.dll CIce::Reset
+	// (EPS6800 branch). POSTID 0xF0 (incl. FSR2ID), DCRDE 0x33, CPUCON/PAWAKE
+	// 0x10 (ROM word 12 bit 9 is clear on all supported models), STATUS 0xC0,
+	// FSR1/FSR2 0x80.
+	bool ResetValuesSmoke() {
+		casioemu::ePSCPU machine;
+		std::vector<uint8_t> rom(0x30000, 0);
+		if (!machine.LoadRom(rom, casioemu::Eps6800RomFormat::PackedLittleEndian)) {
+			std::cerr << "reset ROM load failed\n";
+			return false;
+		}
+		machine.Reset();
+		const auto Check = [&](uint8_t addr, uint8_t expected, const char* name) {
+			const uint8_t actual = machine.ReadByte(addr);
+			if (actual != expected) {
+				std::cerr << name << " reset mismatch: 0x" << std::hex
+					<< static_cast<unsigned>(actual) << " != 0x"
+					<< static_cast<unsigned>(expected) << std::dec << "\n";
+				return false;
+			}
+			return true;
+		};
+		return Check(0x21, 0xf0, "POSTID") &&
+			Check(0x3f, 0x33, "DCRDE") &&
+			Check(0x20, 0x10, "CPUCON") &&
+			Check(0x34, 0x10, "PAWAKE") &&
+			Check(0x0f, 0xc0, "STATUS") &&
+			Check(0x04, 0x80, "FSR1") &&
+			Check(0x11, 0x80, "FSR2");
+	}
+
+	void DumpLcdAscii(casioemu::ePSCPU& machine, const char* label) {
+		std::array<uint8_t, kLcdSize> lcd{};
+		machine.CopyLcd(lcd.data(), lcd.size());
+		const auto frame = casioemu::DecodeEps6800Display(lcd.data(), lcd.size());
+		std::cout << "--- " << label << " ---\n";
+		for (size_t y = 0; y < casioemu::EPS6800_LCD_PIXEL_HEIGHT; ++y) {
+			for (size_t x = 0; x < casioemu::EPS6800_LCD_WIDTH; ++x)
+				std::cout << (frame.pixels[y * casioemu::EPS6800_LCD_WIDTH + x] ? '#' : ' ');
+			std::cout << '\n';
+		}
+		std::cout << "status:";
+		for (size_t i = 0; i < casioemu::EPS6800_STATUS_SIZE; ++i)
+			std::cout << ' ' << std::hex << std::setw(2) << std::setfill('0')
+			<< static_cast<unsigned>(frame.status[i]);
+		std::cout << std::dec << '\n';
+	}
+
+	// F-789SGA functional check: boot the real ROM, run 1+2=, and dump the
+	// LCD as ASCII art plus hashes. The golden values are locked once verified.
+	bool F789SgaFunctionalSmoke(const char* rom_path) {
+		const auto rom = ReadRom(rom_path);
+		if (rom.size() != 0x30000) {
+			std::cerr << "F-789SGA ROM size mismatch: " << rom.size() << "\n";
+			return false;
+		}
+		casioemu::ePSCPU machine;
+		if (!machine.LoadRom(rom, casioemu::Eps6800RomFormat::PackedLittleEndian)) {
+			std::cerr << "F-789SGA ROM load failed\n";
+			return false;
+		}
+		machine.Reset();
+		// config.json: port_c_input_mask 0x0F, value 0x00 (model select).
+		machine.SetPortCInput(0x0f, 0x00);
+		machine.SetIceTimerScheduling(true);
+		const auto State = [&](const char* label) {
+			std::cout << label << ": pc=0x" << std::hex << machine.ProgramCounter()
+				<< " lcdcon=0x" << static_cast<unsigned>(machine.ReadByte(0x2e))
+				<< " lcdarl=0x" << static_cast<unsigned>(machine.ReadByte(0x22))
+				<< " paintsta=0x" << static_cast<unsigned>(machine.ReadByte(0x36))
+				<< " painten=0x" << static_cast<unsigned>(machine.ReadByte(0x35))
+				<< " porta=0x" << static_cast<unsigned>(machine.ReadByte(0x31))
+				<< " dcra=0x" << static_cast<unsigned>(machine.ReadByte(0x33))
+				<< " stbcon=0x" << static_cast<unsigned>(machine.ReadByte(0x30)) << std::dec << '\n';
+		};
+		machine.OnDown();
+		for (int i = 0; i < 30; ++i)
+			machine.RunFrame();
+		machine.OnUp();
+		for (int i = 0; i < 300; ++i)
+			machine.RunFrame();
+		State("F789SGA boot");
+		DumpLcdAscii(machine, "F789SGA boot");
+
+		const auto HashLcd = [&](casioemu::ePSCPU& m) {
+			std::array<uint8_t, kLcdSize> lcd{};
+			m.CopyLcd(lcd.data(), lcd.size());
+			return Fnv1a(lcd.data(), lcd.size());
+		};
+		const uint32_t boot_hash = HashLcd(machine);
+
+		// Press and hold '1' for a long time, then release.
+		machine.KeyDown(0); // '1' (kiko 0: ko=0, ki=0)
+		for (int i = 0; i < 10; ++i)
+			machine.RunFrame();
+		State("while 1 held");
+		machine.KeyUp(0);
+		for (int i = 0; i < 20; ++i)
+			machine.RunFrame();
+		State("after 1");
+
+		const auto TapLong = [&](uint8_t key) {
+			machine.KeyDown(key);
+			for (int i = 0; i < 8; ++i)
+				machine.RunFrame();
+			machine.KeyUp(key);
+			for (int i = 0; i < 20; ++i)
+				machine.RunFrame();
+		};
+		TapLong(11); // '+'
+		TapLong(1);  // '2'
+		TapLong(6);  // '='
+		for (int i = 0; i < 40; ++i)
+			machine.RunFrame();
+		State("after 1+2=");
+		DumpLcdAscii(machine, "F789SGA after 1+2=");
+		const uint32_t result_hash = HashLcd(machine);
+
+		std::cout << "F789SGA boot_lcd_hash=0x" << std::hex << boot_hash
+			<< " result_lcd_hash=0x" << result_hash << std::dec << '\n';
+		/* Golden values locked from the verified run: boot shows the idle
+		 * display, 1+2= produces the computed result glyphs. */
+		if (boot_hash != 0xdf402aebu || result_hash != 0xd8ca5010u) {
+			std::cerr << "F-789SGA 1+2= golden LCD regression\n";
+			return false;
+		}
+		return true;
+	}
+
+	bool PortCInputSmoke() {
+		constexpr uint8_t kPortC = 0x3a;
+		constexpr uint8_t kDirectionC = 0x3c;
+		casioemu::ePSCPU machine;
+		machine.SetPortCInput(0x0f, 0x0a);
+		machine.Reset();
+		machine.WriteByte(kPortC, 0xf0);
+		machine.WriteByte(kDirectionC, 0x0f);
+		if (machine.ReadByte(kPortC) != 0xfa)
+			return false;
+		machine.WriteByte(kDirectionC, 0x00);
+		return machine.ReadByte(kPortC) == 0xf0;
+	}
+
+	bool Eps9500KeyboardAndStackSmoke() {
+		static_assert(casioemu::EpsPowerKeyResetsCpu(casioemu::HW_EPS6800));
+		static_assert(casioemu::EpsPowerKeyResetsCpu(casioemu::HW_EPS6009));
+		static_assert(!casioemu::EpsPowerKeyResetsCpu(casioemu::HW_EPS9500));
+
+		constexpr uint8_t kAccumulator = 0x0a;
+		constexpr uint8_t kPortA = 0x31;
+		constexpr uint8_t kDirectionA = 0x33;
+		constexpr uint8_t kPaWake = 0x34;
+		constexpr uint8_t kDirectionB = 0x39;
+		constexpr uint8_t kPortB = 0x37;
+		constexpr uint8_t kPortCControl = 0x3b;
+		constexpr uint8_t kOnMask = 0x80;
+
+		std::vector<uint8_t> on_rom(0x30000, 0);
+		SetPackedRomWord(on_rom, 0, 0x0002); // SLEP; ePS9500 resumes at word 1.
+		SetPackedRomWord(on_rom, 1, 0x4e5a); // MOV A,#5Ah after ON wake.
+		casioemu::ePSCPU on_machine(casioemu::EpsVariant::Eps9500);
+		if (!on_machine.LoadRom(on_rom, casioemu::Eps6800RomFormat::PackedLittleEndian))
+			return false;
+		on_machine.Reset();
+		on_machine.WriteByte(kPaWake, 0x00); // ON is a dedicated wake source.
+		on_machine.WriteByte(kPortCControl, 0x5a);
+		on_machine.WriteByte(0x80, 0xa5);
+		on_machine.Next();
+		const uint32_t sleeping_pc = on_machine.ProgramCounter();
+		if (!Check(sleeping_pc == 1, "eps9500 ON enters sleep", __LINE__))
+			return false;
+		on_machine.OnDown();
+		if (!Check(on_machine.ProgramCounter() == sleeping_pc &&
+				on_machine.ReadByte(kPortCControl) == 0x5a && on_machine.ReadByte(0x80) == 0xa5,
+				"eps9500 ON edge preserves machine state", __LINE__))
+			return false;
+		for (int i = 0; i < 1100; ++i)
+			on_machine.Next();
+		if (!Check(on_machine.ReadByte(kAccumulator) == 0x5a &&
+			(on_machine.ReadByte(kPortA) & kOnMask) == 0 &&
+			on_machine.ReadByte(kPortCControl) == 0x5a && on_machine.ReadByte(0x80) == 0xa5,
+			"eps9500 ON wake", __LINE__))
+			return false;
+		on_machine.OnUp();
+		for (int i = 0; i < 1100; ++i)
+			on_machine.Next();
+		if (!Check((on_machine.ReadByte(kPortA) & kOnMask) != 0, "eps9500 ON release", __LINE__))
+			return false;
+
+		std::vector<uint8_t> wake_rom(0x30000, 0);
+		SetPackedRomWord(wake_rom, 0, 0x0002); // SLEP; ePS9500 resumes at word 1.
+		SetPackedRomWord(wake_rom, 1, 0x4e5a); // MOV A,#5Ah after matrix wake.
+		casioemu::ePSCPU wake_machine(casioemu::EpsVariant::Eps9500);
+		if (!wake_machine.LoadRom(wake_rom, casioemu::Eps6800RomFormat::PackedLittleEndian))
+			return false;
+		wake_machine.Reset();
+		if (!Check(wake_machine.ReadByte(0x0f) == 0xc0 &&
+			(wake_machine.ReadByte(0x20) & 0x10) != 0 &&
+			wake_machine.ReadByte(0x30) == 0x20 &&
+			wake_machine.ReadByte(0x31) == 0xff &&
+			wake_machine.ReadByte(0x37) == 0xff &&
+			wake_machine.ReadByte(0x3a) == 0xff &&
+			wake_machine.ReadByte(0x3c) == 0xff,
+			"eps9500 reset defaults", __LINE__))
+			return false;
+		wake_machine.WriteByte(0x30, 0x80); // STBCON.KE
+		wake_machine.WriteByte(kDirectionA, 0xff);
+		wake_machine.WriteByte(kDirectionB, 0x00);
+		wake_machine.WriteByte(kPortB, 0xfe); // Select matrix row PB0.
+		wake_machine.WriteByte(kPaWake, 0x01);
+		wake_machine.Next();
+		if (!Check((wake_machine.PC() >> 1) == 1, "eps9500 matrix enters sleep", __LINE__))
+			return false;
+		wake_machine.KeyDown(0);
+		for (int i = 0; i < 1100; ++i)
+			wake_machine.Next();
+		if (!Check(wake_machine.ReadByte(kAccumulator) == 0x5a, "eps9500 matrix wake", __LINE__))
+			return false;
+
+		std::vector<uint8_t> stack_rom(0x30000, 0);
+		SetPackedRomWord(stack_rom, 0, 0xe004); // SCALL word 4.
+		SetPackedRomWord(stack_rom, 1, 0x0000); // Return target.
+		SetPackedRomWord(stack_rom, 4, 0x2bfe); // RET.
+		casioemu::ePSCPU stack_machine(casioemu::EpsVariant::Eps9500);
+		if (!stack_machine.LoadRom(stack_rom, casioemu::Eps6800RomFormat::PackedLittleEndian))
+			return false;
+		stack_machine.Reset();
+		stack_machine.Next();
+		const auto snapshot = stack_machine.DebugSnapshot();
+		if (!Check(stack_machine.ReadByte(0x06) == 0xfe && snapshot.stack_pointer == 1 &&
+			snapshot.stack[0] == 1 && stack_machine.GetBacktrace().find("<- 1") != std::string::npos,
+			"eps9500 stack snapshot", __LINE__))
+			return false;
+		if (!Check(stack_machine.RequestStepOut() && stack_machine.RunFrame() &&
+			stack_machine.LastDebugStop().reason == casioemu::Eps6800DebugStopReason::StepOut &&
+			stack_machine.ProgramCounter() == 1,
+			"eps9500 step out", __LINE__))
+			return false;
+
+		std::vector<uint8_t> wbk_rom(0x30000, 0);
+		SetPackedRomWord(wbk_rom, 0, 0x2000); // MOV A,INDF0.
+		casioemu::ePSCPU wbk_machine(casioemu::EpsVariant::Eps9500);
+		if (!wbk_machine.LoadRom(wbk_rom, casioemu::Eps6800RomFormat::PackedLittleEndian))
+			return false;
+		wbk_machine.Reset();
+		wbk_machine.WriteByte(0x20, 0x00); // CPUCON.WBK off: select the real SFR.
+		wbk_machine.WriteByte(0x2e, 0x32); // LCDCON.
+		wbk_machine.WriteByte(0x20, 0x80); // CPUCON.WBK on: select the work bank.
+		wbk_machine.WriteByte(0x2e, 0x5a);
+		wbk_machine.WriteByte(0x01, 0x2e); // FSR0 indirectly selects work-bank 2Eh.
+		wbk_machine.Next();
+		if (wbk_machine.ReadByte(0x0a) != 0x5a)
+			return false;
+		wbk_machine.WriteByte(0x00, 0x6b); // INDF0 write must use the same selection.
+		if (wbk_machine.ReadByte(0x2e) != 0x6b)
+			return false;
+		wbk_machine.WriteByte(0x20, 0x00);
+		if (wbk_machine.ReadByte(0x2e) != 0x32)
+			return false;
+
+		/* The debugger snapshot intentionally exposes only 32 frames, but
+		 * StepOut must use the physical ePS9500 stack top even when the real
+		 * call depth is greater than that presentation limit. */
+		constexpr uint32_t kDeepCallCount = 33;
+		std::vector<uint8_t> deep_rom(0x30000, 0);
+		for (uint32_t i = 0; i < kDeepCallCount; ++i) {
+			const uint32_t call_pc = i * 2u;
+			const uint32_t target = (i + 1u) * 2u;
+			SetPackedRomWord(deep_rom, call_pc, static_cast<uint16_t>(0xe000u | target));
+		}
+		const uint32_t deepest_pc = kDeepCallCount * 2u;
+		const uint32_t deepest_return = (kDeepCallCount - 1u) * 2u + 1u;
+		SetPackedRomWord(deep_rom, deepest_pc, 0x2bfeu); // RET.
+		casioemu::ePSCPU deep_machine(casioemu::EpsVariant::Eps9500);
+		if (!deep_machine.LoadRom(deep_rom, casioemu::Eps6800RomFormat::PackedLittleEndian))
+			return false;
+		deep_machine.Reset();
+		for (uint32_t i = 0; i < kDeepCallCount; ++i)
+			deep_machine.Next();
+		const auto deep_snapshot = deep_machine.DebugSnapshot();
+		if (!Check(deep_snapshot.stack_pointer == 32, "eps9500 deep stack snapshot cap", __LINE__) ||
+			!Check(deep_machine.RequestStepOut(), "eps9500 deep step out request", __LINE__) ||
+			!Check(deep_machine.RunFrame(), "eps9500 deep step out stop", __LINE__) ||
+			!Check(deep_machine.LastDebugStop().reason == casioemu::Eps6800DebugStopReason::StepOut &&
+				deep_machine.ProgramCounter() == deepest_return,
+				"eps9500 deep step out target", __LINE__))
+			return false;
+		return true;
+	}
+
+	bool Eps9500ExtendedFsrArithmeticSmoke() {
+		constexpr uint8_t kAccumulator = 0x0a;
+		constexpr uint8_t kStatus = 0x0f;
+		constexpr uint8_t kFsr1 = 0x04;
+		constexpr uint8_t kBsr1 = 0x05;
+		constexpr uint8_t kFsr2 = 0x11;
+		constexpr uint8_t kBsr2 = 0x12;
+		constexpr uint8_t kFsr0 = 0x01;
+		constexpr uint8_t kBsr0 = 0x02;
+		constexpr uint8_t kPcm = 0x08;
+		constexpr uint8_t kPch = 0x09;
+		constexpr uint8_t kTabptrl = 0x0b;
+		constexpr uint8_t kTabptrm = 0x0c;
+		constexpr uint8_t kTabptrh = 0x0d;
+		constexpr uint8_t kInitialStatus = 0xc0;
+
+		const auto Run = [&](uint16_t instruction, uint8_t fsr_reg, uint8_t bsr_reg,
+			uint8_t fsr, uint8_t bsr, uint8_t accumulator, uint8_t status) {
+			casioemu::ePSCPU machine(casioemu::EpsVariant::Eps9500);
+			std::vector<uint8_t> rom(0x30000, 0);
+			SetPackedRomWord(rom, 0, instruction);
+			if (!machine.LoadRom(rom, casioemu::Eps6800RomFormat::PackedLittleEndian))
+				return std::array<uint8_t, 4>{0xff, 0xff, 0xff, 0xff};
+			machine.Reset();
+			machine.WriteByte(fsr_reg, fsr);
+			machine.WriteByte(bsr_reg, bsr);
+			machine.WriteByte(kAccumulator, accumulator);
+			machine.WriteByte(kStatus, status);
+			/* Some chain-register cases intentionally write PCH. Keep the test
+			 * instruction anchored at word zero after setting up those operands. */
+			machine.SetPC(0);
+			machine.Next();
+			return std::array<uint8_t, 4>{machine.ReadByte(fsr_reg),
+				machine.ReadByte(bsr_reg), machine.ReadByte(kStatus),
+				machine.ReadByte(kAccumulator)};
+		};
+
+		/* The ePS9500 mode-4 interpreter folds BSRx[0] into bit 7 only for
+		 * binary operations whose destination is FSRx.  A full eight-bit
+		 * carry or borrow consequently moves the BSRx encoding by two. */
+		const auto fsr1_borrow = Run(0x1700 | kFsr1, kFsr1, kBsr1,
+			0x80, 0x10, 0x01, kInitialStatus);
+		const auto fsr2_borrow = Run(0x1900 | kFsr2, kFsr2, kBsr2,
+			0x80, 0x10, 0x01, kInitialStatus | 0x01);
+		const auto fsr2_carry = Run(0x1100 | kFsr2, kFsr2, kBsr2,
+			0xff, 0x11, 0x01, kInitialStatus);
+		const auto fsr1_no_borrow = Run(0x1f00 | kFsr1, kFsr1, kBsr1,
+			0x80, 0x11, 0x00, kInitialStatus);
+		const auto fsr2_no_carry = Run(0x1100 | kFsr2, kFsr2, kBsr2,
+			0xff, 0x10, 0x01, kInitialStatus);
+		const auto fsr1_jdnz_borrow = Run(0x5100 | kFsr1, kFsr1, kBsr1,
+			0x80, 0x10, 0x00, kInitialStatus);
+		const auto fsr2_jdnz_borrow = Run(0x5100 | kFsr2, kFsr2, kBsr2,
+			0x80, 0x10, 0x00, kInitialStatus);
+		const auto raw_accumulator_source = Run(0x1000 | kFsr2, kFsr2, kBsr2,
+			0x80, 0x10, 0x00, kInitialStatus);
+		const auto raw_decimal_destination = Run(0x1500 | kFsr2, kFsr2, kBsr2,
+			0x80, 0x10, 0x01, kInitialStatus);
+		const auto fsr0_no_borrow_chain = Run(0x1f00 | kFsr0, kFsr0, kBsr0,
+			0x00, 0x10, 0x00, kInitialStatus);
+		const auto fsr0_no_carry_chain = Run(0x1d00 | kFsr0, kFsr0, kBsr0,
+			0xff, 0x10, 0x00, kInitialStatus);
+		const auto tabptr_low_borrow = Run(0x1f00 | kTabptrl, kTabptrl, kTabptrm,
+			0x00, 0x10, 0x00, kInitialStatus);
+		const auto tabptr_mid_no_borrow_chain = Run(0x1f00 | kTabptrm, kTabptrm, kTabptrh,
+			0x00, 0x02, 0x00, kInitialStatus);
+
+		return
+			Check(Run(0x1100 | kFsr2, kFsr2, kBsr2, 0x80, 0x10, 0x01, kInitialStatus)[0] == 0x81,
+				"eps9500 add FSR2", __LINE__) &&
+			Check(Run(0x1300 | kFsr2, kFsr2, kBsr2, 0x80, 0x10, 0x01, kInitialStatus | 0x01)[0] == 0x82,
+				"eps9500 adc FSR2", __LINE__) &&
+			Check(fsr1_borrow[0] == 0xff && fsr1_borrow[1] == 0x0f, "eps9500 FSR1 borrow", __LINE__) &&
+			Check(fsr2_borrow[0] == 0xff && fsr2_borrow[1] == 0x0f, "eps9500 FSR2 borrow", __LINE__) &&
+			Check(fsr2_carry[0] == 0x80 && fsr2_carry[1] == 0x12, "eps9500 FSR2 carry", __LINE__) &&
+			Check(fsr1_no_borrow[0] == 0xff && fsr1_no_borrow[1] == 0x10, "eps9500 FSR1 no borrow", __LINE__) &&
+			Check(fsr2_no_carry[0] == 0x80 && fsr2_no_carry[1] == 0x11, "eps9500 FSR2 no carry", __LINE__) &&
+			Check(fsr1_jdnz_borrow[0] == 0xff && fsr1_jdnz_borrow[1] == 0x0f,
+				"eps9500 FSR1 JDNZ borrow", __LINE__) &&
+			Check(fsr2_jdnz_borrow[0] == 0xff && fsr2_jdnz_borrow[1] == 0x0f,
+				"eps9500 FSR2 JDNZ borrow", __LINE__) &&
+			Check(raw_accumulator_source[3] == 0x80 && raw_accumulator_source[1] == 0x10,
+				"eps9500 raw accumulator source", __LINE__) &&
+			Check(raw_decimal_destination[0] == 0x81 && raw_decimal_destination[1] == 0x10,
+				"eps9500 raw decimal destination", __LINE__) &&
+			Check(fsr0_no_borrow_chain[0] == 0xff && fsr0_no_borrow_chain[1] == 0x10,
+				"eps9500 FSR0 no borrow chain", __LINE__) &&
+			Check(fsr0_no_carry_chain[0] == 0x00 && fsr0_no_carry_chain[1] == 0x10,
+				"eps9500 FSR0 no carry chain", __LINE__) &&
+			Check(tabptr_low_borrow[0] == 0xff && tabptr_low_borrow[1] == 0x0f,
+				"eps9500 TABPTRL borrow", __LINE__) &&
+			Check(tabptr_mid_no_borrow_chain[0] == 0xff && tabptr_mid_no_borrow_chain[1] == 0x02,
+				"eps9500 TABPTRM no borrow chain", __LINE__);
+	}
+
+	bool Eps6800ExtendedFsrArithmeticSmoke() {
+		constexpr uint8_t kAccumulator = 0x0a;
+		constexpr uint8_t kStatus = 0x0f;
+		constexpr uint8_t kFsr1 = 0x04;
+		constexpr uint8_t kBsr1 = 0x05;
+		constexpr uint8_t kFsr2 = 0x11;
+		constexpr uint8_t kBsr2 = 0x12;
+
+		const auto Run = [&](casioemu::EpsVariant variant, uint8_t fsr_reg, uint8_t bsr_reg,
+			uint16_t instruction, uint8_t fsr, uint8_t bsr, uint8_t accumulator, uint8_t status) {
+			casioemu::ePSCPU machine(variant);
+			std::vector<uint8_t> rom(0x30000, 0);
+			SetPackedRomWord(rom, 0, instruction);
+			if (!machine.LoadRom(rom, casioemu::Eps6800RomFormat::PackedLittleEndian))
+				return std::array<uint8_t, 2>{0xff, 0xff};
+			machine.Reset();
+			machine.WriteByte(fsr_reg, fsr);
+			machine.WriteByte(bsr_reg, bsr);
+			machine.WriteByte(kAccumulator, accumulator);
+			machine.WriteByte(kStatus, status);
+			machine.SetPC(0);
+			machine.Next();
+			return std::array<uint8_t, 2>{machine.ReadByte(fsr_reg), machine.ReadByte(bsr_reg)};
+		};
+
+		const auto CheckPointer = [&](casioemu::EpsVariant variant, uint8_t fsr_reg,
+			uint8_t bsr_reg, const char *name) {
+			const auto carry = Run(variant, fsr_reg, bsr_reg,
+				(uint16_t)(0x1100u | fsr_reg), 0xff, 0x11, 0x01, 0xc0);
+			const auto no_carry = Run(variant, fsr_reg, bsr_reg,
+				(uint16_t)(0x1100u | fsr_reg), 0x80, 0x10, 0x01, 0xc0);
+			const auto borrow = Run(variant, fsr_reg, bsr_reg,
+				(uint16_t)(0x1700u | fsr_reg), 0x80, 0x10, 0x01, 0xc0);
+			return Check(carry[0] == 0x00 && carry[1] == 0x12, name, __LINE__) &&
+				Check(no_carry[0] == 0x01 && no_carry[1] == 0x10, name, __LINE__) &&
+				Check(borrow[0] == 0xff && borrow[1] == 0x0f, name, __LINE__);
+		};
+
+		return CheckPointer(casioemu::EpsVariant::Eps6800, kFsr1, kBsr1,
+			"EPS6800 mode-0 extended FSR1") &&
+			CheckPointer(casioemu::EpsVariant::Eps6800, kFsr2, kBsr2,
+				"EPS6800 mode-0 extended FSR2") &&
+			CheckPointer(casioemu::EpsVariant::Eps6800W192, kFsr1, kBsr1,
+				"W192 mode-0 extended FSR1") &&
+			CheckPointer(casioemu::EpsVariant::Eps6800W192, kFsr2, kBsr2,
+				"W192 mode-0 extended FSR2");
+	}
+
+	bool Eps9500RamAddressingSmoke() {
+		constexpr size_t kEps9500BankRamSize = 0x2080;
+		constexpr size_t kWbkRamSize = 27;
+		constexpr size_t kPersistentRegisterSize = 0x80;
+
+		casioemu::ePSCPU machine(casioemu::EpsVariant::Eps9500);
+		std::vector<uint8_t> rom(0x30000, 0);
+		SetPackedRomWord(rom, 0, 0x2003); // MOV A,INDF1.
+		SetPackedRomWord(rom, 1, 0x2010); // MOV A,INDF2.
+		if (!machine.LoadRom(rom, casioemu::Eps6800RomFormat::PackedLittleEndian))
+			return false;
+		machine.Reset();
+
+		/* Direct B8h at BSR=2 must use 2*80h+B8h, not alias 2*80h+38h. */
+		machine.WriteDebugMemory(0x1b8, 0);
+		machine.WriteDebugMemory(0x238, 0);
+		machine.WriteByte(0x02, 0x02);
+		machine.WriteByte(0xb8, 0x5a);
+		if (machine.ReadDebugMemory(0x1b8) != 0 || machine.ReadDebugMemory(0x238) != 0x5a)
+			return false;
+
+		/* INDF1 uses the same full-width FSR address formula. */
+		machine.WriteDebugMemory(0x1b1, 0);
+		machine.WriteDebugMemory(0x231, 0);
+		machine.WriteByte(0x05, 0x02);
+		machine.WriteByte(0x04, 0xb1);
+		machine.WriteByte(0x03, 0x6b);
+		if (machine.ReadDebugMemory(0x1b1) != 0 || machine.ReadDebugMemory(0x231) != 0x6b)
+			return false;
+
+		/* BSR=3Fh, FSR=FFh reaches physical 207Fh (debug address 20FFh). */
+		machine.WriteByte(0x05, 0x3f);
+		machine.WriteByte(0x04, 0xff);
+		machine.WriteByte(0x03, 0xa5);
+		if (machine.ReadDebugMemory(0x20ff) != 0xa5 ||
+			!machine.WriteDebugMemory(0x20ff, 0x5a) || machine.ReadDebugMemory(0x20ff) != 0x5a ||
+			machine.WriteDebugMemory(0x2100, 0xff))
+			return false;
+
+		/* POSTID extended-FSR stepping must wrap the visible EPS9500 page. */
+		machine.WriteByte(0x21, 0x22); // FSR1 post-increment.
+		machine.WriteByte(0x05, 0x3f);
+		machine.WriteByte(0x04, 0xff);
+		machine.SetPC(0);
+		machine.Next();
+		if (!Check(machine.ReadByte(0x05) == 0x00 && machine.ReadByte(0x04) == 0x80,
+				"eps9500 FSR1 page increment wrap", __LINE__))
+			return false;
+		machine.WriteByte(0x21, 0x08); // FSR2 post-decrement.
+		machine.WriteByte(0x12, 0x00);
+		machine.WriteByte(0x11, 0x80);
+		machine.SetPC(1);
+		machine.Next();
+		if (!Check(machine.ReadByte(0x12) == 0x3f && machine.ReadByte(0x11) == 0xff,
+				"eps9500 FSR2 page decrement wrap", __LINE__))
+			return false;
+
+		casioemu::Eps6800MemoryBreakpoint last_ram_breakpoint{};
+		last_ram_breakpoint.address = 0x20ff;
+		casioemu::Eps6800MemoryBreakpoint out_of_range_breakpoint{};
+		out_of_range_breakpoint.address = 0x2100;
+		if (!machine.AddMemoryBreakpoint(last_ram_breakpoint) ||
+			machine.AddMemoryBreakpoint(out_of_range_breakpoint))
+			return false;
+
+		const auto ram = machine.ExportRam();
+		const size_t persistent_size = kEps9500BankRamSize + kWbkRamSize + kPersistentRegisterSize;
+		return ram.size() == persistent_size && machine.ImportRam(ram);
+	}
+
+	bool Eps6009PortBInputSmoke() {
+		constexpr uint8_t kPortB = 0x11;
+		constexpr uint8_t kPortBControl = 0x2d;
+		constexpr uint8_t kDirectionB = 0x2e;
+		casioemu::ePSCPU machine(casioemu::EpsVariant::Eps6009);
+		machine.SetPortBInput(0x03, 0x01);
+		machine.Reset();
+		machine.WriteByte(kPortBControl, 0x03);
+		machine.WriteByte(kDirectionB, 0x03);
+		if (machine.ReadByte(kPortB) != 0x01)
+			return false;
+		machine.WriteByte(kPortB, 0x02);
+		machine.WriteByte(kDirectionB, 0x00);
+		return machine.ReadByte(kPortB) == 0x02;
+	}
+
+	bool Eps6009DebuggerVariantSmoke() {
+		constexpr uint8_t kLcdAddressLow = 0x09;
+		constexpr uint8_t kStandbyControl = 0x20;
+		constexpr uint8_t kTimerInterruptControl = 0x21;
+		constexpr uint8_t kTimer01Control = 0x23;
+		constexpr uint8_t kPostId = 0x30;
+		constexpr uint8_t kCpuControl = 0x31;
+
+		casioemu::ePSCPU machine(casioemu::EpsVariant::Eps6009);
+		std::vector<uint8_t> rom(0x20000, 0);
+		if (!machine.LoadRom(rom, casioemu::Eps6800RomFormat::PackedLittleEndian))
+			return false;
+		machine.Reset();
+
+		machine.WriteByte(kLcdAddressLow, 0x55);
+		machine.SetPC(0x1234);
+		if (!Check(machine.ProgramCounter() == 0x1234 && machine.ReadByte(kLcdAddressLow) == 0x55,
+				"eps6009 SetPC preserves LCDARL", __LINE__))
+			return false;
+
+		if (!Check(machine.WriteDebugMemory(kStandbyControl, 0xe3) &&
+				machine.ReadDebugMemory(kStandbyControl) == 0xe3,
+				"eps6009 debug STBCON write", __LINE__))
+			return false;
+		if (!Check(machine.WriteDebugMemory(kTimer01Control, 0xff) &&
+				machine.ReadDebugMemory(kTimer01Control) == 0xff,
+				"eps6009 debug TR01CON write", __LINE__))
+			return false;
+
+		machine.WriteByte(kTimerInterruptControl, 0x07);
+		machine.WriteByte(kPostId, 0x70);
+		machine.WriteByte(kCpuControl, 0x07);
+		const auto snapshot = machine.DebugSnapshot();
+		if (!Check(machine.ReadByte(kTimerInterruptControl) == 0x07,
+				"eps6009 snapshot preserves TRINTCON", __LINE__) ||
+			!Check(machine.ReadByte(kPostId) == 0x70,
+				"eps6009 snapshot preserves POSTID", __LINE__) ||
+			!Check(snapshot.registers[kStandbyControl] == 0xe3,
+				"eps6009 snapshot STBCON", __LINE__) ||
+			!Check(snapshot.registers[kTimerInterruptControl] == 0x07,
+				"eps6009 snapshot TRINTCON", __LINE__) ||
+			!Check(snapshot.registers[kTimer01Control] == 0xff,
+				"eps6009 snapshot TR01CON", __LINE__) ||
+			!Check(snapshot.registers[kPostId] == 0x70,
+				"eps6009 snapshot POSTID", __LINE__) ||
+			!Check(snapshot.registers[kCpuControl] == 0x07,
+				"eps6009 snapshot CPUCON", __LINE__))
+			return false;
+
+		constexpr std::array<std::pair<uint8_t, uint8_t>, 3> persistent_registers{{
+			{0x12, 0x5a}, {0x32, 0xa5}, {0x3f, 0x6b},
+		}};
+		for (const auto [address, value] : persistent_registers) {
+			if (!machine.WriteDebugMemory(address, value))
+				return false;
+		}
+		const auto ram = machine.ExportRam();
+		if (ram.size() < 0x80)
+			return false;
+		const size_t register_image = ram.size() - 0x80;
+		for (const auto [address, value] : persistent_registers) {
+			if (!Check(ram[register_image + address] == value,
+					"eps6009 export preserves variant register range", __LINE__))
+				return false;
+		}
+
+		casioemu::ePSCPU restored(casioemu::EpsVariant::Eps6009);
+		if (!restored.LoadRom(rom, casioemu::Eps6800RomFormat::PackedLittleEndian) ||
+			!restored.ImportRam(ram))
+			return false;
+		const auto restored_ram = restored.ExportRam();
+		for (const auto [address, value] : persistent_registers) {
+			if (!Check(restored_ram[register_image + address] == value,
+					"eps6009 import preserves variant register range", __LINE__))
+				return false;
+		}
+		return true;
+	}
+
+	bool HookAndRamSmoke() {
+		std::vector<uint8_t> rom(0x20000, 0);
+		SetPackedRomWord(rom, 0, 0x4e5a); // MOV A,#5Ah
+		SetPackedRomWord(rom, 1, 0x2180); // MOV 80h,A
+		SetPackedRomWord(rom, 2, 0xe004); // SCALL 0004h
+		SetPackedRomWord(rom, 3, 0x0000);
+		SetPackedRomWord(rom, 4, 0x2bfe); // RET
+
+		casioemu::ePSCPU machine;
+		if (!machine.LoadRom(rom, casioemu::Eps6800RomFormat::PackedLittleEndian))
+			return false;
+		int instructions = 0;
+		int calls = 0;
+		int returns = 0;
+		int writes = 0;
+		uint8_t maximum_stack_pointer = 0;
+		bool saw_backtrace = false;
+		bool instruction_hook_reentered = false;
+		bool memory_hook_reentered = false;
+		machine.SetDebugHooks(
+			[&](uint32_t, uint32_t pc_after, uint8_t stack_pointer) {
+				++instructions;
+				maximum_stack_pointer = std::max(maximum_stack_pointer, stack_pointer);
+				instruction_hook_reentered |= machine.ProgramCounter() == pc_after;
+				return stack_pointer == 1;
+			},
+			[&](uint32_t, uint32_t, bool call, uint32_t accumulator, const std::string& backtrace) {
+				(call ? calls : returns)++;
+				saw_backtrace |= call && accumulator == 0x5a && !backtrace.empty();
+			},
+			[&](uint32_t address, uint8_t&, bool write) {
+				if (write && address == 0x80) {
+					++writes;
+					(void)machine.DebugSnapshot();
+					memory_hook_reentered = true;
+					return true; // Address-lock semantics: cancel before the physical write.
+				}
+				return false;
+			},
+			{});
+		machine.Reset();
+		for (int i = 0; i < 5; ++i)
+			machine.Next();
+		if (instructions != 5 || calls != 1 || returns != 1 || writes != 1 || maximum_stack_pointer != 1 ||
+			machine.LastDebugStop().reason != casioemu::Eps6800DebugStopReason::Hook ||
+			!saw_backtrace || !instruction_hook_reentered || !memory_hook_reentered ||
+			machine.ReadDebugMemory(0x80) != 0)
+			return false;
+
+		machine.SetDebugHooks({}, {}, {}, {});
+		machine.Reset();
+		machine.RequestBreak();
+		if (!machine.RunFrame() || machine.ProgramCounter() != 0 ||
+			machine.LastDebugStop().reason != casioemu::Eps6800DebugStopReason::Break)
+			return false;
+
+		std::vector<uint8_t> extended_rom(0x30000, 0);
+		casioemu::ePSCPU extended_machine;
+		if (!extended_machine.LoadRom(extended_rom, casioemu::Eps6800RomFormat::PackedLittleEndian) ||
+			extended_machine.RomWordCount() != 0x18000 ||
+			!extended_machine.ConfigureExecutionBreakpoint({.address = 0x17fff}) ||
+			extended_machine.ConfigureExecutionBreakpoint({.address = 0x18000}))
+			return false;
+
+		std::vector<uint8_t> stack_rom(0x20000, 0);
+		SetPackedRomWord(stack_rom, 0, 0x2bfe); // RET with STKPTR=0 wraps to slot 31.
+		casioemu::ePSCPU stack_machine;
+		if (!stack_machine.LoadRom(stack_rom, casioemu::Eps6800RomFormat::PackedLittleEndian))
+			return false;
+		stack_machine.Reset();
+		stack_machine.Next();
+		if (stack_machine.DebugSnapshot().stack_pointer != 31)
+			return false;
+
+		machine.WriteDebugMemory(0x20, 0x80); // CPUCON.WBK
+		machine.WriteDebugMemory(0x25, 0x5a); // First WBK-backed RAM byte.
+		auto ram = machine.ExportRam();
+		constexpr size_t kBankRamSize = 8192;
+		constexpr size_t kWbkRamSize = 27;
+		constexpr size_t kPersistentRamSize = kBankRamSize + kWbkRamSize + 0x80;
+		if (ram.size() != kPersistentRamSize || ram[kBankRamSize] != 0x5a ||
+			machine.ImportRam(std::vector<uint8_t>(1, 0)))
+			return false;
+		ram.front() = 0xa5;
+		ram[kBankRamSize - 1] = 0x3c;
+		ram[kBankRamSize] = 0x5a;
+		ram[kBankRamSize + kWbkRamSize - 1] = 0x6b;
+		machine.WriteDebugMemory(0x25, 0);
+		machine.WriteDebugMemory(0x3f, 0);
+		if (!machine.ImportRam(ram) || machine.ReadDebugMemory(0x80) != 0xa5 ||
+			machine.ReadDebugMemory(0x207f) != 0x3c || machine.ReadDebugMemory(0x25) != 0x5a ||
+			machine.ReadDebugMemory(0x3f) != 0x6b)
+			return false;
+
+		// Development builds intentionally reject obsolete short RAM images.
+		ram.resize(kBankRamSize);
+		return !machine.ImportRam(ram);
+	}
+
+	bool DebuggerSmoke() {
+		std::vector<uint8_t> rom(0x40000, 0);
+		SetRomWord(rom, 0, 0x4e12); // MOV A,#12h
+		SetRomWord(rom, 1, 0x0000); // NOP
+		SetRomWord(rom, 2, 0xe004); // SCALL 0004h
+		SetRomWord(rom, 3, 0x0000); // NOP (return address)
+		SetRomWord(rom, 4, 0x4e34); // MOV A,#34h
+		SetRomWord(rom, 5, 0x2bfe); // RET
+		SetRomWord(rom, 6, 0x4e5a); // MOV A,#5Ah
+		SetRomWord(rom, 7, 0x2180); // MOV 80h,A (bank 0 RAM)
+		SetRomWord(rom, 8, 0x0000); // NOP
+
+		casioemu::ePSCPU machine;
+		if (!Check(machine.LoadRom(rom, casioemu::Eps6800RomFormat::UnpackedNibbles) &&
+				machine.ReadCodeWord(2) == 0xe004, "unpacked ROM load/word decode", __LINE__))
+			return false;
+		std::vector<uint8_t> packed_rom(0x20000, 0);
+		SetPackedRomWord(packed_rom, 2, 0xe004);
+		casioemu::ePSCPU packed_machine;
+		if (!Check(packed_machine.LoadRom(packed_rom, casioemu::Eps6800RomFormat::PackedLittleEndian) &&
+				packed_machine.ReadCodeWord(2) == 0xe004 &&
+				!packed_machine.LoadRom(rom, casioemu::Eps6800RomFormat::PackedLittleEndian),
+				"packed ROM load/word decode/reject mismatch", __LINE__))
+			return false;
+
+		machine.Reset();
+		machine.AddExecutionBreakpoint(1);
+		machine.RequestContinue();
+		if (!Check(machine.RunFrame(), "execution breakpoint run", __LINE__))
+			return false;
+		auto stop = machine.LastDebugStop();
+		auto snapshot = machine.DebugSnapshot();
+		if (!Check(stop.reason == casioemu::Eps6800DebugStopReason::ExecutionBreakpoint &&
+				stop.program_counter == 1 && snapshot.program_counter == 1 && snapshot.registers[0x0a] == 0x12,
+				"execution breakpoint stop state", __LINE__))
+			return false;
+		casioemu::Eps6800ExecutionBreakpoint skipped_breakpoint{};
+		skipped_breakpoint.address = 1;
+		skipped_breakpoint.skip_count = 1;
+		if (!Check(machine.ConfigureExecutionBreakpoint(skipped_breakpoint), "configure skip breakpoint", __LINE__))
+			return false;
+		machine.SetPC(0);
+		machine.RequestContinue();
+		machine.Next();
+		if (!Check(machine.LastDebugStop().reason == casioemu::Eps6800DebugStopReason::None &&
+				machine.ExecutionBreakpointDetails().front().hit_count == 1,
+				"skip-count first hit", __LINE__))
+			return false;
+		machine.SetPC(0);
+		machine.RequestContinue();
+		machine.Next();
+		if (!Check(machine.LastDebugStop().reason == casioemu::Eps6800DebugStopReason::ExecutionBreakpoint &&
+				machine.ExecutionBreakpointDetails().front().hit_count == 2,
+				"skip-count second hit", __LINE__))
+			return false;
+
+		machine.RequestStepInto();
+		if (!Check(machine.RunFrame() &&
+				machine.LastDebugStop().reason == casioemu::Eps6800DebugStopReason::Step &&
+				machine.ProgramCounter() == 2, "step_into stop state", __LINE__))
+			return false;
+
+		machine.RequestStepOver();
+		if (!Check(machine.RunFrame() &&
+				machine.LastDebugStop().reason == casioemu::Eps6800DebugStopReason::StepOver &&
+				machine.ProgramCounter() == 3 && machine.DebugSnapshot().stack_pointer == 0 &&
+				machine.DebugSnapshot().registers[0x0a] == 0x34, "step_over stop state", __LINE__))
+			return false;
+
+		machine.SetPC(2);
+		machine.RequestStepInto();
+		if (!Check(machine.RunFrame() && machine.ProgramCounter() == 4 &&
+				machine.DebugSnapshot().stack_pointer == 1, "SCALL step_into state", __LINE__))
+			return false;
+		if (!Check(machine.RequestStepOut() && machine.RunFrame() &&
+				machine.LastDebugStop().reason == casioemu::Eps6800DebugStopReason::StepOut &&
+				machine.ProgramCounter() == 3 && machine.DebugSnapshot().stack_pointer == 0,
+				"step_out stop state", __LINE__))
+			return false;
+
+		if (!Check(machine.WriteDebugMemory(0x0f, 0xa5) && machine.ReadDebugMemory(0x0f) == 0xa5 &&
+				machine.WriteDebugMemory(0x80, 0x5a) && machine.ReadDebugMemory(0x80) == 0x5a &&
+				machine.WriteDebugMemory(0x207f, 0xc3) && machine.ReadDebugMemory(0x207f) == 0xc3 &&
+				!machine.WriteDebugMemory(0x2080, 0xff), "debug memory bounds", __LINE__))
+			return false;
+
+		if (!Check(machine.WriteCodeWord(6, 0x4e56) && machine.ReadCodeWord(6) == 0x4e56,
+				"code word write/read", __LINE__))
+			return false;
+		machine.WriteCodeWord(6, 0x4e5a);
+		casioemu::Eps6800MemoryBreakpoint memory_breakpoint{};
+		memory_breakpoint.address = 0x80;
+		memory_breakpoint.write = true;
+		memory_breakpoint.break_when_hit = true;
+		memory_breakpoint.compare_data = true;
+		memory_breakpoint.data = 0x50;
+		memory_breakpoint.mask = 0xf0;
+		if (!Check(machine.AddMemoryBreakpoint(memory_breakpoint), "add conditional memory breakpoint", __LINE__))
+			return false;
+		machine.SetPC(6);
+		machine.RequestContinue();
+		if (!Check(machine.RunFrame(), "memory breakpoint run", __LINE__))
+			return false;
+		stop = machine.LastDebugStop();
+		const auto memory_hits = machine.MemoryBreakpointHits(0x80, true);
+		if (!Check(stop.reason == casioemu::Eps6800DebugStopReason::MemoryBreakpoint &&
+				stop.program_counter == 8 && stop.memory_address == 0x80 &&
+				stop.memory_value == 0x5a && stop.memory_write && memory_hits.size() == 1 &&
+				machine.ReadDebugMemory(0x80) == 0x5a, "conditional memory breakpoint stop", __LINE__))
+			return false;
+		machine.SetPC(6);
+		machine.RequestContinue(false);
+		if (!Check(!machine.RunFrame() && machine.MemoryBreakpointHits(0x80, true).size() == 2,
+				"free run records memory accesses", __LINE__))
+			return false; // Free Run records accesses but ignores break controls.
+		machine.ClearMemoryBreakpoints();
+
+		machine.EnableTrace(true);
+		machine.SetTraceCapacity(2);
+		machine.SetPC(0);
+		machine.RequestStepInto();
+		machine.RunFrame();
+		machine.RequestStepInto();
+		machine.RunFrame();
+		machine.RequestStepInto();
+		machine.RunFrame();
+		const auto trace = machine.TraceBuffer();
+		return Check(trace.size() == 2 && trace.back().program_counter == 2 &&
+				trace.back().next_program_counter == 4, "trace buffer tail", __LINE__);
+	}
+
+	bool Eps9500El531TlGolden(const char* path) {
+		constexpr size_t kEps9500RomSize = 0x30000;
+		auto rom = ReadRom(path);
+		if (rom.size() != kEps9500RomSize) {
+			std::cerr << "ELW531TL ROM size mismatch: " << rom.size() << "\n";
+			return false;
+		}
+		casioemu::ePSCPU machine(casioemu::EpsVariant::Eps9500);
+		if (!machine.LoadRom(rom, casioemu::Eps6800RomFormat::PackedLittleEndian))
+			return false;
+		machine.Reset();
+		for (uint32_t i = 0; i < 200000; ++i)
+			machine.Next();
+
+		std::array<uint8_t, casioemu::EPS9500_LCD_RAW_SIZE> lcd{};
+		if (machine.CopyLcd(lcd.data(), lcd.size()) != lcd.size())
+			return false;
+		const auto snapshot = machine.DebugSnapshot();
+		const uint32_t pc = machine.ProgramCounter();
+		const uint8_t acc = snapshot.registers[0x0a];
+		const uint8_t status = snapshot.registers[0x0f];
+		const uint32_t hash = Fnv1a(lcd.data(), lcd.size());
+		if (pc != 0x000d28u || acc != 0xffu || status != 0x16u || hash != 0xf9fd943eu) {
+			std::cerr << std::hex << std::setfill('0')
+				<< "ELW531TL golden mismatch: pc=0x" << std::setw(6) << pc
+				<< " acc=0x" << std::setw(2) << static_cast<unsigned>(acc)
+				<< " status=0x" << std::setw(2) << static_cast<unsigned>(status)
+				<< " lcd=0x" << std::setw(8) << hash << "\n";
+			return false;
+		}
+		std::cout << "ELW531TL golden OK\n";
+		return true;
+	}
+
+	bool SnapshotV3CompatibilitySmoke() {
+		constexpr uint32_t kSnapshotStreamMagic = 0x31535045u; // "EPS1"
+		constexpr uint8_t kAccumulator = 0x0a;
+		casioemu::ePSCPU machine;
+		std::vector<uint8_t> rom(0x20000, 0);
+		if (!machine.LoadRom(rom, casioemu::Eps6800RomFormat::PackedLittleEndian))
+			return false;
+		machine.Reset();
+		machine.SetPC(0x1234u);
+		machine.WriteByte(kAccumulator, 0x5au);
+		if (!machine.WriteDebugMemory(0x80u, 0xa5u))
+			return false;
+
+		std::stringstream current(std::ios::in | std::ios::out | std::ios::binary);
+		machine.SaveState(current);
+		const std::string current_blob = current.str();
+		if (current_blob.size() != 8u + sizeof(machine_snapshot))
+			return false;
+		machine_snapshot snapshot{};
+		std::memcpy(&snapshot, current_blob.data() + 8, sizeof(snapshot));
+		if (snapshot.magic != MACHINE_SNAPSHOT_MAGIC || snapshot.version != MACHINE_SNAPSHOT_VERSION)
+			return false;
+
+		const auto RestorePayload = [&](const void* payload, size_t payload_size) {
+			std::stringstream legacy(std::ios::in | std::ios::out | std::ios::binary);
+			const uint32_t encoded_size = static_cast<uint32_t>(payload_size);
+			legacy.write(reinterpret_cast<const char*>(&kSnapshotStreamMagic), sizeof(kSnapshotStreamMagic));
+			legacy.write(reinterpret_cast<const char*>(&encoded_size), sizeof(encoded_size));
+			legacy.write(reinterpret_cast<const char*>(payload), static_cast<std::streamsize>(payload_size));
+			machine.SetPC(0);
+			machine.WriteByte(kAccumulator, 0);
+			machine.WriteDebugMemory(0x80u, 0);
+			legacy.seekg(0);
+			try {
+				machine.LoadState(legacy);
+			}
+			catch (const std::exception&) {
+				return false;
+			}
+			return machine.ProgramCounter() == 0x1234u &&
+				machine.ReadByte(kAccumulator) == 0x5au &&
+				machine.ReadDebugMemory(0x80u) == 0xa5u;
+		};
+
+		machine_snapshot_v3_legacy legacy{};
+		legacy.magic = MACHINE_SNAPSHOT_MAGIC;
+		legacy.version = MACHINE_SNAPSHOT_LEGACY_VERSION;
+		legacy.cpu.pc = snapshot.cpu.pc;
+		std::copy_n(snapshot.cpu.stack, CPU_LEGACY_STACK_DEPTH, legacy.cpu.stack);
+		legacy.cpu.status = snapshot.cpu.status;
+		legacy.cpu.rpt_counter = snapshot.cpu.rpt_counter;
+		legacy.cpu.rpt_target_pc = snapshot.cpu.rpt_target_pc;
+		legacy.cpu.mode = snapshot.cpu.mode;
+		legacy.cpu.int_pending = snapshot.cpu.int_pending;
+		legacy.cpu.sleep_repeat_pc = snapshot.cpu.sleep_repeat_pc;
+		std::copy(std::begin(snapshot.mmio.regs), std::end(snapshot.mmio.regs), std::begin(legacy.mmio.regs));
+		std::copy(std::begin(snapshot.mmio.ram_wbk), std::end(snapshot.mmio.ram_wbk), std::begin(legacy.mmio.ram_wbk));
+		std::copy_n(snapshot.mmio.ram, MMIO_LEGACY_RAM_COUNT, legacy.mmio.ram);
+		std::copy(std::begin(snapshot.lcd.fb), std::end(snapshot.lcd.fb), std::begin(legacy.lcd.fb));
+		std::copy(std::begin(snapshot.lcd.reg), std::end(snapshot.lcd.reg), std::begin(legacy.lcd.reg));
+		legacy.timer = snapshot.timer;
+		legacy.kbd = snapshot.kbd;
+
+		machine_snapshot_v3_expanded_stack expanded{};
+		expanded.magic = MACHINE_SNAPSHOT_MAGIC;
+		expanded.version = MACHINE_SNAPSHOT_LEGACY_VERSION;
+		expanded.cpu = snapshot.cpu;
+		std::copy(std::begin(snapshot.mmio.regs), std::end(snapshot.mmio.regs), std::begin(expanded.mmio.regs));
+		std::copy(std::begin(snapshot.mmio.ram_wbk), std::end(snapshot.mmio.ram_wbk), std::begin(expanded.mmio.ram_wbk));
+		std::copy_n(snapshot.mmio.ram, MMIO_LEGACY_RAM_COUNT, expanded.mmio.ram);
+		std::copy(std::begin(snapshot.lcd.fb), std::end(snapshot.lcd.fb), std::begin(expanded.lcd.fb));
+		std::copy(std::begin(snapshot.lcd.reg), std::end(snapshot.lcd.reg), std::begin(expanded.lcd.reg));
+		expanded.timer = snapshot.timer;
+		expanded.kbd = snapshot.kbd;
+
+		machine_snapshot transitional = snapshot;
+		transitional.version = MACHINE_SNAPSHOT_LEGACY_VERSION;
+		return Check(RestorePayload(&legacy, sizeof(legacy)), "pre-EPS9500 v3 snapshot migration", __LINE__) &&
+			Check(RestorePayload(&expanded, sizeof(expanded)), "expanded-stack v3 snapshot migration", __LINE__) &&
+			Check(RestorePayload(&transitional, sizeof(transitional)), "expanded-RAM v3 snapshot migration", __LINE__);
+	}
+
+	bool StatusEquals(const casioemu::Eps6800DisplayFrame& frame,
+		std::initializer_list<uint8_t> expected) {
+		return expected.size() == frame.status.size() &&
+			std::equal(expected.begin(), expected.end(), frame.status.begin());
+	}
+
+	bool Eps6800W192LcdReadRecoverySmoke() {
+		constexpr uint8_t kPortD = 0x3d;
+		constexpr uint8_t kPortE = 0x3e;
+		constexpr uint8_t kDcrde = 0x3f;
+		casioemu::ePSCPU machine(casioemu::EpsVariant::Eps6800W192);
+		machine.Reset();
+		machine.WriteByte(kDcrde, 0xc0);
+
+		/* Match IQV9 ROM 0xB98C: select the controller, start a status read,
+		 * then return WR high.  The official IQV9.exe sub_410020 transitions
+		 * bus state 17 back to idle at that final edge. */
+		machine.WriteByte(kPortD, 0xef);
+		machine.WriteByte(kPortD, 0xaf);
+		machine.WriteByte(kPortD, 0xae);
+		const uint8_t status = machine.ReadByte(kPortE);
+		machine.WriteByte(kPortD, 0xaf);
+
+		const auto command = [&](uint8_t value) {
+			machine.WriteByte(kPortD, 0xaf);
+			machine.WriteByte(kPortE, value);
+			machine.WriteByte(kPortD, 0x2f);
+			machine.WriteByte(kPortD, 0xaf);
+		};
+		command(0xb0);
+		command(0x10);
+		command(0x00);
+		command(0xaf);
+		bool contrast_commands_ok = true;
+		for (uint8_t raw = 0; raw < 0x40u; ++raw) {
+			command(0x81u);
+			command(raw);
+			std::array<uint8_t, casioemu::EPS6800_W192_LCD_RAW_SIZE> contrast_lcd{};
+			casioemu::Eps6800LcdControl contrast_control{};
+			contrast_commands_ok = contrast_commands_ok &&
+				machine.CopyLcd(contrast_lcd.data(), contrast_lcd.size(), &contrast_control) ==
+					contrast_lcd.size() &&
+				contrast_control.contrast == raw;
+		}
+		command(0x81u);
+		command(0x26u); /* Restore IQ-V9's LCD-controller reset contrast. */
+
+		machine.WriteByte(kPortD, 0xef);
+		machine.WriteByte(kPortE, 0x5a);
+		machine.WriteByte(kPortD, 0x6f);
+		machine.WriteByte(kPortD, 0xef);
+
+		/* The LCD may drive Port E during a read, but restoring output mode
+		 * must recover the CPU's independent output latch. */
+		command(0xb0);
+		command(0x10);
+		command(0x00);
+		command(0xe0);
+		machine.WriteByte(kPortE, 0x3c);
+		machine.WriteByte(kDcrde, 0xf0);
+		machine.WriteByte(kPortD, 0xee);
+		machine.WriteByte(kPortD, 0xef);
+		machine.WriteByte(kPortD, 0xee);
+		const uint8_t lcd_readback = machine.ReadByte(kPortE);
+		machine.WriteByte(kPortD, 0xef);
+		machine.WriteByte(kDcrde, 0xc0);
+		const uint8_t restored_output_latch = machine.ReadByte(kPortE);
+		std::stringstream saved(std::ios::in | std::ios::out | std::ios::binary);
+		machine.SaveState(saved);
+		machine.WriteByte(kPortE, 0x99);
+		command(0x81u);
+		command(casioemu::EPS6800_W192_CONTRAST_MAX);
+		std::array<uint8_t, casioemu::EPS6800_W192_LCD_RAW_SIZE> changed_lcd{};
+		casioemu::Eps6800LcdControl changed_control{};
+		machine.CopyLcd(changed_lcd.data(), changed_lcd.size(), &changed_control);
+		saved.seekg(0);
+		machine.LoadState(saved);
+		const uint8_t snapshot_output_latch = machine.ReadByte(kPortE);
+
+		std::array<uint8_t, casioemu::EPS6800_W192_LCD_RAW_SIZE> lcd{};
+		casioemu::Eps6800LcdControl control{};
+		return Check((status & 0x10u) == 0, "W192 LCD ready status", __LINE__) &&
+			Check(contrast_commands_ok, "W192 six-bit contrast command mapping", __LINE__) &&
+			Check(changed_control.contrast == casioemu::EPS6800_W192_CONTRAST_MAX,
+				"W192 maximum contrast command", __LINE__) &&
+			Check(machine.CopyLcd(lcd.data(), lcd.size(), &control) == lcd.size(),
+				"W192 LCD copy after status read", __LINE__) &&
+			Check(control.visible(), "W192 display-on command after status read", __LINE__) &&
+			Check(control.contrast == 0x26u, "W192 contrast snapshot", __LINE__) &&
+			Check(lcd[0] == 0x5a, "W192 data write after status read", __LINE__) &&
+			Check(lcd_readback == 0x5a, "W192 LCD data readback", __LINE__) &&
+			Check(restored_output_latch == 0x3c, "W192 Port E output latch recovery", __LINE__) &&
+			Check(snapshot_output_latch == 0x3c, "W192 Port E latch snapshot", __LINE__);
+	}
+
+	bool Eps6800W192FlashProgramSpaceSmoke() {
+		constexpr uint32_t kFlashBaseWord = 0x18000;
+		constexpr size_t kFlashBytes = 0x10000;
+		casioemu::ePSCPU machine(casioemu::EpsVariant::Eps6800W192);
+		std::vector<uint8_t> rom(0x30000, 0);
+		std::vector<uint8_t> flash(kFlashBytes, 0xff);
+		SetPackedRomWord(rom, 0, 0x0000);
+		SetPackedRomWord(flash, 0, 0x4e5a); // MOV A,#5Ah from flash program space.
+		SetPackedRomWord(flash, 0x7fff, 0xabcd);
+		if (!machine.LoadRom(rom, casioemu::Eps6800RomFormat::PackedLittleEndian) ||
+			!machine.LoadFlash(flash)) {
+			return Check(false, "W192 flash images load", __LINE__);
+		}
+		if (!Check(machine.ReadCodeWord(kFlashBaseWord) == 0x4e5a,
+				"W192 flash first word", __LINE__) ||
+			!Check(machine.ReadCodeWord(kFlashBaseWord + 0x7fff) == 0xabcd,
+				"W192 flash last word", __LINE__) ||
+			!Check(machine.RomWordCount() == 0x20000,
+				"W192 combined program-space size", __LINE__) ||
+			!Check(machine.ReadCodeWord(kFlashBaseWord - 1) == 0,
+				"W192 mask-ROM boundary", __LINE__)) {
+			return false;
+		}
+
+		machine.SetPC(kFlashBaseWord);
+		machine.Next();
+		const auto flash_execution = machine.DebugSnapshot();
+		if (!Check(flash_execution.program_counter == kFlashBaseWord + 1 &&
+				flash_execution.registers[0x0a] == 0x5a,
+				"W192 execute instruction from flash", __LINE__)) {
+			return false;
+		}
+
+		// Hot ROM reload must not discard an independently loaded flash image.
+		SetPackedRomWord(rom, 0, 0x4e11);
+		if (!Check(machine.LoadRom(rom, casioemu::Eps6800RomFormat::PackedLittleEndian),
+				"W192 reload mask ROM with flash attached", __LINE__) ||
+			!Check(machine.ReadCodeWord(kFlashBaseWord) == 0x4e5a &&
+				machine.ReadCodeWord(kFlashBaseWord + 0x7fff) == 0xabcd &&
+				machine.RomWordCount() == 0x20000,
+				"W192 flash survives mask-ROM reload", __LINE__)) {
+			return false;
+		}
+
+		if (!machine.WriteCodeWord(kFlashBaseWord + 1, 0x55aa) ||
+			!machine.WriteFlashImageWord(flash, 1, 0x55aa)) {
+			return Check(false, "W192 debugger flash write", __LINE__);
+		}
+		return Check(machine.ReadCodeWord(kFlashBaseWord + 1) == 0x55aa &&
+				flash[2] == 0xaa && flash[3] == 0x55,
+			"W192 debugger flash write/image sync", __LINE__);
+	}
+}
+
+int main(int argc, char** argv) {
+	if (argc > 4) {
+		std::cerr << "usage: Eps6800AdapterSmoke [<hp300s-rom.bin> [<f789sga-rom.bin> [<el531tl-rom.bin>]]]\n";
+		return 2;
+	}
+	if (!DebuggerSmoke()) {
+		std::cerr << "EPS6800 debugger smoke regression\n";
+		return 1;
+	}
+	if (!ArithmeticFlagsSmoke()) {
+		std::cerr << "EPS6800 arithmetic flags regression\n";
+		return 1;
+	}
+	if (!LegacyPcDestinationReadSmoke()) {
+		std::cerr << "EPS6800 legacy PC destination read regression\n";
+		return 1;
+	}
+	if (!HaltAndIncDecSmoke()) {
+		std::cerr << "EPS6800 HALT/INC-DEC flags regression\n";
+		return 1;
+	}
+	if (!ResetValuesSmoke()) {
+		std::cerr << "EPS6800 reset values regression\n";
+		return 1;
+	}
+	if (!PortCInputSmoke()) {
+		std::cerr << "EPS6800 Port C external input regression\n";
+		return 1;
+	}
+	if (!Eps6009PortBInputSmoke()) {
+		std::cerr << "EPS6009 Port B external input regression\n";
+		return 1;
+	}
+	if (!Eps6009DebuggerVariantSmoke()) {
+		std::cerr << "EPS6009 debugger variant regression\n";
+		return 1;
+	}
+	if (!KeyboardMatrixSmoke()) {
+		std::cerr << "EPS6800 keyboard matrix/ghosting regression\n";
+		return 1;
+	}
+	if (!Eps9500KeyboardAndStackSmoke()) {
+		std::cerr << "EPS9500 keyboard/stack regression\n";
+		return 1;
+	}
+	if (!Eps9500ExtendedFsrArithmeticSmoke()) {
+		std::cerr << "EPS9500 extended FSR arithmetic regression\n";
+		return 1;
+	}
+	if (!Eps6800ExtendedFsrArithmeticSmoke()) {
+		std::cerr << "EPS6800 extended FSR arithmetic regression\n";
+		return 1;
+	}
+	if (!Eps9500RamAddressingSmoke()) {
+		std::cerr << "EPS9500 RAM addressing regression\n";
+		return 1;
+	}
+	if (!TimerSmoke()) {
+		std::cerr << "EPS6800 timer regression\n";
+		return 1;
+	}
+	if (!IceIdleTimerSchedulingSmoke()) {
+		std::cerr << "EPS6800 ice idle timer regression\n";
+		return 1;
+	}
+	if (!RepeatInterruptDeferralSmoke()) {
+		std::cerr << "EPS6800 repeat/interrupt deferral regression\n";
+		return 1;
+	}
+	if (!InterruptEntryMasksGlobalInterruptSmoke()) {
+		std::cerr << "EPS6800 interrupt entry masking regression\n";
+		return 1;
+	}
+	if (!TablePointerSmoke()) {
+		std::cerr << "EPS6800 table pointer width regression\n";
+		return 1;
+	}
+	if (!HookAndRamSmoke()) {
+		std::cerr << "EPS6800 hook/RAM persistence regression\n";
+		return 1;
+	}
+	if (!SnapshotV3CompatibilitySmoke()) {
+		std::cerr << "EPS snapshot v3 compatibility regression\n";
+		return 1;
+	}
+	if (!Eps6800W192LcdReadRecoverySmoke()) {
+		std::cerr << "EPS6800 W192 LCD read-cycle recovery regression\n";
+		return 1;
+	}
+	if (!Eps6800W192FlashProgramSpaceSmoke()) {
+		std::cerr << "EPS6800 W192 flash program-space regression\n";
+		return 1;
+	}
+	{
+		std::array<uint8_t, casioemu::EPS6800_W192_LCD_RAW_SIZE> raw{};
+		raw[0] = 0x03;
+		raw[raw.size() - 1] = 0x80;
+		const auto frame = casioemu::DecodeEps6800W192Display(raw.data(), raw.size());
+		if (frame.status[0] != 0x01 ||
+			frame.pixels[0] != 1 ||
+			frame.pixels[62 * casioemu::EPS6800_W192_LCD_WIDTH +
+				casioemu::EPS6800_W192_LCD_WIDTH - 1] != 1) {
+			std::cerr << "EPS6800 W192 pixel-table row mapping regression\n";
+			return 1;
+		}
+	}
+
+	/* EPS6800 LCDDAT uses four 128-byte hardware pages even though CopyLcd
+	 * exports only 96 visible bytes per page. Page 3 therefore starts at
+	 * internal address 0x180, beyond the 384-byte host-visible image. */
+	casioemu::ePSCPU eps6800_lcd_machine;
+	eps6800_lcd_machine.Reset();
+	eps6800_lcd_machine.WriteByte(0x22, 0x00); // LCDARL.
+	eps6800_lcd_machine.WriteByte(0x23, 0x03); // LCDARH page 3.
+	eps6800_lcd_machine.WriteByte(0x0e, 0xa5); // LCDDAT.
+	std::array<uint8_t, casioemu::EPS6800_LCD_RAW_SIZE> eps6800_lcd_copy{};
+	if (eps6800_lcd_machine.CopyLcd(eps6800_lcd_copy.data(), eps6800_lcd_copy.size()) !=
+			eps6800_lcd_copy.size() || eps6800_lcd_copy[3 * casioemu::EPS6800_LCD_WIDTH] != 0xa5 ||
+			eps6800_lcd_machine.ReadByte(0x0e) != 0xa5) {
+		std::cerr << "EPS6800 LCDDAT page-3 mapping regression\n";
+		return 1;
+	}
+
+	/* Official EL_W506T.SegLcd geometry: four 98-byte pages. Device zero
+	 * carries one annunciator byte, devices 1..96 carry dot columns, and
+	 * device 97 is exported padding. Keep the status bus independent from
+	 * the 96x32 dot-matrix layer. */
+	std::array<uint8_t, casioemu::EPS9500_LCD_RAW_SIZE> eps9500_lcd{};
+	eps9500_lcd[0] = 0x20;
+	eps9500_lcd[casioemu::EPS9500_LCD_DEVICE_COUNT] = 0xe0;
+	eps9500_lcd[2 * casioemu::EPS9500_LCD_DEVICE_COUNT] = 0xff;
+	eps9500_lcd[3 * casioemu::EPS9500_LCD_DEVICE_COUNT] = 0x81;
+	eps9500_lcd[casioemu::EPS9500_LCD_VISIBLE_DEVICE_FIRST] = 0x01;
+	eps9500_lcd[3 * casioemu::EPS9500_LCD_DEVICE_COUNT +
+		casioemu::EPS9500_LCD_VISIBLE_DEVICE_FIRST + 95] = 0x80;
+	for (size_t page = 0; page < casioemu::EPS9500_LCD_PAGE_COUNT; ++page)
+		eps9500_lcd[(page + 1) * casioemu::EPS9500_LCD_DEVICE_COUNT - 1] = 0xff;
+	const auto eps9500_frame = casioemu::DecodeEps9500Display(eps9500_lcd.data(), eps9500_lcd.size());
+	const size_t eps9500_lit_pixels = static_cast<size_t>(std::count(
+		eps9500_frame.pixels.begin(), eps9500_frame.pixels.end(), uint8_t{1}));
+	if (eps9500_frame.status != std::array<uint8_t, 4>{0x20, 0xe0, 0xff, 0x81} ||
+		eps9500_frame.pixels[31 * casioemu::EPS9500_LCD_WIDTH] != 1 ||
+		eps9500_frame.pixels[95] != 1 || eps9500_lit_pixels != 2) {
+		std::cerr << "EPS9500 status/dot-matrix mapping regression\n";
+		return 1;
+	}
+
+	casioemu::ePSCPU eps9500_lcd_machine(casioemu::EpsVariant::Eps9500);
+	eps9500_lcd_machine.Reset();
+	eps9500_lcd_machine.WriteByte(0x22, 0x00);
+	eps9500_lcd_machine.WriteByte(0x23, 0x02);
+	eps9500_lcd_machine.WriteByte(0x0e, 0xa5);
+	eps9500_lcd_machine.WriteByte(0x22, 0x61);
+	eps9500_lcd_machine.WriteByte(0x23, 0x03);
+	eps9500_lcd_machine.WriteByte(0x0e, 0x5a);
+	eps9500_lcd_machine.WriteByte(0x22, 0x62);
+	eps9500_lcd_machine.WriteByte(0x23, 0x00);
+	eps9500_lcd_machine.WriteByte(0x0e, 0xff);
+	std::array<uint8_t, casioemu::EPS9500_LCD_RAW_SIZE> eps9500_lcd_copy{};
+	if (eps9500_lcd_machine.CopyLcd(eps9500_lcd_copy.data(), eps9500_lcd_copy.size()) !=
+			eps9500_lcd_copy.size() ||
+		eps9500_lcd_copy[2 * 98] != 0xa5 || eps9500_lcd_copy[3 * 98 + 97] != 0x5a ||
+		eps9500_lcd_machine.ReadByte(0x0e) != 0) {
+		std::cerr << "EPS9500 LCDDAT address mapping regression\n";
+		return 1;
+	}
+
+	if (argc < 2) {
+		std::cout << "EPS6800 synthetic checks passed (no golden ROM provided; "
+			"skipping golden/status/LCD scenarios).\n";
+		return 0;
+	}
+
+	auto rom = ReadRom(argv[1]);
+	if (rom.size() != kRomSize) {
+		std::cerr << "ROM size mismatch: " << rom.size() << "\n";
+		return 2;
+	}
+
+	std::array<uint8_t, casioemu::EPS6800_LCD_RAW_SIZE> synthetic{};
+	synthetic[3 * 96 + 9] = 0x80;
+	synthetic[3 * 96 + 0] = 0x40;
+	synthetic[0] = 0x01;
+	const auto synthetic_frame = casioemu::DecodeEps6800Display(synthetic.data(), synthetic.size());
+	if (synthetic_frame.status[1] != 0x02 || synthetic_frame.pixels[0] != 1 ||
+		synthetic_frame.pixels[30 * 96] != 1) {
+		std::cerr << "LCD/status row mapping mismatch\n";
+		return 1;
+	}
+
+	float previous_alpha = -1.0f;
+	for (uint8_t contrast = 0; contrast <= casioemu::EPS6800_CONTRAST_MAX; ++contrast) {
+		const float mapped = casioemu::Eps6800AsEspContrast(contrast);
+		const float alpha = casioemu::Eps6800ActiveAlpha(contrast);
+		const float expected = std::max(0.0f, -240.0f + mapped * 28.0f - 3.0f * 8.0f);
+		if (std::abs(alpha - expected) > 0.001f ||
+			(contrast == casioemu::EPS6800_CONTRAST_MAX &&
+				std::abs(mapped - 31.0f) > 0.001f) ||
+			(contrast != 0 && alpha < previous_alpha)) {
+			std::cerr << "LCD contrast curve regression\n";
+			return 1;
+		}
+		previous_alpha = alpha;
+	}
+	if (!(casioemu::Eps6800InactiveAlpha(8) < casioemu::Eps6800ActiveAlpha(8))) {
+		std::cerr << "LCD inactive-pixel contrast regression\n";
+		return 1;
+	}
+
+	casioemu::ePSCPU register_machine;
+	register_machine.Reset();
+	std::array<uint8_t, kLcdSize> register_lcd{};
+	for (uint8_t contrast = 0; contrast <= casioemu::EPS6800_CONTRAST_MAX; ++contrast) {
+		const uint8_t lcdarh = static_cast<uint8_t>((contrast << 4) | 0x03);
+		register_machine.WriteByte(0x23, lcdarh);
+		register_machine.WriteByte(0x2e, 0x20);
+		casioemu::Eps6800LcdControl control{};
+		register_machine.CopyLcd(register_lcd.data(), register_lcd.size(), &control);
+		if (control.lcdarh != lcdarh || control.lcdcon != 0x20 ||
+			control.contrast != contrast || !control.visible()) {
+			std::cerr << "LCD control decode mismatch\n";
+			return 1;
+		}
+	}
+	register_machine.WriteByte(0x2e, 0x60);
+	if (CaptureControl(register_machine).visible()) {
+		std::cerr << "LCD BLANK bit did not blank display\n";
+		return 1;
+	}
+	register_machine.WriteByte(0x2e, 0x00);
+	if (CaptureControl(register_machine).visible()) {
+		std::cerr << "LCDON clear did not disable display\n";
+		return 1;
+	}
+
+	casioemu::ePSCPU machine;
+	if (!machine.LoadRom(rom, casioemu::Eps6800RomFormat::PackedLittleEndian)) {
+		std::cerr << "ROM load failed\n";
+		return 2;
+	}
+	machine.Reset();
+	for (uint32_t i = 0; i < 200000; ++i)
+		machine.Next();
+
+	std::array<uint8_t, kLcdSize> lcd{};
+	if (machine.CopyLcd(lcd.data(), lcd.size()) != lcd.size()) {
+		std::cerr << "LCD copy failed\n";
+		return 2;
+	}
+	const uint32_t hash = Fnv1a(lcd.data(), lcd.size());
+	const auto display = casioemu::DecodeEps6800Display(lcd.data(), lcd.size());
+	const uint32_t pc = machine.PC() >> 1;
+	const auto golden_snapshot = machine.DebugSnapshot();
+	const uint8_t golden_acc = golden_snapshot.registers[0x0a];
+	const uint8_t golden_status = golden_snapshot.registers[0x0f];
+	if (pc != 0x00018c || golden_acc != 0x20 || golden_status != 0xd4 || hash != 0x1b8852c5) {
+		std::cerr << std::hex << std::setfill('0')
+			<< "golden mismatch: pc=0x" << std::setw(6) << pc
+			<< " acc=0x" << std::setw(2) << static_cast<unsigned>(golden_acc)
+			<< " status=0x" << std::setw(2) << static_cast<unsigned>(golden_status)
+			<< " lcd=0x" << std::setw(8) << hash << "\n";
+		return 1;
+	}
+	DumpLcdAscii(machine, "HP300S+ boot (golden)");
+
+	const auto control_before_snapshot = CaptureControl(machine);
+	std::stringstream snapshot(std::ios::in | std::ios::out | std::ios::binary);
+	machine.SaveState(snapshot);
+	machine.WriteByte(0x23, 0xf3);
+	machine.WriteByte(0x2e, 0x60);
+	for (uint32_t i = 0; i < 4096; ++i)
+		machine.Next();
+	snapshot.seekg(0);
+	machine.LoadState(snapshot);
+	lcd.fill(0);
+	machine.CopyLcd(lcd.data(), lcd.size());
+	const auto control_after_snapshot = CaptureControl(machine);
+	if ((machine.PC() >> 1) != pc || Fnv1a(lcd.data(), lcd.size()) != hash ||
+		control_after_snapshot.lcdarh != control_before_snapshot.lcdarh ||
+		control_after_snapshot.lcdcon != control_before_snapshot.lcdcon) {
+		std::cerr << "snapshot round-trip mismatch\n";
+		return 1;
+	}
+
+	std::cout << std::hex << std::setfill('0')
+		<< "EPS6800 adapter OK: pc=0x" << std::setw(6) << pc
+		<< " acc=0x" << std::setw(2) << static_cast<unsigned>(golden_acc)
+		<< " status=0x" << std::setw(2) << static_cast<unsigned>(golden_status)
+		<< " lcd_fnv1a=0x" << std::setw(8) << hash
+		<< " status_bus=";
+	for (const auto value : display.status)
+		std::cout << std::setw(2) << static_cast<unsigned>(value);
+
+	// The HP indicator row has its own physical bit layout. Exercise independent
+	// cold boots so persistent calculator settings cannot leak across scenarios.
+	bool rom_load_failed = false;
+	const auto Scenario = [&](std::initializer_list<uint8_t> keys) {
+		casioemu::ePSCPU scenario_machine;
+		if (!scenario_machine.LoadRom(rom, casioemu::Eps6800RomFormat::PackedLittleEndian)) {
+			rom_load_failed = true;
+			return Capture(scenario_machine);
+		}
+		Boot(scenario_machine);
+		for (const auto key : keys)
+			Tap(scenario_machine, key);
+		return Capture(scenario_machine);
+	};
+	const bool status_ok =
+		StatusEquals(Scenario({}), {0, 0, 0, 0, 0, 0, 0x80, 0, 0, 0, 0x01, 0}) &&
+		StatusEquals(Scenario({46}), {0x01, 0, 0, 0, 0, 0, 0x80, 0, 0, 0, 0x01, 0}) &&
+		StatusEquals(Scenario({54}), {0x08, 0, 0, 0, 0, 0, 0x80, 0, 0, 0, 0x01, 0}) &&
+		StatusEquals(Scenario({50, 13, 5}), {0, 0, 0, 0x02, 0, 0, 0x80, 0, 0, 0, 0, 0}) &&
+		StatusEquals(Scenario({46, 50, 4}), {0, 0, 0, 0, 0, 0, 0, 0x04, 0, 0, 0x01, 0}) &&
+		StatusEquals(Scenario({46, 50, 12}), {0, 0, 0, 0, 0, 0, 0, 0x20, 0, 0, 0x01, 0}) &&
+		StatusEquals(Scenario({46, 50, 20, 13}), {0, 0, 0, 0, 0, 0, 0x80, 0, 0x02, 0, 0x01, 0}) &&
+		StatusEquals(Scenario({46, 50, 3, 13}), {0, 0, 0, 0, 0, 0, 0x80, 0, 0x80, 0, 0x01, 0}) &&
+		StatusEquals(Scenario({2}), {0, 0, 0x04, 0, 0, 0, 0x80, 0, 0, 0, 0x01, 0}) &&
+		StatusEquals(Scenario({46, 2}), {0, 0x10, 0, 0, 0, 0, 0x80, 0, 0, 0, 0x01, 0}) &&
+		StatusEquals(Scenario({5, 38}), {0, 0, 0, 0, 0, 0, 0x80, 0, 0, 0, 0x81, 0}) &&
+		StatusEquals(Scenario({5, 38, 13, 38, 49}), {0, 0, 0, 0, 0, 0, 0x80, 0, 0, 0, 0x11, 0}) &&
+		StatusEquals(Scenario({50, 45}), {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x80});
+	if (rom_load_failed) {
+		std::cerr << "Scenario ROM load failed\n";
+		return 2;
+	}
+	if (!status_ok) {
+		std::cerr << "HP 300S+ status mapping regression\n";
+		return 1;
+	}
+
+	casioemu::ePSCPU diagnostic_machine;
+	if (!diagnostic_machine.LoadRom(rom, casioemu::Eps6800RomFormat::PackedLittleEndian)) {
+		std::cerr << "Diagnostic ROM load failed\n";
+		return 2;
+	}
+	Boot(diagnostic_machine);
+	bool diagnostic_armed = false;
+	diagnostic_machine.SetDebugHooks(
+		[&](uint32_t pc_before, uint32_t, uint8_t) {
+			// ROM 0x01D8 stores mode 1 after all three SHIFT+7+ON
+			// electrical scans have matched.
+			diagnostic_armed |= pc_before == 0x01d8;
+			return false;
+		},
+		{}, {}, {});
+	diagnostic_machine.KeyDown(46); // SHIFT: PB5-PA6
+	diagnostic_machine.KeyDown(3);  // 7: PB0-PA3
+	for (int i = 0; i < 4; ++i)
+		diagnostic_machine.RunFrame();
+	diagnostic_machine.OnDown();
+	for (int i = 0; i < 12; ++i)
+		diagnostic_machine.RunFrame();
+	diagnostic_machine.OnUp();
+	diagnostic_machine.KeyUp(3);
+	diagnostic_machine.KeyUp(46);
+	for (int i = 0; i < 12; ++i)
+		diagnostic_machine.RunFrame();
+	if (!diagnostic_armed) {
+		std::cerr << "HP 300S+ ROM did not accept SHIFT+7+ON diagnostic entry\n";
+		return 1;
+	}
+
+	std::cout << " snapshot=ok status_map=ok keyboard_matrix=ok diagnostic=ok debugger=ok hooks=ok ram=ok";
+
+	casioemu::ePSCPU lcd_control_machine;
+	if (!lcd_control_machine.LoadRom(rom, casioemu::Eps6800RomFormat::PackedLittleEndian)) {
+		std::cerr << "ROM load failed\n";
+		return 2;
+	}
+	Boot(lcd_control_machine);
+	const auto boot_control = CaptureControl(lcd_control_machine);
+	if (boot_control.lcdarh != 0x83 || boot_control.lcdcon != 0xa1 ||
+		boot_control.contrast != 8 || !boot_control.visible()) {
+		std::cerr << "HP 300S+ boot LCD control mismatch\n";
+		return 1;
+	}
+	Tap(lcd_control_machine, 46);
+	Tap(lcd_control_machine, 35, 100);
+	const auto off_control = CaptureControl(lcd_control_machine);
+	if (off_control.lcdarh != 0x83 || off_control.lcdcon != 0x00 || off_control.visible()) {
+		std::cerr << "HP 300S+ SHIFT+AC LCD shutdown mismatch\n";
+		return 1;
+	}
+
+	casioemu::ePSCPU contrast_machine;
+	if (!contrast_machine.LoadRom(rom, casioemu::Eps6800RomFormat::PackedLittleEndian)) {
+		std::cerr << "ROM load failed\n";
+		return 2;
+	}
+	Boot(contrast_machine);
+	Tap(contrast_machine, 46);
+	Tap(contrast_machine, 50);
+	Tap(contrast_machine, 45);
+	Tap(contrast_machine, 20);
+	Tap(contrast_machine, 53);
+	Tap(contrast_machine, 48);
+	Tap(contrast_machine, 48);
+	const auto adjusted_control = CaptureControl(contrast_machine);
+	if (adjusted_control.contrast <= boot_control.contrast || !adjusted_control.visible()) {
+		std::cerr << "HP 300S+ contrast menu did not increase LCD contrast\n";
+		return 1;
+	}
+
+	std::cout << " lcd_control=ok contrast=0x"
+		<< static_cast<unsigned>(adjusted_control.contrast) << "\n";
+
+	if (argc >= 3) {
+		if (!F789SgaFunctionalSmoke(argv[2])) {
+			std::cerr << "F-789SGA functional regression\n";
+			return 1;
+		}
+	}
+	if (argc >= 4) {
+		if (!Eps9500El531TlGolden(argv[3])) {
+			std::cerr << "ELW531TL golden regression\n";
+			return 1;
+		}
+	}
+	return 0;
+}

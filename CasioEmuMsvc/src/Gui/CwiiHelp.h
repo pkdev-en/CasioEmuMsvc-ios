@@ -1,22 +1,9 @@
-#pragma once
+﻿#pragma once
 #include "Gui/Ui.hpp"
 #include "Models.h"
 #include <string>
 #include <unordered_map>
 namespace __temp_namesp_1456456 {
-	inline int safeStoi(const std::string& str, int defaultVal = 0) {
-		if (str.empty())
-			return defaultVal;
-		try {
-			size_t pos = 0;
-			int val = std::stoi(str, &pos);
-			if (pos != str.size())
-				return defaultVal;
-			return val;
-		} catch (const std::exception&) {
-			return defaultVal;
-		}
-	}
 	inline std::string trim(const std::string& str) {
 		size_t first = str.find_first_not_of('0');
 		if (first == std::string::npos)
@@ -84,10 +71,7 @@ namespace __temp_namesp_1456456 {
 			if (((p >> 4) & 0xF) == 0 && (p & 0xF) == 0)
 				return "0";
 		}
-		auto trimmed = trimStart(fin);
-		if (trimmed.empty())
-			return "0";
-		return sign == 1 ? trimmed : "-" + trimmed;
+		return sign == 1 ? trimStart(fin) : "-" + trimStart(fin);
 	}
 	inline int ConvertSign(char sign, int& expsign, int& numbersign) {
 		switch (sign) {
@@ -171,43 +155,22 @@ namespace __temp_namesp_1456456 {
 		dat.resize(2 * 7 - 1);
 		dat.insert(dat.begin() + 1, '.');
 		dat = trimEnd(dat);
-		if (dat == "0") return "0";
-
-		if (std::abs(exp) >= 10) {
-			if (sign) dat = "-" + dat;
-			if (exp != 0) return dat + "x10^" + std::to_string(exp);
-			return dat;
+		if (dat == "0")
+			return "0";
+		if (sign) {
+			dat = "-" + dat;
 		}
-
-		std::string digits = dat;
-		size_t dotPos = digits.find('.');
-		if (dotPos != std::string::npos) {
-			digits.erase(dotPos, 1);
+		if (exp != 0) {
+			dat += "x10^";
+			dat += std::to_string(exp);
 		}
-
-		if (exp >= 0) {
-			if (1 + exp >= digits.length()) {
-				digits.append((1 + exp) - digits.length(), '0');
-			} else {
-				digits.insert(1 + exp, ".");
-			}
-		} else {
-			std::string zeros(std::abs(exp) - 1, '0');
-			digits = "0." + zeros + digits;
-		}
-
-		if (sign) digits = "-" + digits;
-		return digits;
+		return dat;
 	}
 	inline std::string BCD2Str(const char* p) {
-		if (!p)
-			return "?";
 		if (m_emu->hardware_id == casioemu::HW_TI) {
 			return TiBCD2Str(p);
 		}
 		auto sz = casioemu::GetVariableSize(m_emu->hardware_id);
-		if (sz < 2)
-			return "?";
 		auto type = (p[0] >> 4) & 0xF;
 		auto exp = p[sz - 2];
 		auto sign = p[sz - 1]; // 0xE == 14
@@ -219,44 +182,44 @@ namespace __temp_namesp_1456456 {
 		switch (type) {
 		case 0x0:
 		case 0x4: {
-			if (base.size() < 2)
-				return "?";
 			base[0] = base[1];
 			base[1] = '.';
-			
-			auto exps = HexExp(exp, expsign);
-			int exponent = safeStoi(exps);
-
-			base = trimEnd(base);
-			if (base == "0") return "0";
-
-			if (std::abs(exponent) >= 11) {
-				if (numbersign == -1) base = "-" + base;
-				if (exps != "0") return base + "x10^" + exps;
-				return base;
-			}
-
-			std::string digits = base;
-			size_t dotPos = digits.find('.');
-			if (dotPos != std::string::npos) {
-				digits.erase(dotPos, 1);
-			}
-
-			if (exponent >= 0) {
-				if (1 + exponent >= digits.length()) {
-					digits.append((1 + exponent) - digits.length(), '0');
-				} else {
-					digits.insert(1 + exponent, ".");
-				}
-			} else {
-				std::string zeros(std::abs(exponent) - 1, '0');
-				digits = "0." + zeros + digits;
-			}
-
 			if (numbersign == -1) {
-				digits = "-" + digits;
+				base = "-" + base;
 			}
-			return digits;
+
+			auto exps = HexExp(exp, expsign);
+
+			if (exps != "0")
+				return trimEnd(base) + "x10^" + exps;
+
+			return trimEnd(base);
+
+			// Idk why this is such a hard problem for llms :(
+			// Todo: fix this
+
+			// base[0] = base[1];
+			// base[1] = '.';
+			// if (numbersign == -1) {
+			//	base = "-" + base;
+			// }
+			// auto exps = HexExp(exp, expsign);
+			// int exponent = std::stoi(exps);
+			// int num_n = exponent - trimEnd(base.substr(2)).size();
+			// std::string result;
+			// if (num_n >= -4 && num_n < 8) {
+			//	// Small decimal
+			//	result = trimEnd(base) + "e" + (exponent >= 0 ? "+" : "") + std::to_string(exponent);
+			// }
+			// else if (num_n >= 8) {
+			//	// Scientific notation
+			//	result = trimStart(trimEnd(base)) + "e" + exps;
+			// }
+			// else {
+			//	// Integer
+			//	result = trimEnd(base).substr(0, 1) + trimStart(trimEnd(base).substr(2));
+			// }
+			// return (numbersign == -1 ? "-" : "") + result;
 		}
 		case 0x2: {
 			auto ind = base.find_first_of('A');

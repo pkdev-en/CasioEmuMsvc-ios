@@ -1,4 +1,4 @@
-// Mini memory editor for Dear ImGui (to embed in your game/tools)
+﻿// Mini memory editor for Dear ImGui (to embed in your game/tools)
 // Get latest version at http://www.github.com/ocornut/imgui_club
 //
 // Right-click anywhere to access the Options menu!
@@ -124,7 +124,7 @@ struct MemoryEditor {
 		// Settings
 		Open = true;
 		ReadOnly = false;
-#if defined(__ANDROID__) || defined(IOS)
+#ifdef __ANDROID__
 		Cols = 8;
 #else
 		Cols = 16;
@@ -828,15 +828,7 @@ struct MemoryEditor {
 		ImGui::Text(format_range, "HexEditor.Range"_lc, s.AddrDigitsCount, base_display_addr, s.AddrDigitsCount, base_display_addr + mem_size - 1);
 		ImGui::SameLine();
 		ImGui::SetNextItemWidth((s.AddrDigitsCount + 1) * s.GlyphWidth + style.FramePadding.x * 2.0f);
-        
-        bool external_jump = (GotoAddr != (size_t)-1);
-        if (external_jump) {
-            const char* format_data = OptUpperCaseHex ? "%0*" _PRISizeT "X" : "%0*" _PRISizeT "x";
-            sprintf(AddrInputBuf, format_data, s.AddrDigitsCount, base_display_addr + GotoAddr);
-            ImGui::SetKeyboardFocusHere(0);
-        }
-
-		if (ImGui::InputText("##addr", AddrInputBuf, IM_ARRAYSIZE(AddrInputBuf), ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll)) {
+		if (ImGui::InputText("##addr", AddrInputBuf, IM_ARRAYSIZE(AddrInputBuf), ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_EnterReturnsTrue)) {
 			size_t goto_addr;
 			if (sscanf(AddrInputBuf, "%" _PRISizeT "X", &goto_addr) == 1) {
 				GotoAddr = goto_addr - base_display_addr;
@@ -850,7 +842,7 @@ struct MemoryEditor {
 				ImGui::SetScrollFromPosY(ImGui::GetCursorStartPos().y + (GotoAddr / Cols) * ImGui::GetTextLineHeight());
 				ImGui::EndChild();
 				DataEditingAddr = DataPreviewAddr = GotoAddr;
-				DataEditingTakeFocus = !external_jump;
+				DataEditingTakeFocus = true;
 			}
 			GotoAddr = (size_t)-1;
 		}

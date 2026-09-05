@@ -8,6 +8,12 @@
 #include "Ui.hpp"
 #include "hex.hpp"
 #include "ePSCpu.h"
+
+namespace {
+	constexpr uint32_t kEpsFlashBaseWord = 0x18000;
+	constexpr size_t kEpsFlashBaseByte = static_cast<size_t>(kEpsFlashBaseWord) * 2;
+}
+
 float ram_edit_ov[0x100000]{};
 struct HexEditor : public UIWindow, public MemoryEditor {
 	void* data{};
@@ -41,13 +47,9 @@ struct HexEditor : public UIWindow, public MemoryEditor {
 			ImGui::EndPopup();
 		}
 	}
-	bool GotoMemoryAddress(uint32_t addr) override {
-		if (addr >= display_base && addr < display_base + size) {
-			BringToFront();
-			GotoAddrAndHighlight(addr - display_base, addr - display_base + 1);
-			return true;
-		}
-		return false;
+	void GotoMemoryAddress(uint32_t addr) override {
+		BringToFront();
+		GotoAddrAndHighlight(addr, addr + 1);
 	}
 };
 struct SpansHexEditor : public UIWindow, public MemoryEditor {
@@ -84,13 +86,9 @@ struct SpansHexEditor : public UIWindow, public MemoryEditor {
 			ImGui::EndPopup();
 		}
 	}
-	bool GotoMemoryAddress(uint32_t addr) override {
-		if (addr >= display_base && addr < display_base + size) {
-			BringToFront();
-			GotoAddrAndHighlight(addr - display_base, addr - display_base + 1);
-			return true;
-		}
-		return false;
+	void GotoMemoryAddress(uint32_t addr) override {
+		BringToFront();
+		GotoAddrAndHighlight(addr, addr + 1);
 	}
 };
 inline auto MMU_Hex(auto he) {
@@ -107,10 +105,68 @@ inline auto Highlight_Default(auto he) {
 		if ((size_t)(data + off) == m_emu->chipset.cpu.reg_sp) {
 			return true;
 		}
-		if ((size_t)(data + off) == casioemu::GetInputAreaOffset(m_emu->hardware_id) + *((unsigned char*)n_ram_buffer - casioemu::GetRamBaseAddr(m_emu->hardware_id) + casioemu::GetCursorOffset(m_emu->hardware_id))) {
+		if (casioemu::HasInputArea(m_emu->hardware_id) &&
+			(size_t)(data + off) == casioemu::GetInputAreaOffset(m_emu->hardware_id) + *((unsigned char*)n_ram_buffer - casioemu::GetRamBaseAddr(m_emu->hardware_id) + casioemu::GetCursorOffset(m_emu->hardware_id))) {
 			return true;
 		}
 		return false;
+	};
+	return he;
+}
+inline auto EPS_ROM_Hex(auto he) {
+	he->ReadFn = [](const ImU8*, size_t off) -> ImU8 {
+		if (!m_emu->chipset.epscpu)
+			return 0xff;
+		const auto word = m_emu->chipset.epscpu->ReadCodeWord(static_cast<uint32_t>(off / 2));
+		return static_cast<ImU8>((off & 1) ? word : (word >> 8));
+	};
+	he->WriteFn = [](ImU8*, size_t off, ImU8 value) {
+		auto* eps = m_emu->chipset.epscpu;
+		if (!eps)
+			return;
+		const uint32_t word_address = static_cast<uint32_t>(off / 2);
+		auto word = eps->ReadCodeWord(word_address);
+		word = (off & 1)
+			? static_cast<uint16_t>((word & 0xff00) | value)
+			: static_cast<uint16_t>((word & 0x00ff) | (static_cast<uint16_t>(value) << 8));
+		if (!eps->WriteCodeWord(word_address, word))
+			return;
+		eps->WriteRomImageWord(m_emu->chipset.rom_data, word_address, word);
+	};
+	return he;
+}
+inline auto EPS_FLASH_Hex(auto he) {
+	he->ReadFn = [](const ImU8*, size_t off) -> ImU8 {
+		if (!m_emu->chipset.epscpu)
+			return 0xff;
+		const auto word = m_emu->chipset.epscpu->ReadCodeWord(
+			kEpsFlashBaseWord + static_cast<uint32_t>(off / 2));
+		return static_cast<ImU8>((off & 1) ? word : (word >> 8));
+	};
+	he->WriteFn = [](ImU8*, size_t off, ImU8 value) {
+		auto* eps = m_emu->chipset.epscpu;
+		if (!eps)
+			return;
+		const uint32_t flash_word_offset = static_cast<uint32_t>(off / 2);
+		const uint32_t word_address = kEpsFlashBaseWord + flash_word_offset;
+		auto word = eps->ReadCodeWord(word_address);
+		word = (off & 1)
+			? static_cast<uint16_t>((word & 0xff00) | value)
+			: static_cast<uint16_t>((word & 0x00ff) | (static_cast<uint16_t>(value) << 8));
+		if (!eps->WriteCodeWord(word_address, word))
+			return;
+		eps->WriteFlashImageWord(m_emu->chipset.flash_data, flash_word_offset, word);
+	};
+	return he;
+}
+
+inline auto EPS_VRAM_Hex(auto he) {
+	he->ReadFn = [](const ImU8*, size_t off) -> ImU8 {
+		return m_emu->chipset.epscpu ? m_emu->chipset.epscpu->ReadLcdMemory(off) : 0xff;
+	};
+	he->WriteFn = [](ImU8*, size_t off, ImU8 value) {
+		if (m_emu->chipset.epscpu)
+			m_emu->chipset.epscpu->WriteLcdMemory(off, value);
 	};
 	return he;
 }
@@ -121,20 +177,26 @@ std::vector<UIWindow*> GetEditors() {
 			ram_edit_ov[mea.offset] = 255;
 	});
 	std::vector<UIWindow*> windows;
-	windows.push_back(new HexEditor{"Rom", m_emu->chipset.rom_data.data(), m_emu->chipset.rom_data.size(), 0});
-	if (m_emu->hardware_id == casioemu::HW_EPS6800) {
-		windows.push_back(new HexEditor{"Ram", m_emu->chipset.epscpu->ram, 128 * 64, 0});
-		windows.push_back(new HexEditor{"Regs", m_emu->chipset.epscpu->regs, 128, 0});
-		windows.push_back(new HexEditor{"VRam", m_emu->chipset.epscpu->vram, 0x2000, 0});
+	if (casioemu::IsEpsFamily(m_emu->hardware_id)) {
+		const size_t rom_display_bytes = m_emu->chipset.epscpu->RomFormat() == casioemu::Eps6800RomFormat::UnpackedNibbles
+			? m_emu->chipset.rom_data.size() / 2
+			: m_emu->chipset.rom_data.size();
+		windows.push_back(EPS_ROM_Hex(new HexEditor{"Rom", nullptr, rom_display_bytes, 0}));
+		if (!m_emu->chipset.flash_data.empty())
+			windows.push_back(EPS_FLASH_Hex(new HexEditor{"Flash", nullptr, m_emu->chipset.flash_data.size(), kEpsFlashBaseByte}));
+		windows.push_back(MMU_Hex(new HexEditor{"Ram", nullptr, 0x2080, 0}));
+		windows.push_back(MMU_Hex(new HexEditor{"Regs", nullptr, 0x80, 0}));
+		windows.push_back(EPS_VRAM_Hex(new HexEditor{"VRam", nullptr, m_emu->chipset.epscpu->LcdRawSize(), 0}));
 	}
 	else {
+		windows.push_back(new HexEditor{"Rom", m_emu->chipset.rom_data.data(), m_emu->chipset.rom_data.size(), 0});
 		windows.push_back(
 			Highlight_Default(
 				MMU_Hex(
 					new SpansHexEditor{
 						"Ram",
 						(void*)casioemu::GetRamBaseAddr(m_emu->hardware_id),
-						0x10000 - casioemu::GetRamBaseAddr(m_emu->hardware_id),
+						casioemu::GetRamEditorSize(m_emu->hardware_id),
 						casioemu::GetRamBaseAddr(m_emu->hardware_id),
 						GetCommonMemLabels(m_emu->hardware_id)})));
 		if (m_emu->hardware_id == casioemu::HW_FX_5800P) {

@@ -6,6 +6,7 @@
 #include <Localization.h>
 
 struct CallAnalysis : public UIWindow {
+	std::mutex data_mutex;
 	bool is_call_recoding = false;
 	bool check_caller = false;
 	std::string message;
@@ -25,11 +26,19 @@ struct CallAnalysis : public UIWindow {
 	std::vector<FunctionCall> viewing_calls;
 	CallAnalysis() : UIWindow("Funcs") {
 		SetupHook(on_call_function, [this](casioemu::CPU& sender, const FunctionEventArgs& ea) {
-			OnCallFunction(sender, ea.pc, ea.lr);
+			const uint32_t xr0 = (static_cast<uint32_t>(sender.reg_r[3]) << 24) |
+				(static_cast<uint32_t>(sender.reg_r[2]) << 16) |
+				(static_cast<uint32_t>(sender.reg_r[1]) << 8) |
+				static_cast<uint32_t>(sender.reg_r[0]);
+			OnCallFunction(ea.pc, ea.lr, xr0, sender.GetBacktrace());
+		});
+		SetupHook(on_eps_call_function, [this](const EpsFunctionEventArgs& ea) {
+			OnCallFunction(ea.function.pc, ea.function.lr, ea.accumulator, ea.backtrace);
 		});
 	}
 
-	void OnCallFunction(casioemu::CPU& sender, uint32_t pc, uint32_t lr) {
+	void OnCallFunction(uint32_t pc, uint32_t lr, uint32_t xr0, const std::string& backtrace) {
+		std::lock_guard lock(data_mutex);
 		if (is_call_recoding) {
 			if (check_caller)
 				if (lr != caller_v)
@@ -40,14 +49,50 @@ struct CallAnalysis : public UIWindow {
 					return;
 
 			FunctionCall fc{};
-			fc.xr0 = (sender.reg_r[3] << 24) | (sender.reg_r[2] << 16) | (sender.reg_r[1] << 8) | (sender.reg_r[0]);
+			fc.xr0 = xr0;
 			fc.pc = pc;
 			fc.lr = lr;
-			fc.stack = sender.GetBacktrace(); // 已经上锁了，草（
+			fc.stack = backtrace;
 			funcs[pc].push_back(fc);
 		}
 	}
+
+	void DebugStart(bool filterCaller, uint32_t callerAddress, bool filterCallee, uint32_t calleeAddress) {
+		std::lock_guard lock(data_mutex);
+		check_caller = filterCaller;
+		caller_v = callerAddress;
+		check_callee = filterCallee;
+		callee_v = calleeAddress;
+		funcs.clear();
+		is_call_recoding = true;
+	}
+
+	void DebugStop() {
+		std::lock_guard lock(data_mutex);
+		is_call_recoding = false;
+	}
+
+	void DebugClear() {
+		std::lock_guard lock(data_mutex);
+		funcs.clear();
+		viewing_calls.clear();
+		message.clear();
+	}
+
+	std::vector<DebugFunctionCallInfo> DebugList(uint32_t function) {
+		std::lock_guard lock(data_mutex);
+		std::vector<DebugFunctionCallInfo> result;
+		for (const auto& [address, calls] : funcs) {
+			if (function && function != address)
+				continue;
+			for (const auto& call : calls)
+				result.push_back({call.pc, call.lr, call.xr0, call.stack});
+		}
+		return result;
+	}
+
 	void RenderCore() override {
+		std::lock_guard lock(data_mutex);
 		if (message.size()) {
 			if (ImGui::Button("CallAnalysis.Close"_lc)) {
 				message.clear();
@@ -193,6 +238,28 @@ struct CallAnalysis : public UIWindow {
 	}
 };
 
+static CallAnalysis* g_callAnalysis = nullptr;
+
 UIWindow* CreateCallAnalysisWindow() {
-	return new CallAnalysis();
+	g_callAnalysis = new CallAnalysis();
+	return g_callAnalysis;
+}
+
+void DebugStartCallRecording(bool filterCaller, uint32_t caller, bool filterCallee, uint32_t callee) {
+	if (g_callAnalysis)
+		g_callAnalysis->DebugStart(filterCaller, caller, filterCallee, callee);
+}
+
+void DebugStopCallRecording() {
+	if (g_callAnalysis)
+		g_callAnalysis->DebugStop();
+}
+
+void DebugClearCallRecording() {
+	if (g_callAnalysis)
+		g_callAnalysis->DebugClear();
+}
+
+std::vector<DebugFunctionCallInfo> DebugGetFunctionCalls(uint32_t function) {
+	return g_callAnalysis ? g_callAnalysis->DebugList(function) : std::vector<DebugFunctionCallInfo>{};
 }

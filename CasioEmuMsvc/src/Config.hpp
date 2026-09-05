@@ -1,4 +1,13 @@
-#pragma once
+﻿#pragma once
+#include "Containers/ConcurrentObject.h"
+#include <cstdint>
+#include <cstdio>
+#include <exception>
+#include <iostream>
+#include <map>
+#include <mutex>
+#include <string>
+#include <vector>
 
 #if defined(__APPLE__)
 #include <TargetConditionals.h>
@@ -14,16 +23,6 @@
     #define MACOS
 #endif
 #endif
-
-#include "Containers/ConcurrentObject.h"
-#include <cstdint>
-#include <cstdio>
-#include <exception>
-#include <iostream>
-#include <map>
-#include <mutex>
-#include <string>
-#include <vector>
 
 #ifdef __GNUG__
 #define FUNCTION_NAME __PRETTY_FUNCTION__
@@ -46,10 +45,10 @@
 #ifdef ENABLE_CRASH_CHECK
 #ifndef PANIC
 #define PANIC(...)           \
-	{                        \
-		printf(__VA_ARGS__); \
-		__debugbreak();      \
-	}
+        {                        \
+                printf(__VA_ARGS__); \
+                __debugbreak();      \
+        }
 #endif
 #else
 #ifndef PANIC
@@ -58,7 +57,7 @@
 #endif
 
 #define LOCK(x) \
-	std::lock_guard<std::mutex> lock_##x{x};
+        std::lock_guard<std::mutex> lock_##x{x};
 
 // Enable debug feature
 
@@ -89,20 +88,22 @@
 
 #define PROP(x)                                  \
 public:                                          \
-	virtual decltype(x) Get##x##() { return x; } \
-	virtual void Set##x##(decltype(x) a) { x = a; }
+        virtual decltype(x) Get##x##() { return x; } \
+        virtual void Set##x##(decltype(x) a) { x = a; }
 
 #define PROPABS(y, x)         \
 public:                       \
-	virtual y Get##x##() = 0; \
-	virtual void Set##x##(y a) = 0;
+        virtual y Get##x##() = 0; \
+        virtual void Set##x##(y a) = 0;
 
 #include "git_info.h"
 
 #define EMULATOR_VERSION GIT_COMMIT_HASH
 
+#if defined(__IOS__)
 #ifndef DISABLE_SENTRY
 #define DISABLE_SENTRY
+#endif
 #endif
 
 #if !defined(__ANDROID__) && !defined(__EMSCRIPTEN__) && !defined(DISABLE_SENTRY)

@@ -22,6 +22,7 @@
 #include "Chipset/MMU.hpp"
 #include "Chipset/MMURegion.hpp"
 #include "Chipset/ePSCpu.h"
+#include "Chipset/Eps6800Display.h"
 #include "Emulator.hpp"
 #include "Ext/Random.hpp"
 #include "Gui/HwController.h"
@@ -30,25 +31,31 @@
 #include "ModelInfo.h"
 #include "Models.h"
 #include "PopUpDisplay.h"
-
-ScreenMirror* g_mirror = nullptr;
 #include "Ui.hpp"
+#include <SDL_image.h>
 #include <algorithm> // for std::min, std::max
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <climits>
+#include <cmath>
+#include <cstdlib>
 #include <cstdio>
 #include <ctime> // for std::time
 #include <filesystem>
+#include <fstream>
+#include <functional>
 #include <iomanip>
 #include <iostream>
+#include <mutex>
 #include <sstream>
+#include <string_view>
 #include <system_error>
+#include <thread>
+#include <utility>
 #include <vector>
-#ifndef _WIN32
-#include <csignal>
-#endif
 
-#if !defined(__ANDROID__) && !defined(__EMSCRIPTEN__) && !defined(IOS)
+#if !defined(__ANDROID__) && !defined(__EMSCRIPTEN__)
 #include "Theme.h"
 #elif defined(__ANDROID__)
 #include <android/api-level.h>
@@ -56,9 +63,6 @@ ScreenMirror* g_mirror = nullptr;
 #include <media/NdkMediaCodec.h>
 #include <media/NdkMediaFormat.h>
 #include <media/NdkMediaMuxer.h>
-#include <unistd.h>
-#elif defined(IOS)
-#include <fcntl.h>
 #include <unistd.h>
 #endif
 
@@ -136,6 +140,533 @@ inline void fillRandomData(unsigned char* buf, size_t size) {
 #pragma warning(disable : 4244)
 
 namespace casioemu {
+	SDL_Texture* CreateSvgSpriteTexture(SDL_Renderer* renderer, const SpriteInfo& sprite, int width, int height, SDL_Rect* content_bounds) {
+		if (!renderer || sprite.svg_shape.empty() || width <= 0 || height <= 0)
+			return nullptr;
+		if (content_bounds)
+			*content_bounds = {0, 0, width, height};
+		SDL_RWops* rw = SDL_RWFromConstMem(sprite.svg_shape.data(), static_cast<int>(sprite.svg_shape.size()));
+		if (!rw) {
+			SDL_Log("[Screen][Warn] SDL_RWFromConstMem failed for SVG sprite: %s", SDL_GetError());
+			return nullptr;
+		}
+		SDL_Surface* surface = IMG_LoadSizedSVG_RW(rw, width, height);
+		SDL_RWclose(rw);
+		if (!surface) {
+			SDL_Log("[Screen][Warn] IMG_LoadSizedSVG_RW failed for SVG sprite: %s", IMG_GetError());
+			return nullptr;
+		}
+		SDL_Surface* converted = SDL_ConvertSurfaceFormat(surface, SDL_PIXELFORMAT_RGBA32, 0);
+		SDL_FreeSurface(surface);
+		if (!converted) {
+			SDL_Log("[Screen][Warn] SDL_ConvertSurfaceFormat failed for SVG sprite: %s", SDL_GetError());
+			return nullptr;
+		}
+		if (content_bounds) {
+			int min_x = converted->w;
+			int min_y = converted->h;
+			int max_x = -1;
+			int max_y = -1;
+			if (!SDL_MUSTLOCK(converted) || SDL_LockSurface(converted) == 0) {
+				for (int y = 0; y < converted->h; ++y) {
+					const auto* row = reinterpret_cast<const Uint32*>(
+						static_cast<const Uint8*>(converted->pixels) + y * converted->pitch);
+					for (int x = 0; x < converted->w; ++x) {
+						Uint8 red = 0, green = 0, blue = 0, alpha = 0;
+						SDL_GetRGBA(row[x], converted->format, &red, &green, &blue, &alpha);
+						if (alpha == 0)
+							continue;
+						min_x = std::min(min_x, x);
+						min_y = std::min(min_y, y);
+						max_x = std::max(max_x, x);
+						max_y = std::max(max_y, y);
+					}
+				}
+				if (SDL_MUSTLOCK(converted))
+					SDL_UnlockSurface(converted);
+			}
+			if (max_x >= min_x && max_y >= min_y)
+				*content_bounds = {min_x, min_y, max_x - min_x + 1, max_y - min_y + 1};
+		}
+		SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, converted);
+		SDL_FreeSurface(converted);
+		if (!texture) {
+			SDL_Log("[Screen][Warn] SDL_CreateTextureFromSurface failed for SVG sprite: %s", SDL_GetError());
+			return nullptr;
+		}
+		SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
+		return texture;
+	}
+
+	class SvgSpriteTextureCache {
+	public:
+		SvgSpriteTextureCache() = default;
+		SvgSpriteTextureCache(const SvgSpriteTextureCache&) = delete;
+		SvgSpriteTextureCache& operator=(const SvgSpriteTextureCache&) = delete;
+		SvgSpriteTextureCache(SvgSpriteTextureCache&& other) noexcept {
+			MoveFrom(other);
+		}
+		SvgSpriteTextureCache& operator=(SvgSpriteTextureCache&& other) noexcept {
+			if (this != &other) {
+				Reset();
+				MoveFrom(other);
+			}
+			return *this;
+		}
+		~SvgSpriteTextureCache() {
+			Reset();
+		}
+
+		void Reset() {
+			if (texture) {
+				SDL_DestroyTexture(texture);
+				texture = nullptr;
+			}
+			width = 0;
+			height = 0;
+			shape_size = 0;
+			shape_hash = 0;
+			content_bounds = {};
+			software_renderer = false;
+		}
+
+		SDL_Texture* Get(SDL_Renderer* renderer, const SpriteInfo& sprite, int requested_width, int requested_height) {
+			if (sprite.svg_shape.empty())
+				return nullptr;
+			const int target_width = std::max(1, requested_width);
+			const int target_height = std::max(1, requested_height);
+			const auto target_shape_size = sprite.svg_shape.size();
+			const auto target_shape_hash = std::hash<std::string>{}(sprite.svg_shape);
+			if (!texture || width != target_width || height != target_height ||
+				shape_size != target_shape_size || shape_hash != target_shape_hash) {
+				Reset();
+				SDL_RendererInfo renderer_info{};
+				software_renderer = SDL_GetRendererInfo(renderer, &renderer_info) == 0 &&
+					renderer_info.name && std::string_view(renderer_info.name) == "software";
+				texture = CreateSvgSpriteTexture(renderer, sprite, target_width, target_height,
+					software_renderer ? &content_bounds : nullptr);
+				software_renderer = texture && software_renderer;
+				width = texture ? target_width : 0;
+				height = texture ? target_height : 0;
+				shape_size = texture ? target_shape_size : 0;
+				shape_hash = texture ? target_shape_hash : 0;
+			}
+			return texture;
+		}
+
+		bool ContentClip(const SDL_Rect& dest, SDL_Rect& clip) const {
+			if (!software_renderer || width <= 0 || height <= 0 || content_bounds.w <= 0 || content_bounds.h <= 0)
+				return false;
+			const int left = static_cast<int>(std::floor(static_cast<double>(content_bounds.x) * dest.w / width));
+			const int top = static_cast<int>(std::floor(static_cast<double>(content_bounds.y) * dest.h / height));
+			const int right = static_cast<int>(std::ceil(static_cast<double>(content_bounds.x + content_bounds.w) * dest.w / width));
+			const int bottom = static_cast<int>(std::ceil(static_cast<double>(content_bounds.y + content_bounds.h) * dest.h / height));
+			clip = {dest.x + left - 1, dest.y + top - 1, std::max(1, right - left + 2), std::max(1, bottom - top + 2)};
+			return true;
+		}
+
+	private:
+		void MoveFrom(SvgSpriteTextureCache& other) noexcept {
+			texture = std::exchange(other.texture, nullptr);
+			width = std::exchange(other.width, 0);
+			height = std::exchange(other.height, 0);
+			shape_size = std::exchange(other.shape_size, 0);
+			shape_hash = std::exchange(other.shape_hash, 0);
+			content_bounds = std::exchange(other.content_bounds, SDL_Rect{});
+			software_renderer = std::exchange(other.software_renderer, false);
+		}
+
+		SDL_Texture* texture = nullptr;
+		int width = 0;
+		int height = 0;
+		size_t shape_size = 0;
+		size_t shape_hash = 0;
+		SDL_Rect content_bounds{};
+		bool software_renderer = false;
+	};
+
+	std::pair<int, int> CurrentRenderTargetSpriteSize(SDL_Renderer* renderer, const SDL_Rect& dest) {
+		float scale_x = 1.0f;
+		float scale_y = 1.0f;
+		if (renderer)
+			SDL_RenderGetScale(renderer, &scale_x, &scale_y);
+		return {
+			std::max(1, static_cast<int>(std::lround(std::abs(static_cast<double>(dest.w) * scale_x)))),
+			std::max(1, static_cast<int>(std::lround(std::abs(static_cast<double>(dest.h) * scale_y))))};
+	}
+
+	void RenderModelSprite(SDL_Renderer* renderer, SDL_Texture* interface_texture, SvgSpriteTextureCache* svg_texture, const SpriteInfo& sprite, const ColourInfo& ink_colour, uint8_t alpha) {
+		SDL_Rect dest = sprite.dest;
+		SDL_Texture* texture = nullptr;
+		if (svg_texture) {
+			auto [target_width, target_height] = CurrentRenderTargetSpriteSize(renderer, dest);
+			texture = svg_texture->Get(renderer, sprite, target_width, target_height);
+		}
+		if (texture) {
+			SDL_Rect old_clip{};
+			const SDL_bool old_clip_enabled = SDL_RenderIsClipEnabled(renderer);
+			if (old_clip_enabled)
+				SDL_RenderGetClipRect(renderer, &old_clip);
+			SDL_Rect content_clip{};
+			bool content_clip_enabled = svg_texture && svg_texture->ContentClip(dest, content_clip);
+			if (content_clip_enabled && old_clip_enabled) {
+				SDL_Rect intersection{};
+				if (SDL_IntersectRect(&content_clip, &old_clip, &intersection))
+					content_clip = intersection;
+				else
+					content_clip = {0, 0, 0, 0};
+			}
+			if (content_clip_enabled)
+				SDL_RenderSetClipRect(renderer, &content_clip);
+			SDL_SetTextureColorMod(texture, ink_colour.r, ink_colour.g, ink_colour.b);
+			SDL_SetTextureAlphaMod(texture, alpha);
+			SDL_RenderCopy(renderer, texture, nullptr, &dest);
+			SDL_SetTextureAlphaMod(texture, 255);
+			SDL_SetTextureColorMod(texture, 255, 255, 255);
+			if (content_clip_enabled)
+				SDL_RenderSetClipRect(renderer, old_clip_enabled ? &old_clip : nullptr);
+			return;
+		}
+		if (!interface_texture)
+			return;
+		SDL_SetTextureAlphaMod(interface_texture, alpha);
+		SDL_Rect src = sprite.src;
+		SDL_RenderCopy(renderer, interface_texture, &src, &dest);
+	}
+
+#ifndef CASIOEMU_CORE_WEB
+	SDL_Color ScreenPixelColour(const ColourInfo& ink_colour, float alpha_value) {
+		SDL_Color colour{
+			static_cast<Uint8>(ink_colour.r),
+			static_cast<Uint8>(ink_colour.g),
+			static_cast<Uint8>(ink_colour.b),
+			Uint8(std::clamp(static_cast<int>(alpha_value), 0, 255))};
+		if (alpha_value <= 0.0f) {
+			colour.a = 0;
+		}
+		else if (alpha_value > 255.0f) {
+			const int extra = static_cast<int>(alpha_value - 255.0f);
+			colour.r = static_cast<uint8_t>(std::max(0, ink_colour.r - extra));
+			colour.g = static_cast<uint8_t>(std::max(0, ink_colour.g - static_cast<int>(extra * 0.8f)));
+			colour.b = static_cast<uint8_t>(std::max(0, ink_colour.b - static_cast<int>(extra * 0.1f)));
+			colour.a = 255;
+		}
+		return colour;
+	}
+#endif
+
+    class SolarIIScreen : public Peripheral, public IScreenFrameProvider {
+        struct StatusBit {
+            uint8_t offset;
+            uint8_t bit;
+        };
+
+        static constexpr int FRAME_WIDTH = 64;
+        static constexpr int FRAME_HEIGHT_WITH_STATUS_ROW = 9;
+        static constexpr size_t DISPLAY_BASE_ADDR = 0xF800;
+        static constexpr size_t DISPLAY_ADDR = 0xF801;
+        static constexpr size_t DISPLAY_LEN = 0x17;
+        static constexpr size_t DISPLAY_STORAGE_LEN = 0x18;
+        static constexpr std::array<StatusBit, 109> STATUS_BITS = {{
+            {0x11, 6}, {0x11, 2}, {0x12, 6}, {0x12, 2}, {0x13, 6}, {0x13, 2},
+            {0x14, 6}, {0x14, 2}, {0x15, 6}, {0x15, 2}, {0x16, 4}, {0x16, 2},
+            {0x16, 0}, {0x08, 1}, {0x01, 5}, {0x01, 6}, {0x01, 4}, {0x09, 5},
+            {0x09, 6}, {0x09, 4}, {0x11, 5}, {0x11, 4}, {0x01, 1}, {0x01, 2},
+            {0x01, 0}, {0x09, 1}, {0x09, 2}, {0x09, 0}, {0x11, 1}, {0x11, 0},
+            {0x02, 5}, {0x02, 6}, {0x02, 4}, {0x0A, 5}, {0x0A, 6}, {0x0A, 4},
+            {0x12, 5}, {0x12, 4}, {0x02, 1}, {0x02, 2}, {0x02, 0}, {0x0A, 1},
+            {0x0A, 2}, {0x0A, 0}, {0x12, 1}, {0x12, 0}, {0x03, 5}, {0x03, 6},
+            {0x03, 4}, {0x0B, 5}, {0x0B, 6}, {0x0B, 4}, {0x13, 5}, {0x13, 4},
+            {0x03, 1}, {0x03, 2}, {0x03, 0}, {0x0B, 1}, {0x0B, 2}, {0x0B, 0},
+            {0x13, 1}, {0x13, 0}, {0x04, 5}, {0x04, 6}, {0x04, 4}, {0x0C, 5},
+            {0x0C, 6}, {0x0C, 4}, {0x14, 5}, {0x14, 4}, {0x04, 1}, {0x04, 2},
+            {0x04, 0}, {0x0C, 1}, {0x0C, 2}, {0x0C, 0}, {0x14, 1}, {0x14, 0},
+            {0x05, 5}, {0x05, 6}, {0x05, 4}, {0x0D, 5}, {0x0D, 6}, {0x0D, 4},
+            {0x15, 5}, {0x15, 4}, {0x05, 1}, {0x05, 2}, {0x05, 0}, {0x0D, 1},
+            {0x0D, 2}, {0x0D, 0}, {0x15, 1}, {0x15, 0}, {0x16, 6}, {0x06, 5},
+            {0x06, 6}, {0x06, 4}, {0x0E, 5}, {0x0E, 6}, {0x0E, 4}, {0x16, 5},
+            {0x06, 1}, {0x06, 2}, {0x06, 0}, {0x0E, 1}, {0x0E, 2}, {0x0E, 0},
+            {0x16, 1},
+        }};
+        static constexpr std::array<const char*, STATUS_BITS.size()> STATUS_SPRITE_NAMES = {{
+            "rsd_shift",
+            "rsd_mode",
+            "rsd_sto",
+            "rsd_rcl",
+            "rsd_hyp",
+            "rsd_m",
+            "rsd_k",
+            "rsd_deg",
+            "rsd_rad",
+            "rsd_gra",
+            "rsd_fix",
+            "rsd_sci",
+            "rsd_sd",
+            "rsd_b_minus",
+            "rsd_b_1_up",
+            "rsd_b_1_up_left",
+            "rsd_b_1_up_right",
+            "rsd_b_1_mid",
+            "rsd_b_1_down_left",
+            "rsd_b_1_down_right",
+            "rsd_b_1_down",
+            "rsd_b_1_dot",
+            "rsd_b_2_up",
+            "rsd_b_2_up_left",
+            "rsd_b_2_up_right",
+            "rsd_b_2_mid",
+            "rsd_b_2_down_left",
+            "rsd_b_2_down_right",
+            "rsd_b_2_down",
+            "rsd_b_2_dot",
+            "rsd_b_3_up",
+            "rsd_b_3_up_left",
+            "rsd_b_3_up_right",
+            "rsd_b_3_mid",
+            "rsd_b_3_down_left",
+            "rsd_b_3_down_right",
+            "rsd_b_3_down",
+            "rsd_b_3_dot",
+            "rsd_b_4_up",
+            "rsd_b_4_up_left",
+            "rsd_b_4_up_right",
+            "rsd_b_4_mid",
+            "rsd_b_4_down_left",
+            "rsd_b_4_down_right",
+            "rsd_b_4_down",
+            "rsd_b_4_dot",
+            "rsd_b_5_up",
+            "rsd_b_5_up_left",
+            "rsd_b_5_up_right",
+            "rsd_b_5_mid",
+            "rsd_b_5_down_left",
+            "rsd_b_5_down_right",
+            "rsd_b_5_down",
+            "rsd_b_5_dot",
+            "rsd_b_6_up",
+            "rsd_b_6_up_left",
+            "rsd_b_6_up_right",
+            "rsd_b_6_mid",
+            "rsd_b_6_down_left",
+            "rsd_b_6_down_right",
+            "rsd_b_6_down",
+            "rsd_b_6_dot",
+            "rsd_b_7_up",
+            "rsd_b_7_up_left",
+            "rsd_b_7_up_right",
+            "rsd_b_7_mid",
+            "rsd_b_7_down_left",
+            "rsd_b_7_down_right",
+            "rsd_b_7_down",
+            "rsd_b_7_dot",
+            "rsd_b_8_up",
+            "rsd_b_8_up_left",
+            "rsd_b_8_up_right",
+            "rsd_b_8_mid",
+            "rsd_b_8_down_left",
+            "rsd_b_8_down_right",
+            "rsd_b_8_down",
+            "rsd_b_8_dot",
+            "rsd_b_9_up",
+            "rsd_b_9_up_left",
+            "rsd_b_9_up_right",
+            "rsd_b_9_mid",
+            "rsd_b_9_down_left",
+            "rsd_b_9_down_right",
+            "rsd_b_9_down",
+            "rsd_b_9_dot",
+            "rsd_b_10_up",
+            "rsd_b_10_up_left",
+            "rsd_b_10_up_right",
+            "rsd_b_10_mid",
+            "rsd_b_10_down_left",
+            "rsd_b_10_down_right",
+            "rsd_b_10_down",
+            "rsd_b_10_dot",
+            "rsd_s_minus",
+            "rsd_s_1_up",
+            "rsd_s_1_up_left",
+            "rsd_s_1_up_right",
+            "rsd_s_1_mid",
+            "rsd_s_1_down_left",
+            "rsd_s_1_down_right",
+            "rsd_s_1_down",
+            "rsd_s_2_up",
+            "rsd_s_2_up_left",
+            "rsd_s_2_up_right",
+            "rsd_s_2_mid",
+            "rsd_s_2_down_left",
+            "rsd_s_2_down_right",
+            "rsd_s_2_down",
+        }};
+
+        std::array<uint8_t, STATUS_BITS.size()> status_alpha{};
+        std::array<SpriteInfo, STATUS_BITS.size()> status_sprite_info{};
+        std::array<bool, STATUS_BITS.size()> status_sprite_present{};
+        std::array<SvgSpriteTextureCache, STATUS_BITS.size()> status_svg_textures{};
+        std::array<uint8_t, DISPLAY_STORAGE_LEN> display_data{};
+        MMURegion region_display_control{}, region_display{};
+        MMURegion region_range{}, region_mode{}, region_contrast{}, region_brightness{}, region_refresh_rate{};
+        SDL_Renderer* renderer{};
+        SDL_Texture* interface_texture{};
+        ColourInfo ink_colour{};
+        uint8_t display_control = 0;
+        uint8_t screen_range = 0, screen_mode = 0, screen_contrast = 0, screen_brightness = 0, screen_refresh_rate = 0;
+
+        const uint8_t* DisplayData() const {
+            return display_data.data();
+        }
+
+        uint8_t CalculateSolarIIStatusAlpha(bool enabled) const {
+            if (!screen_residual_enabled) {
+                return enabled ? 255 : 0;
+            }
+
+            const float contrast = static_cast<float>(std::clamp<int>(screen_contrast, 0, 0x1F));
+            const float ink_alpha_on = 255.0f * std::clamp(0.75f + contrast / 36.0f, 0.0f, 1.0f);
+            const float ink_alpha_off = 255.0f * std::clamp(0.01f + contrast * 0.0045f, 0.0f, 1.0f);
+            const float alpha = enabled ? ink_alpha_on : ink_alpha_off * screen_residual_alpha_scale;
+            return static_cast<uint8_t>(std::clamp(static_cast<int>(alpha + 0.5f), 0, 255));
+        }
+
+        bool IsSolarIIDisplayEnabled() const {
+            const uint8_t mode = screen_mode & 0x07;
+            return mode == 0x05 || mode == 0x06;
+        }
+
+    public:
+        using Peripheral::Peripheral;
+		~SolarIIScreen() override {
+			for (auto& texture : status_svg_textures)
+				texture.Reset();
+		}
+
+        void Initialise() override {
+            renderer = emulator.GetRenderer();
+            interface_texture = emulator.GetInterfaceTexture();
+            ink_colour = emulator.ModelDefinition.ink_color;
+            status_sprite_present.fill(false);
+			for (auto& texture : status_svg_textures)
+				texture.Reset();
+            for (size_t i = 0; i < STATUS_SPRITE_NAMES.size(); ++i) {
+                auto iter = emulator.ModelDefinition.sprites.find(STATUS_SPRITE_NAMES[i]);
+                if (iter == emulator.ModelDefinition.sprites.end())
+                    continue;
+                status_sprite_info[i] = iter->second;
+                status_sprite_present[i] = true;
+            }
+
+            region_display_control.Setup(0xF800, 1, "SolarIIScreen/Control", &display_control, MMURegion::DefaultRead<uint8_t>, MMURegion::DefaultWrite<uint8_t>, emulator);
+            region_display.Setup(
+                DISPLAY_ADDR, DISPLAY_LEN, "SolarIIScreen/Buffer", this,
+                [](MMURegion* region, size_t offset) {
+                    auto* screen = static_cast<SolarIIScreen*>(region->userdata);
+                    return screen->display_data[offset - DISPLAY_BASE_ADDR];
+                },
+                [](MMURegion* region, size_t offset, uint8_t data) {
+                    auto* screen = static_cast<SolarIIScreen*>(region->userdata);
+                    screen->display_data[offset - DISPLAY_BASE_ADDR] = data;
+                },
+                emulator);
+            region_range.Setup(0xF030, 1, "SolarIIScreen/Range", &screen_range, MMURegion::DefaultRead<uint8_t>, MMURegion::DefaultWrite<uint8_t>, emulator);
+            region_mode.Setup(0xF031, 1, "SolarIIScreen/Mode", &screen_mode, MMURegion::DefaultRead<uint8_t>, MMURegion::DefaultWrite<uint8_t>, emulator);
+            region_contrast.Setup(0xF032, 1, "SolarIIScreen/Contrast", &screen_contrast, MMURegion::DefaultRead<uint8_t, 0x1F>, MMURegion::DefaultWrite<uint8_t, 0x1F>, emulator);
+            region_brightness.Setup(0xF033, 1, "SolarIIScreen/Brightness", &screen_brightness, MMURegion::DefaultRead<uint8_t, 0x07>, MMURegion::DefaultWrite<uint8_t, 0x07>, emulator);
+            region_refresh_rate.Setup(0xF034, 1, "SolarIIScreen/RefreshRate", &screen_refresh_rate, MMURegion::DefaultRead<uint8_t>, MMURegion::DefaultWrite<uint8_t>, emulator);
+        }
+
+        void* QueryInterface(const char* name) override {
+            if (strcmp(name, typeid(IScreenFrameProvider).name()) == 0) {
+                return static_cast<IScreenFrameProvider*>(this);
+            }
+            return Peripheral::QueryInterface(name);
+        }
+
+        void SaveState(std::ostream& os) override {
+            os.write(reinterpret_cast<const char*>(&display_control), 1);
+            os.write(reinterpret_cast<const char*>(display_data.data()), display_data.size());
+            os.write(reinterpret_cast<const char*>(&screen_range), 1);
+            os.write(reinterpret_cast<const char*>(&screen_mode), 1);
+            os.write(reinterpret_cast<const char*>(&screen_contrast), 1);
+            os.write(reinterpret_cast<const char*>(&screen_brightness), 1);
+            os.write(reinterpret_cast<const char*>(&screen_refresh_rate), 1);
+            os.write(reinterpret_cast<const char*>(status_alpha.data()), status_alpha.size());
+        }
+
+        void LoadState(std::istream& is) override {
+            is.read(reinterpret_cast<char*>(&display_control), 1);
+            is.read(reinterpret_cast<char*>(display_data.data()), display_data.size());
+            is.read(reinterpret_cast<char*>(&screen_range), 1);
+            is.read(reinterpret_cast<char*>(&screen_mode), 1);
+            is.read(reinterpret_cast<char*>(&screen_contrast), 1);
+            is.read(reinterpret_cast<char*>(&screen_brightness), 1);
+            is.read(reinterpret_cast<char*>(&screen_refresh_rate), 1);
+            is.read(reinterpret_cast<char*>(status_alpha.data()), status_alpha.size());
+        }
+
+        void UpdateFrameAlpha() override {
+            const uint8_t* data = DisplayData();
+            if (!data) {
+                status_alpha.fill(0);
+                return;
+            }
+            constexpr float kResidualFadeRatio = 0.50f;
+            const bool display_enabled = IsSolarIIDisplayEnabled();
+            if (!display_enabled) {
+                if (screen_residual_enabled) {
+                    for (auto& alpha : status_alpha) {
+                        alpha = static_cast<uint8_t>(std::clamp(static_cast<int>(static_cast<float>(alpha) * kResidualFadeRatio + 0.5f), 0, 255));
+                    }
+                }
+                else {
+                    status_alpha.fill(0);
+                }
+                return;
+            }
+            for (size_t i = 0; i < STATUS_BITS.size(); ++i) {
+                const auto bit = STATUS_BITS[i];
+                const bool enabled = bit.offset < DISPLAY_STORAGE_LEN && (data[bit.offset] & (1 << bit.bit));
+                const uint8_t target = CalculateSolarIIStatusAlpha(enabled);
+                if (screen_residual_enabled) {
+                    const float alpha = static_cast<float>(status_alpha[i]) * kResidualFadeRatio + static_cast<float>(target) * (1.0f - kResidualFadeRatio);
+                    status_alpha[i] = static_cast<uint8_t>(std::clamp(static_cast<int>(alpha + 0.5f), 0, 255));
+                }
+                else {
+                    status_alpha[i] = target;
+                }
+            }
+        }
+
+        int GetFrameWidth() const override { return FRAME_WIDTH; }
+        int GetFrameHeight() const override { return FRAME_HEIGHT_WITH_STATUS_ROW; }
+        void WriteFrameRgba(uint8_t* out, int r, int g, int b) const override {
+            (void)r;
+            (void)g;
+            (void)b;
+            if (!out) return;
+            std::fill(out, out + FRAME_WIDTH * FRAME_HEIGHT_WITH_STATUS_ROW * 4, 0);
+        }
+        int GetStatusAlphaCount() const override { return static_cast<int>(status_alpha.size()); }
+        void WriteStatusAlpha(uint8_t* out, int max_len) const override {
+            if (!out || max_len <= 0) return;
+            const int count = std::min(max_len, GetStatusAlphaCount());
+            std::copy(status_alpha.begin(), status_alpha.begin() + count, out);
+        }
+        void Frame() override {
+            if (!renderer || !interface_texture)
+                return;
+
+            UpdateFrameAlpha();
+            SDL_SetTextureColorMod(interface_texture, ink_colour.r, ink_colour.g, ink_colour.b);
+            for (size_t i = 0; i < status_alpha.size(); ++i) {
+                if (!status_sprite_present[i])
+                    continue;
+                RenderModelSprite(renderer, interface_texture, &status_svg_textures[i], status_sprite_info[i], ink_colour, status_alpha[i]);
+            }
+            SDL_SetTextureAlphaMod(interface_texture, 255);
+            SDL_SetTextureColorMod(interface_texture, 255, 255, 255);
+        }
+    };
 	struct SpriteBitmap {
 		const char* name;
 		uint8_t mask, offset;
@@ -167,7 +698,7 @@ namespace casioemu {
 		return n;
 	}
 	template <HardwareId hardware_id>
-	class Screen : public Peripheral {
+	class Screen : public Peripheral, public IScreenFrameProvider {
 		static int const N_ROW,
 			ROW_SIZE,
 			OFFSET,
@@ -201,33 +732,176 @@ namespace casioemu {
 		float position = 0;
 		SDL_Renderer* renderer{};
 		SDL_Texture* interface_texture{};
+#ifndef CASIOEMU_CORE_WEB
+		SDL_Texture* pixel_screen_texture{};
+		int pixel_screen_texture_width = 0;
+		int pixel_screen_texture_height = 0;
+		std::vector<uint8_t> pixel_screen_pixels;
+#endif
 		float screen_ink_alpha[66 * 192]{};
+		std::array<float, 66 * 192> eps_screen_ink_alpha{};
+		std::mutex eps_screen_alpha_mutex;
+		std::atomic_bool eps_screen_thread_running{false};
+		std::thread eps_screen_thread;
 		static const SpriteBitmap sprite_bitmap[];
 		std::vector<SpriteInfo> sprite_info;
+		std::vector<SvgSpriteTextureCache> sprite_svg_textures;
+		std::vector<uint8_t> sprite_available;
 		ColourInfo ink_colour{};
 
 		bool inited = 0;
 		bool enabled_2 = 0;
+		int status_ink_alpha_on = 255;
+		int status_ink_alpha_off = 0;
+
+		int SpriteCount() const {
+			if constexpr (IsEpsFamily(hardware_id))
+				return static_cast<int>(emulator.ModelDefinition.status_indicators.size()) + 1;
+			return SPR_MAX;
+		}
+
+		bool StatusEnabled() const {
+			if (!(hardware_id == HW_CLASSWIZ || hardware_id == HW_CLASSWIZ_II) && hardware_id != HW_FX_5800P && hardware_id != HW_ES_PLUS && !IsEpsFamily(hardware_id)) {
+				return true;
+			}
+			if (!enabled_2 || (screen_range & 0b100000)) {
+				return false;
+			}
+			const auto mode = screen_mode & 7;
+			return mode == 5 || mode == 6;
+		}
+
+		uint8_t LogicalAlpha(float value) const {
+			return static_cast<uint8_t>(std::clamp(static_cast<int>(std::lround(value * 255.0f)), 0, 255));
+		}
+
+		static constexpr float kClassWizIILowerPlaneWeight = 1.0f / 3.0f;
+		static constexpr float kClassWizIIUpperPlaneWeight = 2.0f / 3.0f;
+
+		uint8_t ClassWizIIStatusAlpha(uint8_t offset, uint8_t mask) const {
+			if (!StatusEnabled() || !screen_buffer || !screen_buffer1) return 0;
+			const auto status_offset = (offset + screen_offset * ROW_SIZE) % ((N_ROW + 1) * ROW_SIZE);
+			const bool lower = (screen_buffer[status_offset] & mask) != 0;
+			const bool upper = (screen_buffer1[status_offset] & mask) != 0;
+			if (!screen_residual_enabled) {
+				return LogicalAlpha((lower ? kClassWizIILowerPlaneWeight : 0.0f) + (upper ? kClassWizIIUpperPlaneWeight : 0.0f));
+			}
+			float alpha = static_cast<float>(status_ink_alpha_off);
+			alpha += (static_cast<float>(status_ink_alpha_on - status_ink_alpha_off)) * (lower ? kClassWizIILowerPlaneWeight : 0.0f);
+			alpha += (static_cast<float>(status_ink_alpha_on - status_ink_alpha_off)) * (upper ? kClassWizIIUpperPlaneWeight : 0.0f);
+			if (screen_refresh_rate >= screen_flashing_threshold) {
+				alpha *= screen_scan_alpha[0];
+			}
+			return static_cast<uint8_t>(std::clamp(static_cast<int>(alpha), 0, 255));
+		}
+
+#ifndef CASIOEMU_CORE_WEB
+		void ResetPixelScreenTexture() {
+			if (pixel_screen_texture) {
+				SDL_DestroyTexture(pixel_screen_texture);
+				pixel_screen_texture = nullptr;
+			}
+			pixel_screen_texture_width = 0;
+			pixel_screen_texture_height = 0;
+			pixel_screen_pixels.clear();
+		}
+
+		bool EnsurePixelScreenTexture(int width, int height) {
+			if (!renderer || width <= 0 || height <= 0)
+				return false;
+			if (pixel_screen_texture && pixel_screen_texture_width == width && pixel_screen_texture_height == height)
+				return true;
+
+			ResetPixelScreenTexture();
+			pixel_screen_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, width, height);
+			if (!pixel_screen_texture) {
+				SDL_Log("[Screen][Warn] SDL_CreateTexture failed for pixel screen: %s", SDL_GetError());
+				return false;
+			}
+			SDL_SetTextureBlendMode(pixel_screen_texture, SDL_BLENDMODE_BLEND);
+#if SDL_VERSION_ATLEAST(2, 0, 12)
+			SDL_SetTextureScaleMode(pixel_screen_texture, SDL_ScaleModeNearest);
+#endif
+			pixel_screen_texture_width = width;
+			pixel_screen_texture_height = height;
+			pixel_screen_pixels.resize(static_cast<size_t>(width) * static_cast<size_t>(height) * 4);
+			return true;
+		}
+
+		void WritePixelScreenTexture(int logical_width, int logical_height) {
+			if (pixel_screen_pixels.size() < static_cast<size_t>(logical_width) * static_cast<size_t>(logical_height) * 4)
+				return;
+			for (int y = 0; y != logical_height; ++y) {
+				const int source_y = y + 1;
+				for (int x = 0; x != logical_width; ++x) {
+					const float alpha_value = screen_ink_alpha[x + source_y * 192];
+					const SDL_Color colour = ScreenPixelColour(ink_colour, alpha_value);
+
+					const size_t pixel_offset = (static_cast<size_t>(y) * static_cast<size_t>(logical_width) + static_cast<size_t>(x)) * 4;
+					pixel_screen_pixels[pixel_offset + 0] = colour.r;
+					pixel_screen_pixels[pixel_offset + 1] = colour.g;
+					pixel_screen_pixels[pixel_offset + 2] = colour.b;
+					pixel_screen_pixels[pixel_offset + 3] = colour.a;
+				}
+			}
+		}
+
+		bool RenderPixelScreenTexture(const SDL_Rect& lcd_dest, int logical_width, int logical_height) {
+			if (!EnsurePixelScreenTexture(logical_width, logical_height))
+				return false;
+			WritePixelScreenTexture(logical_width, logical_height);
+			if (SDL_UpdateTexture(pixel_screen_texture, nullptr, pixel_screen_pixels.data(), logical_width * 4) != 0) {
+				SDL_Log("[Screen][Warn] SDL_UpdateTexture failed for pixel screen: %s", SDL_GetError());
+				return false;
+			}
+			if (SDL_RenderCopy(renderer, pixel_screen_texture, nullptr, &lcd_dest) != 0) {
+				SDL_Log("[Screen][Warn] SDL_RenderCopy failed for pixel screen: %s", SDL_GetError());
+				return false;
+			}
+			return true;
+		}
+#endif
 
 	public:
 		Screen(Emulator& emu)
 			: Peripheral(emu) {
 #if !defined(TEST_BUILD) && !defined(__EMSCRIPTEN__)
-			std::thread thd([&]() {
-				while (1) {
-					tick();
-#elif defined(__ANDROID__) || defined(IOS)
-					SDL_Delay(10);
-#elif !defined(__EMSCRIPTEN__)
-					if (ThemeManager::Instance().Settings().lowPerformanceMode || low_perf_ext) {
+			if constexpr (IsEpsFamily(hardware_id)) {
+				eps_screen_thread_running.store(true, std::memory_order_release);
+				eps_screen_thread = std::thread([this]() {
+					while (eps_screen_thread_running.load(std::memory_order_acquire)) {
+						tick();
 						SDL_Delay(10);
 					}
-#endif
-				}
 				});
-			thd.detach();
+			}
+			else {
+				std::thread thd([&]() {
+					while (1) {
+						tick();
+#ifdef __ANDROID__
+						SDL_Delay(10);
+#elif !defined(__EMSCRIPTEN__)
+						if (ThemeManager::Instance().Settings().lowPerformanceMode || low_perf_ext)
+							SDL_Delay(10);
+#endif
+					}
+				});
+				thd.detach();
+			}
+#endif
 		}
 		~Screen() {
+			if constexpr (IsEpsFamily(hardware_id)) {
+				eps_screen_thread_running.store(false, std::memory_order_release);
+				if (eps_screen_thread.joinable())
+					eps_screen_thread.join();
+			}
+			for (auto& texture : sprite_svg_textures)
+				texture.Reset();
+#ifndef CASIOEMU_CORE_WEB
+			ResetPixelScreenTexture();
+#endif
 			if (screen_buffer)
 				delete[] screen_buffer;
 			if (screen_buffer1)
@@ -237,6 +911,64 @@ namespace casioemu {
 		void Uninitialise() override;
 		void Frame() override;
 		void Reset() override;
+		void* QueryInterface(const char* name) override {
+			if (strcmp(name, typeid(IScreenFrameProvider).name()) == 0) {
+				return static_cast<IScreenFrameProvider*>(this);
+			}
+			return Peripheral::QueryInterface(name);
+		}
+		void UpdateFrameAlpha() override {
+#ifdef __EMSCRIPTEN__
+			tick();
+			if constexpr (IsEpsFamily(hardware_id)) {
+				std::lock_guard<std::mutex> lock(eps_screen_alpha_mutex);
+				std::copy(eps_screen_ink_alpha.begin(), eps_screen_ink_alpha.end(), screen_ink_alpha);
+			}
+#endif
+		}
+		int GetFrameWidth() const override {
+			if constexpr (hardware_id == HW_EPS6009)
+				return std::max(1, emulator.ModelDefinition.screen_width);
+			return hardware_id == HW_EPS6800 || hardware_id == HW_EPS9500 ? 96 : 192;
+		}
+		int GetFrameHeight() const override {
+			if constexpr (hardware_id == HW_EPS6009)
+				return std::max(1, emulator.ModelDefinition.screen_height);
+			if constexpr (hardware_id == HW_EPS9500)
+				return 33; // one status row plus 32 dot-matrix rows
+			return hardware_id == HW_FX_5800P || hardware_id == HW_ES_PLUS ||
+				hardware_id == HW_EPS6800 ? 32 : 64;
+		}
+		void WriteFrameRgba(uint8_t* out, int r, int g, int b) const override {
+			if (!out) return;
+			const int width = GetFrameWidth();
+			const int height = GetFrameHeight();
+			if constexpr (hardware_id == HW_EPS6009) {
+				std::fill(out, out + static_cast<size_t>(width) * static_cast<size_t>(height) * 4, 0);
+				return;
+			}
+			for (int y = 0; y < height; ++y) {
+				for (int x = 0; x < width; ++x) {
+					const float alpha = screen_ink_alpha[y * 192 + x];
+					const int idx = (y * width + x) * 4;
+					out[idx + 0] = static_cast<uint8_t>(std::clamp(r, 0, 255));
+					out[idx + 1] = static_cast<uint8_t>(std::clamp(g, 0, 255));
+					out[idx + 2] = static_cast<uint8_t>(std::clamp(b, 0, 255));
+					out[idx + 3] = static_cast<uint8_t>(std::clamp(static_cast<int>(alpha), 0, 255));
+				}
+			}
+		}
+		int GetStatusAlphaCount() const override {
+			return std::max(0, SpriteCount() - 1);
+		}
+		void WriteStatusAlpha(uint8_t* out, int max_len) const override {
+			if (!out || max_len <= 0) return;
+			const int count = std::min(max_len, GetStatusAlphaCount());
+			for (int i = 0; i < count; ++i) out[i] = 0;
+			for (int i = 0; i < count; ++i) {
+				out[i] = static_cast<uint8_t>(std::clamp(static_cast<int>(screen_ink_alpha[i]), 0, 255));
+			}
+		}
 		void SaveState(std::ostream& os) override {
 			size_t bufSize = (hardware_id == HW_TI) ? (192 * 9) : (N_ROW + 1) * ROW_SIZE;
 			if (screen_buffer)
@@ -271,13 +1003,13 @@ namespace casioemu {
 		}
 		void tick() {
 			float ratio = 0;
-			if constexpr (hardware_id == HW_ES_PLUS)
+			if constexpr (hardware_id == HW_FX_5800P || hardware_id == HW_ES_PLUS)
 				ratio = 1 - 1e-4;
 			else
 				ratio = 1 - 5e-4;
 #ifdef __EMSCRIPTEN__
 			ratio = 0.0f;
-#elif defined(__ANDROID__) || defined(IOS)
+#elif defined(__ANDROID__)
 			ratio = 0.80f;
 #else
 			if (ThemeManager::Instance().Settings().lowPerformanceMode || low_perf_ext) {
@@ -288,7 +1020,7 @@ namespace casioemu {
 				ratio = 1 - 1e-4;
 #ifdef __EMSCRIPTEN__
 				ratio = 0.0f;
-#elif defined(__ANDROID__) || defined(IOS)
+#elif defined(__ANDROID__)
 				ratio = 0.80f;
 #else
 				if (ThemeManager::Instance().Settings().lowPerformanceMode || low_perf_ext) {
@@ -305,7 +1037,11 @@ namespace casioemu {
 					return;
 				float ink_alpha_on = (ti_contrast - 100) * 20.0;
 				float ink_alpha_off = std::clamp(ink_alpha_on * 0.1, 0.0, 255.0);
+				ink_alpha_off = screen_residual_enabled ? ink_alpha_off * screen_residual_alpha_scale : 0.0f;
 				ink_alpha_on = std::clamp(ink_alpha_on, 0.0f, 255.0f);
+				if (!screen_residual_enabled) {
+					ink_alpha_on = 255.0f;
+				}
 				uint8_t* screen_buffer = (uint8_t*)n_ram_buffer - casioemu::GetRamBaseAddr(hardware_id) + 0xE708;
 				if (emulator.ModelDefinition.real_hardware) {
 					screen_buffer = this->screen_buffer;
@@ -336,48 +1072,145 @@ namespace casioemu {
 				return;
 			}
 			else if (hardware_id == HW_EPS6800) {
-				ratio = 1 - 1e-4;
-#ifdef __EMSCRIPTEN__
-				ratio = 0.0f;
-#elif defined(__ANDROID__) || defined(IOS)
+				// Match the deterministic ES Plus low-performance cadence: one
+				// update every 10 ms, retaining 80% of the preceding LCD state.
 				ratio = 0.80f;
-#else
-				if (ThemeManager::Instance().Settings().lowPerformanceMode || low_perf_ext) {
-					ratio = 0.80f;
+				std::array<uint8_t, EPS6800_LCD_RAW_SIZE> lcd{};
+				Eps6800LcdControl control{};
+				if (!emulator.chipset.epscpu ||
+					emulator.chipset.epscpu->CopyLcd(lcd.data(), lcd.size(), &control) != lcd.size())
+					return;
+				float ink_alpha_on = Eps6800ActiveAlpha(control.contrast);
+				float ink_alpha_off = Eps6800InactiveAlpha(control.contrast);
+				ink_alpha_off = screen_residual_enabled ? ink_alpha_off * screen_residual_alpha_scale : 0.0f;
+				if (!control.visible()) {
+					ink_alpha_on = 0.0f;
+					ink_alpha_off = 0.0f;
 				}
-#endif
-				float ink_alpha_on = 255;
-				float ink_alpha_off = std::clamp(ink_alpha_on * 0.1, 0.0, 255.0);
-				ink_alpha_on = std::clamp(ink_alpha_on, 0.0f, 255.0f);
-				uint8_t* screen_buffer = (uint8_t*)(emulator.chipset.epscpu->vram + 0x120);
-				// if (emulator.ModelDefinition.real_hardware) {
-				//	screen_buffer = this->screen_buffer;
-				// }
-				for (int blk = 0; blk < 4; ++blk) {
-					for (int ix = 0; ix < 98; ++ix) {
-						for (int iy = 0; iy < 8; ++iy) {
-							uint32_t i = (ix * 8) | iy;
-							int bIndx = (i >> 3);
-							int subIndx = (i & 7);
-							int mask = (1 << subIndx);
-							bool on = (screen_buffer[bIndx] & mask) != 0;
-							auto& data = screen_ink_alpha[(((8 - iy + (blk) * 8)) * 192) + ix];
-							data = data * ratio + (on ? ink_alpha_on : ink_alpha_off) * (1 - ratio);
-						}
+				const float transition_ratio = screen_residual_enabled ? ratio : 0.0f;
+				std::lock_guard<std::mutex> lock(eps_screen_alpha_mutex);
+
+				// EPS stores four 8-pixel pages bottom-to-top. The physical top
+				// row is a 96-bit segmented annunciator bus; it must not be drawn
+				// as dot-matrix pixels. The remaining 31 rows form the 96x31 LCD.
+				const auto decoded = DecodeEps6800Display(lcd.data(), lcd.size());
+				for (int y = 0; y < static_cast<int>(EPS6800_LCD_PIXEL_HEIGHT); ++y) {
+					for (int x = 0; x < static_cast<int>(EPS6800_LCD_WIDTH); ++x) {
+						const bool on = decoded.pixels[y * EPS6800_LCD_WIDTH + x] != 0;
+						auto& alpha = eps_screen_ink_alpha[(y + 1) * 192 + x];
+						alpha = alpha * transition_ratio +
+							(on ? ink_alpha_on : ink_alpha_off) * (1 - transition_ratio);
 					}
-					screen_buffer -= 0x60;
 				}
-				screen_buffer = (uint8_t*)n_ram_buffer - casioemu::GetRamBaseAddr(hardware_id) + 0xe5d4;
-				// if (emulator.ModelDefinition.real_hardware) {
-				//	screen_buffer = this->screen_buffer + 8 * 192;
-				// }
-				// int x = 0;
-				// for (int ix = 1; ix != SPR_MAX; ++ix) {
-				//	auto off = sprite_bitmap[ix].offset;
-				//	auto& data = screen_ink_alpha[x];
-				//	data = data * ratio + ((screen_buffer[off] & sprite_bitmap[ix].mask) ? ink_alpha_on : ink_alpha_off) * (1 - ratio);
-				//	x++;
-				// }
+
+				const auto& status_indicators = emulator.ModelDefinition.status_indicators;
+				for (size_t ix = 0; ix < status_indicators.size(); ++ix) {
+					const auto& indicator = status_indicators[ix];
+					const bool on = indicator.byte_offset < decoded.status.size() &&
+						(decoded.status[indicator.byte_offset] & (1u << indicator.bit)) != 0;
+					auto& alpha = eps_screen_ink_alpha[ix];
+					alpha = alpha * transition_ratio +
+						(on ? ink_alpha_on : ink_alpha_off) * (1 - transition_ratio);
+				}
+				return;
+			}
+			else if (hardware_id == HW_EPS6800_W192) {
+				ratio = 0.80f;
+				std::array<uint8_t, EPS6800_W192_LCD_RAW_SIZE> lcd{};
+				Eps6800LcdControl control{};
+				if (!emulator.chipset.epscpu ||
+					emulator.chipset.epscpu->CopyLcd(lcd.data(), lcd.size(), &control) != lcd.size())
+					return;
+				float ink_alpha_on = Eps6800W192ActiveAlpha(control.contrast);
+				float ink_alpha_off = Eps6800W192InactiveAlpha(control.contrast);
+				ink_alpha_off = screen_residual_enabled ? ink_alpha_off * screen_residual_alpha_scale : 0.0f;
+				if (!control.visible()) {
+					ink_alpha_on = 0.0f;
+					ink_alpha_off = 0.0f;
+				}
+				const float transition_ratio = screen_residual_enabled ? ratio : 0.0f;
+				std::lock_guard<std::mutex> lock(eps_screen_alpha_mutex);
+				const auto decoded = DecodeEps6800W192Display(lcd.data(), lcd.size());
+				for (size_t y = 0; y < EPS6800_W192_LCD_HEIGHT; ++y) {
+					for (size_t x = 0; x < EPS6800_W192_LCD_WIDTH; ++x) {
+						const bool on = decoded.pixels[y * EPS6800_W192_LCD_WIDTH + x] != 0;
+						auto& alpha = eps_screen_ink_alpha[(y + 1) * 192 + x];
+						alpha = alpha * transition_ratio +
+							(on ? ink_alpha_on : ink_alpha_off) * (1 - transition_ratio);
+					}
+				}
+				const auto& status_indicators = emulator.ModelDefinition.status_indicators;
+				for (size_t ix = 0; ix < status_indicators.size(); ++ix) {
+					const auto& indicator = status_indicators[ix];
+					const bool on = indicator.byte_offset < decoded.status.size() &&
+						(decoded.status[indicator.byte_offset] & (1u << indicator.bit)) != 0;
+					auto& alpha = eps_screen_ink_alpha[ix];
+					alpha = alpha * transition_ratio +
+						(on ? ink_alpha_on : ink_alpha_off) * (1 - transition_ratio);
+				}
+				return;
+			}
+			else if (hardware_id == HW_EPS9500) {
+				ratio = 0.80f;
+				std::array<uint8_t, EPS9500_LCD_RAW_SIZE> lcd{};
+				Eps6800LcdControl control{};
+				if (!emulator.chipset.epscpu ||
+					emulator.chipset.epscpu->CopyLcd(lcd.data(), lcd.size(), &control) != lcd.size())
+					return;
+				float ink_alpha_on = Eps6800ActiveAlpha(control.contrast);
+				float ink_alpha_off = Eps6800InactiveAlpha(control.contrast);
+				ink_alpha_off = screen_residual_enabled ? ink_alpha_off * screen_residual_alpha_scale : 0.0f;
+				if (!control.visible()) {
+					ink_alpha_on = 0.0f;
+					ink_alpha_off = 0.0f;
+				}
+				const float transition_ratio = screen_residual_enabled ? ratio : 0.0f;
+				std::lock_guard<std::mutex> lock(eps_screen_alpha_mutex);
+				const auto decoded = DecodeEps9500Display(lcd.data(), lcd.size());
+				for (int y = 0; y < static_cast<int>(EPS9500_LCD_HEIGHT); ++y) {
+					for (int x = 0; x < static_cast<int>(EPS9500_LCD_WIDTH); ++x) {
+						const bool on = decoded.pixels[y * EPS9500_LCD_WIDTH + x] != 0;
+						auto& alpha = eps_screen_ink_alpha[(y + 1) * 192 + x];
+						alpha = alpha * transition_ratio +
+							(on ? ink_alpha_on : ink_alpha_off) * (1 - transition_ratio);
+					}
+				}
+				const auto& status_indicators = emulator.ModelDefinition.status_indicators;
+				for (size_t ix = 0; ix < status_indicators.size(); ++ix) {
+					const auto& indicator = status_indicators[ix];
+					const bool on = indicator.byte_offset < decoded.status.size() &&
+						(decoded.status[indicator.byte_offset] & (1u << indicator.bit)) != 0;
+					auto& alpha = eps_screen_ink_alpha[ix];
+					alpha = alpha * transition_ratio +
+						(on ? ink_alpha_on : ink_alpha_off) * (1 - transition_ratio);
+				}
+				return;
+			}
+			else if (hardware_id == HW_EPS6009) {
+				ratio = 0.80f;
+				std::array<uint8_t, 0x88> lcd{};
+				Eps6800LcdControl control{};
+				if (!emulator.chipset.epscpu ||
+					emulator.chipset.epscpu->CopyLcd(lcd.data(), lcd.size(), &control) != lcd.size())
+					return;
+				float ink_alpha_on = 230.0f;
+				float ink_alpha_off = 8.0f;
+				ink_alpha_off = screen_residual_enabled ? ink_alpha_off * screen_residual_alpha_scale : 0.0f;
+				if (!control.visible()) {
+					ink_alpha_on = 0.0f;
+					ink_alpha_off = 0.0f;
+				}
+				const float transition_ratio = screen_residual_enabled ? ratio : 0.0f;
+				std::lock_guard<std::mutex> lock(eps_screen_alpha_mutex);
+				const auto& status_indicators = emulator.ModelDefinition.status_indicators;
+				for (size_t ix = 0; ix < status_indicators.size(); ++ix) {
+					const auto& indicator = status_indicators[ix];
+					const bool on = indicator.byte_offset < lcd.size() &&
+						(lcd[indicator.byte_offset] & (1u << indicator.bit)) != 0;
+					auto& alpha = eps_screen_ink_alpha[ix];
+					alpha = alpha * transition_ratio +
+						(on ? ink_alpha_on : ink_alpha_off) * (1 - transition_ratio);
+				}
 				return;
 			}
 
@@ -409,10 +1242,15 @@ namespace casioemu {
 			}
 			int ink_alpha_on = off + contrast * coeff - sb * 8;
 			int ink_alpha_off = off + 20 + (contrast) * (coeff - 11) - sb * 13;
+			ink_alpha_off = screen_residual_enabled ? static_cast<int>(ink_alpha_off * screen_residual_alpha_scale) : 0;
 			if (ink_alpha_on < 0)
 				ink_alpha_on = 0;
 			if (ink_alpha_off < 0)
 				ink_alpha_off = 0;
+			if (!screen_residual_enabled) {
+				ink_alpha_on = 255;
+				ink_alpha_off = 0;
+			}
 			bool enable_status, enable_dotmatrix, clear_dots;
 
 			bool mode_6 = false;
@@ -474,19 +1312,19 @@ namespace casioemu {
 
 				if (enable_status) {
 					int ink_alpha = ink_alpha_off;
+					status_ink_alpha_on = ink_alpha_on;
+					status_ink_alpha_off = ink_alpha_off;
 					if constexpr (hardware_id == HW_CLASSWIZ_II) {
-						int x = 0;
 						for (int ix = 1; ix != SPR_MAX; ++ix) {
 							ink_alpha = ink_alpha_off;
 							auto off = (sprite_bitmap[ix].offset + screen_offset * row_size) % ((N_ROW + 1) * row_size);
 							if (screen_buffer[off] & sprite_bitmap[ix].mask)
-								ink_alpha += (ink_alpha_on - ink_alpha_off) * 0.2;
+								ink_alpha += (ink_alpha_on - ink_alpha_off) * kClassWizIILowerPlaneWeight;
 							if (screen_buffer1[off] & sprite_bitmap[ix].mask)
-								ink_alpha += (ink_alpha_on - ink_alpha_off) * 0.8;
+								ink_alpha += (ink_alpha_on - ink_alpha_off) * kClassWizIIUpperPlaneWeight;
 							if (screen_refresh_rate >= screen_flashing_threshold)
 								ink_alpha *= screen_scan_alpha[0];
-							screen_ink_alpha[x] = screen_ink_alpha[x] * ratio + ink_alpha * (1 - ratio);
-							x++;
+							screen_ink_alpha[ix - 1] = screen_ink_alpha[ix - 1] * ratio + ink_alpha * (1 - ratio);
 						}
 					}
 					else {
@@ -546,9 +1384,9 @@ namespace casioemu {
 								for (uint8_t mask = 0x80; mask; mask >>= 1, dest.x += sprite_info[SPR_PIXEL].src.w) {
 									ink_alpha = ink_alpha_off;
 									if (!clear_dots && screen_buffer[index] & mask)
-										ink_alpha += (ink_alpha_on - ink_alpha_off) * 0.2;
+										ink_alpha += (ink_alpha_on - ink_alpha_off) * kClassWizIILowerPlaneWeight;
 									if (!clear_dots && screen_buffer1[index] & mask)
-										ink_alpha += (ink_alpha_on - ink_alpha_off) * 0.8;
+										ink_alpha += (ink_alpha_on - ink_alpha_off) * kClassWizIIUpperPlaneWeight;
 									if (screen_refresh_rate >= screen_flashing_threshold)
 										ink_alpha *= screen_scan_alpha[iy];
 									if (clear)
@@ -662,7 +1500,7 @@ namespace casioemu {
 	template <>
 	const int Screen<HW_CLASSWIZ_II>::ROW_SIZE_DISP = 24;
 	template <>
-	const int Screen<HW_CLASSWIZ_II>::SPR_MAX = 19;
+	const int Screen<HW_CLASSWIZ_II>::SPR_MAX = 21;
 
 	template <>
 	const int Screen<HW_CLASSWIZ>::N_ROW = 63;
@@ -686,6 +1524,17 @@ namespace casioemu {
 	template <>
 	const int Screen<HW_ES_PLUS>::SPR_MAX = 19;
 
+	template <>
+	const int Screen<HW_FX_5800P>::N_ROW = 31;
+	template <>
+	const int Screen<HW_FX_5800P>::ROW_SIZE = 16;
+	template <>
+	const int Screen<HW_FX_5800P>::OFFSET = 16;
+	template <>
+	const int Screen<HW_FX_5800P>::ROW_SIZE_DISP = 12;
+	template <>
+	const int Screen<HW_FX_5800P>::SPR_MAX = 20;
+
 	// that's meaningless, just make compiler happy xd
 	template <>
 	const int Screen<HW_EPS6800>::N_ROW = 31;
@@ -696,7 +1545,40 @@ namespace casioemu {
 	template <>
 	const int Screen<HW_EPS6800>::ROW_SIZE_DISP = 12;
 	template <>
-	const int Screen<HW_EPS6800>::SPR_MAX = 19;
+	const int Screen<HW_EPS6800>::SPR_MAX = 1;
+
+	template <>
+	const int Screen<HW_EPS6800_W192>::N_ROW = 63;
+	template <>
+	const int Screen<HW_EPS6800_W192>::ROW_SIZE = 24;
+	template <>
+	const int Screen<HW_EPS6800_W192>::OFFSET = 0;
+	template <>
+	const int Screen<HW_EPS6800_W192>::ROW_SIZE_DISP = 24;
+	template <>
+	const int Screen<HW_EPS6800_W192>::SPR_MAX = 1;
+
+	template <>
+	const int Screen<HW_EPS6009>::N_ROW = 0;
+	template <>
+	const int Screen<HW_EPS6009>::ROW_SIZE = 1;
+	template <>
+	const int Screen<HW_EPS6009>::OFFSET = 0;
+	template <>
+	const int Screen<HW_EPS6009>::ROW_SIZE_DISP = 1;
+	template <>
+	const int Screen<HW_EPS6009>::SPR_MAX = 1;
+
+	template <>
+	const int Screen<HW_EPS9500>::N_ROW = 32;
+	template <>
+	const int Screen<HW_EPS9500>::ROW_SIZE = 16;
+	template <>
+	const int Screen<HW_EPS9500>::OFFSET = 16;
+	template <>
+	const int Screen<HW_EPS9500>::ROW_SIZE_DISP = 12;
+	template <>
+	const int Screen<HW_EPS9500>::SPR_MAX = 1;
 
 	template <>
 	const SpriteBitmap Screen<HW_CLASSWIZ_II>::sprite_bitmap[] = {
@@ -708,11 +1590,13 @@ namespace casioemu {
 		{"rsd_g", 0x01, 0x06},
 		{"rsd_fix", 0x01, 0x07},
 		{"rsd_sci", 0x01, 0x08},
+		{"rsd_fx", 0x01, 0x09},
 		{"rsd_e", 0x01, 0x0A},
 		{"rsd_cmplx", 0x01, 0x0B},
 		{"rsd_angle", 0x01, 0x0C},
 		{"rsd_wdown", 0x01, 0x0D},
 		{"rsd_verify", 0x01, 0x0E},
+		{"rsd_gx", 0x01, 0x0F},
 		{"rsd_left", 0x01, 0x10},
 		{"rsd_down", 0x01, 0x11},
 		{"rsd_up", 0x01, 0x12},
@@ -755,7 +1639,30 @@ namespace casioemu {
 		{"rsd_stat", 0x40, 0x03},
 		{"rsd_cmplx", 0x80, 0x04},
 		{"rsd_mat", 0x40, 0x05},
-		{"rsd_vct", 0x01, 0x05},
+		{"rsd_vct", 0x02, 0x05},
+		{"rsd_d", 0x20, 0x07},
+		{"rsd_r", 0x02, 0x07},
+		{"rsd_g", 0x10, 0x08},
+		{"rsd_fix", 0x01, 0x08},
+		{"rsd_sci", 0x20, 0x09},
+		{"rsd_math", 0x40, 0x0A},
+		{"rsd_down", 0x08, 0x0A},
+		{"rsd_up", 0x80, 0x0B},
+		{"rsd_disp", 0x10, 0x0B} };
+
+	template <>
+	const SpriteBitmap Screen<HW_FX_5800P>::sprite_bitmap[] = {
+		{"rsd_pixel", 0, 0},
+		{"rsd_s", 0x10, 0x00},
+		{"rsd_a", 0x04, 0x00},
+		{"rsd_m", 0x10, 0x01},
+		{"rsd_sto", 0x02, 0x01},
+		{"rsd_rcl", 0x40, 0x02},
+		{"rsd_sd", 0x40, 0x03},
+		{"rsd_reg", 0x80, 0x04},
+		{"rsd_fmla", 0x40, 0x05},
+		{"rsd_prgm", 0x10, 0x05},
+		{"rsd_eng", 0x02, 0x05},
 		{"rsd_d", 0x20, 0x07},
 		{"rsd_r", 0x02, 0x07},
 		{"rsd_g", 0x10, 0x08},
@@ -768,34 +1675,47 @@ namespace casioemu {
 
 	template <>
 	const SpriteBitmap Screen<HW_EPS6800>::sprite_bitmap[] = {
-		{"rsd_pixel", 0, 0},
-		{"rsd_s", 0x10, 0x00},
-		{"rsd_a", 0x04, 0x00},
-		{"rsd_m", 0x10, 0x01},
-		{"rsd_sto", 0x02, 0x01},
-		{"rsd_rcl", 0x40, 0x02},
-		{"rsd_stat", 0x40, 0x03},
-		{"rsd_cmplx", 0x80, 0x04},
-		{"rsd_mat", 0x40, 0x05},
-		{"rsd_vct", 0x01, 0x05},
-		{"rsd_d", 0x20, 0x07},
-		{"rsd_r", 0x02, 0x07},
-		{"rsd_g", 0x10, 0x08},
-		{"rsd_fix", 0x01, 0x08},
-		{"rsd_sci", 0x20, 0x09},
-		{"rsd_math", 0x40, 0x0A},
-		{"rsd_down", 0x08, 0x0A},
-		{"rsd_up", 0x80, 0x0B},
-		{"rsd_disp", 0x10, 0x0B} };
+		{"rsd_pixel", 0, 0} };
+
+	template <>
+	const SpriteBitmap Screen<HW_EPS6800_W192>::sprite_bitmap[] = {
+		{"rsd_pixel", 0, 0} };
+
+	template <>
+	const SpriteBitmap Screen<HW_EPS6009>::sprite_bitmap[] = {
+		{"rsd_pixel", 0, 0} };
+
+	template <>
+	const SpriteBitmap Screen<HW_EPS9500>::sprite_bitmap[] = {
+		{"rsd_pixel", 0, 0} };
 
 	template <HardwareId hardware_id>
 	void Screen<hardware_id>::Initialise() {
 		if (!inited) {
 			renderer = emulator.GetRenderer();
 			interface_texture = emulator.GetInterfaceTexture();
-			sprite_info.resize(SPR_MAX);
-			for (int ix = 0; ix != SPR_MAX; ++ix)
-				sprite_info[ix] = emulator.ModelDefinition.sprites[sprite_bitmap[ix].name];
+			const int sprite_count = SpriteCount();
+			sprite_info.resize(sprite_count);
+			for (auto& texture : sprite_svg_textures)
+				texture.Reset();
+			sprite_svg_textures.clear();
+			sprite_svg_textures.resize(sprite_count);
+			sprite_available.assign(sprite_count, 0);
+			for (int ix = 0; ix != sprite_count; ++ix) {
+				const char* static_name = nullptr;
+				std::string dynamic_name;
+				if constexpr (IsEpsFamily(hardware_id)) {
+					dynamic_name = ix == 0 ? "rsd_pixel" : emulator.ModelDefinition.status_indicators[static_cast<size_t>(ix - 1)].sprite_name;
+				}
+				else {
+					static_name = sprite_bitmap[ix].name;
+				}
+				auto sprite = emulator.ModelDefinition.sprites.find(static_name ? static_name : dynamic_name);
+				if (sprite == emulator.ModelDefinition.sprites.end())
+					continue;
+				sprite_info[ix] = sprite->second;
+				sprite_available[ix] = 1;
+			}
 
 			ink_colour = emulator.ModelDefinition.ink_color;
 			if constexpr (hardware_id == HW_TI) {
@@ -831,6 +1751,11 @@ namespace casioemu {
 				fillRandomData(screen_buffer1, (N_ROW + 1) * ROW_SIZE);
 			}
 			inited = true;
+		}
+		if constexpr (IsEpsFamily(hardware_id)) {
+			// CPU-visible LCD registers and RAM are owned by EPS6800Core. This
+			// peripheral is only the CasioEmuMsvc presentation/resource layer.
+			return;
 		}
 		if constexpr (hardware_id == HW_TI) {
 			auto pp = emulator.chipset.QueryInterface<IPortProvider>();
@@ -1127,7 +2052,7 @@ n为行扫描计数，[0xF03B] = ( ( n / ( [0xF036] == 0 ? 64 : [0xF035] ) ) % 2
 				screen_scan_report_en = 1;
 			}
 
-			if constexpr (hardware_id == HardwareId::HW_ES_PLUS) {
+			if constexpr (hardware_id == HardwareId::HW_FX_5800P || hardware_id == HardwareId::HW_ES_PLUS) {
 				region_refresh_rate.Setup(0xF034, 1, "Screen/Unknown_F034", &unk_f034, MMURegion::DefaultRead<uint8_t, 0b11>,
 					MMURegion::DefaultWrite<uint8_t, 0b11>, emulator);
 			}
@@ -1185,33 +2110,14 @@ n为行扫描计数，[0xF03B] = ( ( n / ( [0xF036] == 0 ? 64 : [0xF035] ) ) % 2
 		}
 		screen_refresh_rate = 0;
 		region_refresh_rate.Kill();
-		if constexpr (hardware_id != HardwareId::HW_ES_PLUS) {
+		if constexpr (hardware_id != HardwareId::HW_FX_5800P && hardware_id != HardwareId::HW_ES_PLUS) {
 			screen_offset = 0;
 			region_offset.Kill();
 		}
 		enabled_2 = false;
 	}
 
-#ifndef __EMSCRIPTEN__
-	bool GetPhysicalCaptureRect(SDL_Renderer* renderer, const SDL_Rect& logicalRect, SDL_Rect& physicalRect) {
-		int renderW, renderH;
-		if (SDL_GetRendererOutputSize(renderer, &renderW, &renderH) != 0) return false;
-		int windowW, windowH;
-		SDL_Window* win = SDL_RenderGetWindow(renderer);
-		if (!win) return false;
-		SDL_GetWindowSize(win, &windowW, &windowH);
-		if (windowW == 0 || windowH == 0) return false;
-		
-		float scaleX = (float)renderW / windowW;
-		float scaleY = (float)renderH / windowH;
-		
-		physicalRect.x = (int)(logicalRect.x * scaleX);
-		physicalRect.y = (int)(logicalRect.y * scaleY);
-		physicalRect.w = (int)(logicalRect.w * scaleX);
-		physicalRect.h = (int)(logicalRect.h * scaleY);
-		return true;
-	}
-
+#if !defined(__EMSCRIPTEN__) && !defined(CASIOEMU_CORE_WEB)
 	bool GetCaptureRect(const std::vector<SDL_Rect>& spriteRects, const std::vector<SDL_Rect>& pixelRects, SDL_Rect& captureRect) {
 		if (spriteRects.empty() && pixelRects.empty()) {
 			return false;
@@ -1259,6 +2165,125 @@ n为行扫描计数，[0xF03B] = ( ( n / ( [0xF036] == 0 ? 64 : [0xF035] ) ) % 2
 		}
 #endif
 		return std::filesystem::path(name);
+	}
+
+	void SaveScreenshotSurface(SDL_Surface* screenSurface, const std::string& filename) {
+		if (!screenSurface)
+			return;
+#ifdef __ANDROID__
+		bool success = saveImageToMediaStore(screenSurface->pixels, screenSurface->w, screenSurface->h, screenSurface->pitch, filename.c_str());
+		if (!success) {
+			SDL_Log("Error saving screenshot using MediaStore API");
+		}
+		else {
+			SDL_Log("Screenshot saved successfully with MediaStore API");
+		}
+
+		JNIEnv* env = (JNIEnv*)SDL_AndroidGetJNIEnv();
+		jobject activity = (jobject)SDL_AndroidGetActivity();
+
+		if (env && activity) {
+			jobject byteBuffer = env->NewDirectByteBuffer(screenSurface->pixels,
+				screenSurface->h * screenSurface->pitch);
+
+			jclass activityClass = env->GetObjectClass(activity);
+			jmethodID copyToClipboardMethod = env->GetMethodID(activityClass, "copyImageToClipboard",
+				"(Ljava/nio/ByteBuffer;III)Z");
+
+			if (copyToClipboardMethod != NULL) {
+				jboolean result = env->CallBooleanMethod(activity, copyToClipboardMethod,
+					byteBuffer, screenSurface->w,
+					screenSurface->h, screenSurface->pitch);
+				if (result) {
+					SDL_Log("Screenshot copied to clipboard");
+				}
+				else {
+					SDL_Log("Failed to copy screenshot to clipboard");
+				}
+			}
+			else {
+				SDL_Log("copyImageToClipboard method not found. Add it to your Java activity.");
+			}
+
+			env->DeleteLocalRef(byteBuffer);
+			env->DeleteLocalRef(activityClass);
+			env->DeleteLocalRef(activity);
+		}
+#else
+		if (IMG_SavePNG(screenSurface, filename.c_str()) != 0) {
+			SDL_Log("Error saving screenshot: %s", IMG_GetError());
+		}
+		else {
+			SDL_Log("Screenshot saved to %s", filename.c_str());
+		}
+
+#ifdef _WIN32
+		HDC hdcScreen = GetDC(NULL);
+		HDC hdcMem = CreateCompatibleDC(hdcScreen);
+
+		BITMAPINFOHEADER bi;
+		ZeroMemory(&bi, sizeof(BITMAPINFOHEADER));
+		bi.biSize = sizeof(BITMAPINFOHEADER);
+		bi.biWidth = screenSurface->w;
+		bi.biHeight = -screenSurface->h;
+		bi.biPlanes = 1;
+		bi.biBitCount = 32;
+		bi.biCompression = BI_RGB;
+
+		void* bits = NULL;
+		HBITMAP hBitmap = CreateDIBSection(hdcMem, (BITMAPINFO*)&bi, DIB_RGB_COLORS, &bits, NULL, 0);
+
+		if (hBitmap) {
+			HGDIOBJ oldBitmap = SelectObject(hdcMem, hBitmap);
+
+			uint8_t* dst = (uint8_t*)bits;
+
+			for (int y = 0; y < screenSurface->h; y++) {
+				uint8_t* src = (uint8_t*)screenSurface->pixels + y * screenSurface->pitch;
+				for (int x = 0; x < screenSurface->w; x++) {
+					dst[0] = src[2];
+					dst[1] = src[1];
+					dst[2] = src[0];
+					dst[3] = src[3];
+
+					src += 4;
+					dst += 4;
+				}
+			}
+			if (oldBitmap)
+				SelectObject(hdcMem, oldBitmap);
+
+			bool clipboardOwnsBitmap = false;
+			if (OpenClipboard(NULL)) {
+				EmptyClipboard();
+				if (SetClipboardData(CF_BITMAP, hBitmap)) {
+					clipboardOwnsBitmap = true;
+				}
+				else {
+					SDL_Log("Failed to set clipboard bitmap");
+				}
+				CloseClipboard();
+				if (clipboardOwnsBitmap)
+					SDL_Log("Screenshot copied to clipboard");
+			}
+			else {
+				SDL_Log("Failed to open clipboard");
+			}
+			if (!clipboardOwnsBitmap) {
+				DeleteObject(hBitmap);
+			}
+
+			DeleteDC(hdcMem);
+		}
+		else {
+			SDL_Log("Failed to create DIB section for clipboard");
+		}
+
+		ReleaseDC(NULL, hdcScreen);
+#else
+		SDL_Log("Clipboard copy not implemented for this platform");
+#endif
+#endif
 	}
 
 	bool EnsureParentDirectory(const std::filesystem::path& path) {
@@ -1530,7 +2555,7 @@ n为行扫描计数，[0xF03B] = ( ( n / ( [0xF036] == 0 ? 64 : [0xF035] ) ) % 2
 	};
 #endif
 
-#if !defined(__ANDROID__) && !defined(IOS)
+#ifndef __ANDROID__
 	class RawVideoPipe {
 	public:
 		~RawVideoPipe() {
@@ -1586,8 +2611,6 @@ n为行扫描计数，[0xF03B] = ( ( n / ( [0xF036] == 0 ? 64 : [0xF035] ) ) % 2
 			CloseHandle(processInfo.hThread);
 			return true;
 #else
-			// Ignore SIGPIPE so broken pipe won't crash the process
-			std::signal(SIGPIPE, SIG_IGN);
 			pipe = ::popen(command.c_str(), "w");
 			return pipe != nullptr;
 #endif
@@ -1658,7 +2681,249 @@ n为行扫描计数，[0xF03B] = ( ( n / ( [0xF036] == 0 ? 64 : [0xF035] ) ) % 2
 	};
 #endif
 
-#ifndef IOS
+	SDL_Color CaptureBackgroundColour(uint32_t rgb) {
+		return {
+			static_cast<Uint8>((rgb >> 16) & 0xff),
+			static_cast<Uint8>((rgb >> 8) & 0xff),
+			static_cast<Uint8>(rgb & 0xff),
+			255};
+	}
+
+	Uint32 MapScreenshotPixel(SDL_PixelFormat* format, const ColourInfo& ink_colour, const SDL_Color& background, float alpha_value) {
+		if (alpha_value > 255.0f) {
+			const SDL_Color colour = ScreenPixelColour(ink_colour, alpha_value);
+			return SDL_MapRGBA(format, colour.r, colour.g, colour.b, colour.a);
+		}
+
+		const int alpha = std::clamp(static_cast<int>(std::lround(alpha_value)), 0, 255);
+		const auto blend = [alpha](int foreground, int background_channel) {
+			return static_cast<uint8_t>((foreground * alpha + background_channel * (255 - alpha) + 127) / 255);
+		};
+		return SDL_MapRGBA(format,
+			blend(ink_colour.r, background.r),
+			blend(ink_colour.g, background.g),
+			blend(ink_colour.b, background.b),
+			255);
+	}
+
+	void FillScaledPixel(SDL_Surface* surface, int x, int y, int scale, Uint32 colour) {
+		for (int dy = 0; dy < scale; ++dy) {
+			const int py = y + dy;
+			if (py < 0 || py >= surface->h)
+				continue;
+			auto* row = reinterpret_cast<Uint32*>(static_cast<uint8_t*>(surface->pixels) + py * surface->pitch);
+			for (int dx = 0; dx < scale; ++dx) {
+				const int px = x + dx;
+				if (px >= 0 && px < surface->w)
+					row[px] = colour;
+			}
+		}
+	}
+
+	SDL_Rect ScaleScreenshotRect(const SDL_Rect& rect, const SDL_Rect& capture_rect, double sx, double sy) {
+		const int x0 = static_cast<int>(std::floor((rect.x - capture_rect.x) * sx));
+		const int y0 = static_cast<int>(std::floor((rect.y - capture_rect.y) * sy));
+		const int x1 = static_cast<int>(std::ceil((rect.x + rect.w - capture_rect.x) * sx));
+		const int y1 = static_cast<int>(std::ceil((rect.y + rect.h - capture_rect.y) * sy));
+		return {x0, y0, std::max(1, x1 - x0), std::max(1, y1 - y0)};
+	}
+
+	Rect ToModelRect(const SDL_Rect& rect) {
+		return {rect.x, rect.y, rect.w, rect.h};
+	}
+
+	struct ScreenCaptureSource {
+		SDL_Texture* interface_texture = nullptr;
+		SDL_Surface* interface_surface = nullptr;
+		const std::vector<SpriteInfo>* sprite_info = nullptr;
+		const std::vector<uint8_t>* sprite_available = nullptr;
+		const ColourInfo* ink_colour = nullptr;
+		const float* screen_ink_alpha = nullptr;
+		int logical_width = 0;
+		int logical_height = 0;
+		SDL_Rect lcd_dest{};
+		bool render_pixel_layer = true;
+	};
+
+	struct ScreenCaptureLayout {
+		SDL_Rect capture_rect{};
+		SDL_Rect scaled_lcd{};
+		int scale = 3;
+		int content_width = 0;
+		int content_height = 0;
+		int output_width = 0;
+		int output_height = 0;
+		double sx = 1.0;
+		double sy = 1.0;
+	};
+
+	bool BuildScreenCaptureLayout(const ScreenCaptureSource& source, int requested_scale, bool even_output, ScreenCaptureLayout& layout, const char* purpose) {
+		if (!source.sprite_info || !source.sprite_available ||
+			!source.ink_colour || !source.screen_ink_alpha ||
+			source.logical_width <= 0 || source.logical_height <= 0 || source.lcd_dest.w <= 0 || source.lcd_dest.h <= 0) {
+			SDL_Log("%s failed: invalid capture source: texture=%p sprites=%p available=%p ink=%p alpha=%p logical=%dx%d lcd=%d,%d %dx%d.",
+				purpose,
+				static_cast<void*>(source.interface_texture),
+				static_cast<const void*>(source.sprite_info),
+				static_cast<const void*>(source.sprite_available),
+				static_cast<const void*>(source.ink_colour),
+				static_cast<const void*>(source.screen_ink_alpha),
+				source.logical_width,
+				source.logical_height,
+				source.lcd_dest.x,
+				source.lcd_dest.y,
+				source.lcd_dest.w,
+				source.lcd_dest.h);
+			return false;
+		}
+
+		std::vector<SDL_Rect> spriteRects;
+		for (size_t ix = 1; ix < source.sprite_info->size() && ix < source.sprite_available->size(); ++ix) {
+			if (!(*source.sprite_available)[ix])
+				continue;
+			spriteRects.push_back((*source.sprite_info)[ix].dest);
+		}
+
+		layout = {};
+		if (!GetCaptureRect(spriteRects, std::vector<SDL_Rect>{source.lcd_dest}, layout.capture_rect)) {
+			SDL_Log("%s failed: invalid capture region.", purpose);
+			return false;
+		}
+
+		layout.scale = std::max(1, requested_scale);
+		layout.sx = static_cast<double>(source.logical_width * layout.scale) / static_cast<double>(source.lcd_dest.w);
+		layout.sy = static_cast<double>(source.logical_height * layout.scale) / static_cast<double>(source.lcd_dest.h);
+		layout.content_width = std::max(1, static_cast<int>(std::ceil(layout.capture_rect.w * layout.sx)));
+		layout.content_height = std::max(1, static_cast<int>(std::ceil(layout.capture_rect.h * layout.sy)));
+		layout.output_width = even_output ? ((layout.content_width + 1) & ~1) : layout.content_width;
+		layout.output_height = even_output ? ((layout.content_height + 1) & ~1) : layout.content_height;
+		layout.scaled_lcd = ScaleScreenshotRect(source.lcd_dest, layout.capture_rect, layout.sx, layout.sy);
+		return true;
+	}
+
+	class ScreenCaptureComposer {
+	public:
+		~ScreenCaptureComposer() {
+			Reset();
+		}
+
+		void Reset() {
+			if (target) {
+				SDL_DestroyTexture(target);
+				target = nullptr;
+			}
+			target_width = 0;
+			target_height = 0;
+		}
+
+		bool Render(SDL_Renderer* renderer, const ScreenCaptureSource& source, const ScreenCaptureLayout& layout, SDL_Surface* surface, const SDL_Color& background, const char* purpose) {
+			if (!renderer || !surface || surface->w != layout.output_width || surface->h != layout.output_height) {
+				SDL_Log("%s failed: invalid capture surface.", purpose);
+				return false;
+			}
+			if (!EnsureTarget(renderer, layout.output_width, layout.output_height, purpose)) {
+				return false;
+			}
+
+			SDL_Texture* old_target = SDL_GetRenderTarget(renderer);
+			SDL_Rect old_viewport{};
+			SDL_Rect old_clip{};
+			float old_scale_x = 1.0f;
+			float old_scale_y = 1.0f;
+			SDL_BlendMode old_blend_mode{};
+			SDL_RenderGetViewport(renderer, &old_viewport);
+			SDL_RenderGetClipRect(renderer, &old_clip);
+			const SDL_bool old_clip_enabled = SDL_RenderIsClipEnabled(renderer);
+			SDL_RenderGetScale(renderer, &old_scale_x, &old_scale_y);
+			SDL_GetRenderDrawBlendMode(renderer, &old_blend_mode);
+			bool render_target_active = false;
+			auto restore = [&]() {
+				if (!render_target_active)
+					return;
+				SDL_SetRenderTarget(renderer, old_target);
+				SDL_RenderSetViewport(renderer, &old_viewport);
+				SDL_RenderSetClipRect(renderer, old_clip_enabled ? &old_clip : nullptr);
+				SDL_RenderSetScale(renderer, old_scale_x, old_scale_y);
+				SDL_SetRenderDrawBlendMode(renderer, old_blend_mode);
+				render_target_active = false;
+			};
+
+			if (SDL_SetRenderTarget(renderer, target) != 0) {
+				SDL_Log("%s failed: cannot bind render target: %s", purpose, SDL_GetError());
+				return false;
+			}
+			render_target_active = true;
+			SDL_RenderSetViewport(renderer, nullptr);
+			SDL_RenderSetClipRect(renderer, nullptr);
+			SDL_RenderSetScale(renderer, 1.0f, 1.0f);
+			SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+			SDL_SetRenderDrawColor(renderer, background.r, background.g, background.b, background.a);
+			SDL_RenderClear(renderer);
+
+			if (svg_texture_cache.size() < source.sprite_info->size())
+				svg_texture_cache.resize(source.sprite_info->size());
+			for (size_t ix = 1; ix < source.sprite_info->size() && ix < source.sprite_available->size(); ++ix) {
+				if (!(*source.sprite_available)[ix])
+					continue;
+				const int alpha_index = static_cast<int>(ix - 1);
+				SpriteInfo sprite = (*source.sprite_info)[ix];
+				sprite.dest = ToModelRect(ScaleScreenshotRect(sprite.dest, layout.capture_rect, layout.sx, layout.sy));
+				const uint8_t alpha = Uint8(std::clamp(static_cast<int>(source.screen_ink_alpha[alpha_index]), 0, 255));
+				RenderModelSprite(renderer, source.interface_texture, &svg_texture_cache[ix], sprite, *source.ink_colour, alpha);
+			}
+
+			if (SDL_MUSTLOCK(surface) && SDL_LockSurface(surface) != 0) {
+				SDL_Log("%s failed: cannot lock capture surface: %s", purpose, SDL_GetError());
+				restore();
+				return false;
+			}
+
+			if (SDL_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_RGBA32, surface->pixels, surface->pitch) != 0) {
+				SDL_Log("%s failed: cannot read capture target pixels: %s", purpose, SDL_GetError());
+				if (SDL_MUSTLOCK(surface))
+					SDL_UnlockSurface(surface);
+				restore();
+				return false;
+			}
+			restore();
+
+			if (source.render_pixel_layer) {
+				for (int y = 0; y < source.logical_height; ++y) {
+					const int source_y = y + 1;
+					for (int x = 0; x < source.logical_width; ++x) {
+						const float alpha_value = source.screen_ink_alpha[x + source_y * 192];
+						if (alpha_value <= 0.0f)
+							continue;
+						FillScaledPixel(surface, layout.scaled_lcd.x + x * layout.scale, layout.scaled_lcd.y + y * layout.scale, layout.scale, MapScreenshotPixel(surface->format, *source.ink_colour, background, alpha_value));
+					}
+				}
+			}
+			if (SDL_MUSTLOCK(surface))
+				SDL_UnlockSurface(surface);
+			return true;
+		}
+
+	private:
+		bool EnsureTarget(SDL_Renderer* renderer, int width, int height, const char* purpose) {
+			if (target && target_width == width && target_height == height)
+				return true;
+			Reset();
+			target = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_TARGET, width, height);
+			if (!target) {
+				SDL_Log("%s failed: cannot create render target: %s", purpose, SDL_GetError());
+				return false;
+			}
+			SDL_SetTextureBlendMode(target, SDL_BLENDMODE_NONE);
+			target_width = width;
+			target_height = height;
+			return true;
+		}
+
+		SDL_Texture* target = nullptr;
+		int target_width = 0;
+		int target_height = 0;
+		std::vector<SvgSpriteTextureCache> svg_texture_cache;
+	};
 
 	class ScreenRecorder {
 	public:
@@ -1666,20 +2931,20 @@ n为行扫描计数，[0xF03B] = ( ( n / ( [0xF036] == 0 ? 64 : [0xF035] ) ) % 2
 			Stop();
 		}
 
-		bool Start(SDL_Renderer* renderer, const SDL_Rect& logicalRect, int requestedFps = 30) {
+		bool Start(const ScreenCaptureSource& source, int capture_scale, int requestedFps = 30) {
 			Stop();
-			if (logicalRect.w <= 0 || logicalRect.h <= 0) {
-				SDL_Log("Recording failed: invalid capture region.");
+			if (!BuildScreenCaptureLayout(source, capture_scale, true, layout, "Recording")) {
 				return false;
 			}
 
-			logicalCaptureRect = logicalRect;
-			captureRect = logicalRect;
 			fps = std::max(1, requestedFps);
-			outputWidth = (captureRect.w + 1) & ~1;
-			outputHeight = (captureRect.h + 1) & ~1;
+			outputWidth = layout.output_width;
+			outputHeight = layout.output_height;
 			frameCount = 0;
 			nextCaptureTick = 0;
+			if (!EnsureFrameSurface()) {
+				return false;
+			}
 
 			const std::string stem = MakeTimestampedName("recording-", "");
 			outputPath = GetRecordingOutputPath(stem + ".mp4");
@@ -1690,23 +2955,14 @@ n为行扫描计数，[0xF03B] = ( ( n / ( [0xF036] == 0 ? 64 : [0xF035] ) ) % 2
 				SDL_Log("Recording started: %s", outputPath.string().c_str());
 				return true;
 			}
-#elif !defined(IOS)
+#else
 			const std::string command = BuildFfmpegCommand(outputPath);
-			std::string check_cmd = command + " -version > /dev/null 2>&1";
-			// Check if ffmpeg exists by running it with -version
-			std::string ffmpeg_path = "ffmpeg";
-			if (std::filesystem::exists("/opt/homebrew/bin/ffmpeg")) ffmpeg_path = "/opt/homebrew/bin/ffmpeg";
-			else if (std::filesystem::exists("/usr/local/bin/ffmpeg")) ffmpeg_path = "/usr/local/bin/ffmpeg";
-#ifndef IOS
-			if (std::system((ffmpeg_path + " -version > /dev/null 2>&1").c_str()) == 0) {
-				if (encoder.Start(command)) {
-					frameSequence = false;
-					recording = true;
-					SDL_Log("Recording started: %s", outputPath.string().c_str());
-					return true;
-				}
+			if (encoder.Start(command)) {
+				frameSequence = false;
+				recording = true;
+				SDL_Log("Recording started: %s", outputPath.string().c_str());
+				return true;
 			}
-#endif
 #endif
 
 			frameSequence = true;
@@ -1716,6 +2972,7 @@ n为行扫描计数，[0xF03B] = ( ( n / ( [0xF036] == 0 ? 64 : [0xF035] ) ) % 2
 			if (ec) {
 				SDL_Log("Recording failed: cannot create frame directory %s (%s)",
 					frameDirectory.string().c_str(), ec.message().c_str());
+				ResetFrameSurface();
 				return false;
 			}
 
@@ -1729,16 +2986,12 @@ n为行扫描计数，[0xF03B] = ( ( n / ( [0xF036] == 0 ? 64 : [0xF035] ) ) % 2
 		}
 
 		void Stop() {
-#if !defined(IOS)
 			if (!recording && !encoder.IsOpen()) {
+				ResetFrameSurface();
+				composer.Reset();
 				return;
 			}
 			encoder.Stop();
-#else
-			if (!recording) {
-				return;
-			}
-#endif
 			if (recording) {
 				if (frameSequence) {
 					SDL_Log("Recording stopped: %u frames saved to %s",
@@ -1750,9 +3003,11 @@ n为行扫描计数，[0xF03B] = ( ( n / ( [0xF036] == 0 ? 64 : [0xF035] ) ) % 2
 				}
 			}
 			recording = false;
+			ResetFrameSurface();
+			composer.Reset();
 		}
 
-		bool CaptureFrame(SDL_Renderer* renderer) {
+		bool CaptureFrame(SDL_Renderer* renderer, const ScreenCaptureSource& source, const SDL_Color& background) {
 			if (!recording) {
 				return false;
 			}
@@ -1763,27 +3018,17 @@ n为行扫描计数，[0xF03B] = ( ( n / ( [0xF036] == 0 ? 64 : [0xF035] ) ) % 2
 			}
 			nextCaptureTick = now + static_cast<Uint64>(1000 / fps);
 
-			// Use physical (backing) dimensions for buffer allocation
-			const int frameWidth = frameSequence ? captureRect.w : outputWidth;
-			const int frameHeight = frameSequence ? captureRect.h : outputHeight;
-			const int pitch = frameWidth * 4;
-			std::vector<uint8_t> pixels(static_cast<size_t>(pitch) * frameHeight, 255);
-
-			// Read using logical rect - SDL maps to physical internally and writes physical pixels
-			if (SDL_RenderReadPixels(renderer, &logicalCaptureRect, SDL_PIXELFORMAT_RGBA32, pixels.data(), pitch) != 0) {
-				SDL_Log("Error capturing recording frame: %s", SDL_GetError());
+			if (!frameSurface || !composer.Render(renderer, source, layout, frameSurface, background, "Recording")) {
 				Stop();
 				return false;
 			}
 
 			bool success = frameSequence
-				? SaveFrameAsPng(pixels, pitch)
+				? SaveFrameAsPng()
 #ifdef __ANDROID__
-				: encoder.WriteRgbaFrame(pixels.data(), pitch);
-#elif !defined(IOS)
-				: encoder.Write(pixels.data(), pixels.size());
+				: encoder.WriteRgbaFrame(framePixels.data(), frameSurface->pitch);
 #else
-				: false;
+				: encoder.Write(framePixels.data(), framePixels.size());
 #endif
 			if (!success) {
 				SDL_Log("Recording stopped because frame writing failed.");
@@ -1805,16 +3050,8 @@ n为行扫描计数，[0xF03B] = ( ( n / ( [0xF036] == 0 ? 64 : [0xF035] ) ) % 2
 
 	private:
 		std::string BuildFfmpegCommand(const std::filesystem::path& path) const {
-			std::string ffmpeg_path = "ffmpeg";
-#if !defined(_WIN32) && !defined(__ANDROID__) && !defined(IOS)
-			if (std::filesystem::exists("/opt/homebrew/bin/ffmpeg")) {
-				ffmpeg_path = "/opt/homebrew/bin/ffmpeg";
-			} else if (std::filesystem::exists("/usr/local/bin/ffmpeg")) {
-				ffmpeg_path = "/usr/local/bin/ffmpeg";
-			}
-#endif
 			std::ostringstream command;
-			command << ffmpeg_path << " -y -hide_banner -loglevel error"
+			command << "ffmpeg -y -hide_banner -loglevel error"
 				<< " -f rawvideo -vcodec rawvideo"
 				<< " -pixel_format rgba"
 				<< " -video_size " << outputWidth << "x" << outputHeight
@@ -1824,26 +3061,40 @@ n为行扫描计数，[0xF03B] = ( ( n / ( [0xF036] == 0 ? 64 : [0xF035] ) ) % 2
 			return command.str();
 		}
 
-		bool SaveFrameAsPng(const std::vector<uint8_t>& pixels, int pitch) const {
+		bool EnsureFrameSurface() {
+			ResetFrameSurface();
+			const int pitch = outputWidth * 4;
+			framePixels.assign(static_cast<size_t>(pitch) * outputHeight, 255);
+			frameSurface = SDL_CreateRGBSurfaceWithFormatFrom(
+				framePixels.data(),
+				outputWidth,
+				outputHeight,
+				32,
+				pitch,
+				SDL_PIXELFORMAT_RGBA32);
+			if (!frameSurface) {
+				SDL_Log("Recording failed: cannot create frame surface: %s", SDL_GetError());
+				framePixels.clear();
+				return false;
+			}
+			return true;
+		}
+
+		void ResetFrameSurface() {
+			if (frameSurface) {
+				SDL_FreeSurface(frameSurface);
+				frameSurface = nullptr;
+			}
+			framePixels.clear();
+		}
+
+		bool SaveFrameAsPng() const {
 			std::ostringstream filename;
 			filename << "frame-" << std::setw(6) << std::setfill('0') << frameCount << ".png";
 			std::filesystem::path framePath = frameDirectory / filename.str();
 
-			SDL_Surface* surface = SDL_CreateRGBSurfaceWithFormatFrom(
-				const_cast<uint8_t*>(pixels.data()),
-				captureRect.w,
-				captureRect.h,
-				32,
-				pitch,
-				SDL_PIXELFORMAT_RGBA32);
-			if (!surface) {
-				SDL_Log("Error creating recording frame surface: %s", SDL_GetError());
-				return false;
-			}
-
 			const std::string pathString = framePath.string();
-			int result = IMG_SavePNG(surface, pathString.c_str());
-			SDL_FreeSurface(surface);
+			int result = IMG_SavePNG(frameSurface, pathString.c_str());
 			if (result != 0) {
 				SDL_Log("Error saving recording frame: %s", IMG_GetError());
 				return false;
@@ -1853,11 +3104,13 @@ n为行扫描计数，[0xF03B] = ( ( n / ( [0xF036] == 0 ? 64 : [0xF035] ) ) % 2
 
 #ifdef __ANDROID__
 		AndroidVideoEncoder encoder;
-#elif !defined(IOS)
+#else
 		RawVideoPipe encoder;
 #endif
-		SDL_Rect captureRect{};      // physical (backing) size for buffer allocation
-		SDL_Rect logicalCaptureRect{}; // logical size for SDL_RenderReadPixels
+		ScreenCaptureLayout layout{};
+		ScreenCaptureComposer composer;
+		std::vector<uint8_t> framePixels;
+		SDL_Surface* frameSurface = nullptr;
 		int fps = 30;
 		int outputWidth = 0;
 		int outputHeight = 0;
@@ -1868,190 +3121,226 @@ n为行扫描计数，[0xF03B] = ( ( n / ( [0xF036] == 0 ? 64 : [0xF035] ) ) % 2
 		std::filesystem::path outputPath;
 		std::filesystem::path frameDirectory;
 	};
-#endif
-	// Function to capture the current screen, save as PNG file and copy to clipboard
-	void CaptureScreenshot(SDL_Renderer* renderer, const std::vector<SDL_Rect>& spriteRects, const std::vector<SDL_Rect>& pixelRects) {
-		std::string filename = MakeTimestampedName("screenshot-", ".png");
-		SDL_Rect logicalRect{};
-		if (!GetCaptureRect(spriteRects, pixelRects, logicalRect)) {
-			SDL_Log("Screenshot failed: invalid capture region.");
-			return;
+
+	class ScreenMirrorComposer {
+	public:
+		~ScreenMirrorComposer() {
+			Reset();
 		}
 
-		// Use logicalRect directly because the render target is a texture without HiDPI scaling
-		SDL_Rect physicalRect = logicalRect;
-
-		int captureWidth = physicalRect.w;
-		int captureHeight = physicalRect.h;
-
-		// Create a surface to capture the screen content
-		SDL_Surface* screenSurface = SDL_CreateRGBSurface(0, captureWidth, captureHeight, 32,
-			0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
-
-		if (screenSurface != nullptr) {
-			// Read pixels using the LOGICAL rect (SDL maps to physical internally)
-			if (SDL_RenderReadPixels(renderer, &logicalRect, SDL_PIXELFORMAT_RGBA32,
-				screenSurface->pixels, screenSurface->pitch) == 0) {
-
-#ifdef __ANDROID__
-				// Save to MediaStore
-				auto str = filename;
-				bool success = saveImageToMediaStore(screenSurface->pixels, screenSurface->w, screenSurface->h, screenSurface->pitch, str.c_str());
-				if (!success) {
-					SDL_Log("Error saving screenshot using MediaStore API");
-				}
-				else {
-					SDL_Log("Screenshot saved successfully with MediaStore API");
-				}
-
-				// Copy to clipboard on Android using JNI
-				JNIEnv* env = (JNIEnv*)SDL_AndroidGetJNIEnv();
-				jobject activity = (jobject)SDL_AndroidGetActivity();
-
-				if (env && activity) {
-					// Create a Java direct ByteBuffer from the pixel data
-					jobject byteBuffer = env->NewDirectByteBuffer(screenSurface->pixels,
-						screenSurface->h * screenSurface->pitch);
-
-					// Call the Java method to copy to clipboard
-					jclass activityClass = env->GetObjectClass(activity);
-					jmethodID copyToClipboardMethod = env->GetMethodID(activityClass, "copyImageToClipboard",
-						"(Ljava/nio/ByteBuffer;III)Z");
-
-					if (copyToClipboardMethod != NULL) {
-						jboolean result = env->CallBooleanMethod(activity, copyToClipboardMethod,
-							byteBuffer, screenSurface->w,
-							screenSurface->h, screenSurface->pitch);
-						if (result) {
-							SDL_Log("Screenshot copied to clipboard");
-						}
-						else {
-							SDL_Log("Failed to copy screenshot to clipboard");
-						}
-					}
-					else {
-						SDL_Log("copyImageToClipboard method not found. Add it to your Java activity.");
-					}
-
-					env->DeleteLocalRef(byteBuffer);
-					env->DeleteLocalRef(activityClass);
-					env->DeleteLocalRef(activity);
-				}
-#else
-				// Save to file on Windows/Desktop
-				auto str = filename;
-				if (IMG_SavePNG(screenSurface, str.c_str()) != 0) {
-					SDL_Log("Error saving screenshot: %s", IMG_GetError());
-				}
-				else {
-					SDL_Log("Screenshot saved to %s", str.c_str());
-				}
-
-				// Copy to clipboard on Windows/Desktop
-#ifdef _WIN32
-				// Convert SDL_Surface to Windows DIB format for clipboard
-				HDC hdcScreen = GetDC(NULL);
-				HDC hdcMem = CreateCompatibleDC(hdcScreen);
-
-				BITMAPINFOHEADER bi;
-				ZeroMemory(&bi, sizeof(BITMAPINFOHEADER));
-				bi.biSize = sizeof(BITMAPINFOHEADER);
-				bi.biWidth = screenSurface->w;
-				bi.biHeight = -screenSurface->h; // Negative for top-down
-				bi.biPlanes = 1;
-				bi.biBitCount = 32;
-				bi.biCompression = BI_RGB;
-
-				void* bits = NULL;
-				HBITMAP hBitmap = CreateDIBSection(hdcMem, (BITMAPINFO*)&bi, DIB_RGB_COLORS, &bits, NULL, 0);
-
-				if (hBitmap) {
-					// Copy pixels from SDL surface to DIB
-					SelectObject(hdcMem, hBitmap);
-
-					// Convert RGBA to BGRA and copy to DIB
-					uint8_t* src = (uint8_t*)screenSurface->pixels;
-					uint8_t* dst = (uint8_t*)bits;
-
-					for (int y = 0; y < screenSurface->h; y++) {
-						for (int x = 0; x < screenSurface->w; x++) {
-							// RGBA to BGRA
-							dst[0] = src[2]; // B
-							dst[1] = src[1]; // G
-							dst[2] = src[0]; // R
-							dst[3] = src[3]; // A
-
-							src += 4;
-							dst += 4;
-						}
-					}
-
-					// Copy to clipboard
-					if (OpenClipboard(NULL)) {
-						EmptyClipboard();
-						SetClipboardData(CF_BITMAP, hBitmap);
-						CloseClipboard();
-						SDL_Log("Screenshot copied to clipboard");
-					}
-					else {
-						SDL_Log("Failed to open clipboard");
-						DeleteObject(hBitmap);
-					}
-
-					DeleteDC(hdcMem);
-				}
-				else {
-					SDL_Log("Failed to create DIB section for clipboard");
-				}
-
-				ReleaseDC(NULL, hdcScreen);
-#else
-				// For other desktop platforms like Linux/macOS
-				// Use platform-specific clipboard APIs if needed
-				SDL_Log("Clipboard copy not implemented for this platform");
-#endif
-#endif
+		void Reset() {
+			if (pixel_texture) {
+				SDL_DestroyTexture(pixel_texture);
+				pixel_texture = nullptr;
 			}
-			else {
-				SDL_Log("Error capturing screen pixels: %s", SDL_GetError());
+			if (interface_texture) {
+				SDL_DestroyTexture(interface_texture);
+				interface_texture = nullptr;
 			}
-			SDL_FreeSurface(screenSurface); // Free the surface after use
+			pixel_width = 0;
+			pixel_height = 0;
+			interface_surface = nullptr;
+			pixel_pixels.clear();
+			svg_texture_cache.clear();
 		}
-		else {
-			SDL_Log("Error creating surface: %s", SDL_GetError());
+
+		bool Render(ScreenMirror& mirror, const ScreenCaptureSource& source, const SDL_Color& background) {
+			SDL_Renderer* mirror_renderer = mirror.renderer();
+			if (!mirror_renderer)
+				return false;
+
+			SDL_Rect capture_rect{};
+			if (!BuildCaptureRect(source, capture_rect)) {
+				SDL_Log("Mirror update failed: invalid capture region.");
+				return false;
+			}
+
+			mirror.clear(background);
+			const SDL_Rect content_rect = mirror.contentRect();
+			if (content_rect.w <= 0 || content_rect.h <= 0)
+				return false;
+
+			const double sx = static_cast<double>(content_rect.w) / static_cast<double>(capture_rect.w);
+			const double sy = static_cast<double>(content_rect.h) / static_cast<double>(capture_rect.h);
+			SDL_Texture* fallback_texture = EnsureInterfaceTexture(mirror_renderer, source);
+
+			if (svg_texture_cache.size() < source.sprite_info->size())
+				svg_texture_cache.resize(source.sprite_info->size());
+			for (size_t ix = 1; ix < source.sprite_info->size() && ix < source.sprite_available->size(); ++ix) {
+				if (!(*source.sprite_available)[ix])
+					continue;
+				const int alpha_index = static_cast<int>(ix - 1);
+				SpriteInfo sprite = (*source.sprite_info)[ix];
+				SDL_Rect dest = ScaleScreenshotRect(sprite.dest, capture_rect, sx, sy);
+				dest.x += content_rect.x;
+				dest.y += content_rect.y;
+				sprite.dest = ToModelRect(dest);
+				const uint8_t alpha = Uint8(std::clamp(static_cast<int>(source.screen_ink_alpha[alpha_index]), 0, 255));
+				RenderModelSprite(mirror_renderer, fallback_texture, &svg_texture_cache[ix], sprite, *source.ink_colour, alpha);
+			}
+
+			if (source.render_pixel_layer) {
+				SDL_Rect lcd_dest = ScaleScreenshotRect(source.lcd_dest, capture_rect, sx, sy);
+				lcd_dest.x += content_rect.x;
+				lcd_dest.y += content_rect.y;
+				if (!RenderPixelTexture(mirror_renderer, source, lcd_dest))
+					return false;
+			}
+			mirror.present();
+			return true;
 		}
+
+	private:
+		bool BuildCaptureRect(const ScreenCaptureSource& source, SDL_Rect& capture_rect) const {
+			if (!source.sprite_info || !source.sprite_available || !source.ink_colour || !source.screen_ink_alpha ||
+				source.logical_width <= 0 || source.logical_height <= 0 || source.lcd_dest.w <= 0 || source.lcd_dest.h <= 0)
+				return false;
+
+			std::vector<SDL_Rect> sprite_rects;
+			for (size_t ix = 1; ix < source.sprite_info->size() && ix < source.sprite_available->size(); ++ix) {
+				if ((*source.sprite_available)[ix])
+					sprite_rects.push_back((*source.sprite_info)[ix].dest);
+			}
+			return GetCaptureRect(sprite_rects, std::vector<SDL_Rect>{source.lcd_dest}, capture_rect);
+		}
+
+		SDL_Texture* EnsureInterfaceTexture(SDL_Renderer* renderer, const ScreenCaptureSource& source) {
+			if (!renderer || !source.interface_surface)
+				return nullptr;
+			if (interface_texture && interface_surface == source.interface_surface)
+				return interface_texture;
+			if (interface_texture) {
+				SDL_DestroyTexture(interface_texture);
+				interface_texture = nullptr;
+			}
+			interface_surface = source.interface_surface;
+			interface_texture = SDL_CreateTextureFromSurface(renderer, source.interface_surface);
+			if (!interface_texture) {
+				SDL_Log("Mirror update failed: cannot create interface texture: %s", SDL_GetError());
+				interface_surface = nullptr;
+				return nullptr;
+			}
+			SDL_SetTextureBlendMode(interface_texture, SDL_BLENDMODE_BLEND);
+			return interface_texture;
+		}
+
+		bool EnsurePixelTexture(SDL_Renderer* renderer, int width, int height) {
+			if (!renderer || width <= 0 || height <= 0)
+				return false;
+			if (pixel_texture && pixel_width == width && pixel_height == height)
+				return true;
+			if (pixel_texture) {
+				SDL_DestroyTexture(pixel_texture);
+				pixel_texture = nullptr;
+			}
+			pixel_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, width, height);
+			if (!pixel_texture) {
+				SDL_Log("Mirror update failed: cannot create pixel texture: %s", SDL_GetError());
+				pixel_width = 0;
+				pixel_height = 0;
+				pixel_pixels.clear();
+				return false;
+			}
+			SDL_SetTextureBlendMode(pixel_texture, SDL_BLENDMODE_BLEND);
+#if SDL_VERSION_ATLEAST(2, 0, 12)
+			SDL_SetTextureScaleMode(pixel_texture, SDL_ScaleModeNearest);
+#endif
+			pixel_width = width;
+			pixel_height = height;
+			pixel_pixels.resize(static_cast<size_t>(width) * static_cast<size_t>(height) * 4);
+			return true;
+		}
+
+		bool RenderPixelTexture(SDL_Renderer* renderer, const ScreenCaptureSource& source, const SDL_Rect& dest) {
+			if (!EnsurePixelTexture(renderer, source.logical_width, source.logical_height))
+				return false;
+			for (int y = 0; y < source.logical_height; ++y) {
+				const int source_y = y + 1;
+				for (int x = 0; x < source.logical_width; ++x) {
+					const SDL_Color colour = ScreenPixelColour(*source.ink_colour, source.screen_ink_alpha[x + source_y * 192]);
+					const size_t pixel_offset = (static_cast<size_t>(y) * static_cast<size_t>(source.logical_width) + static_cast<size_t>(x)) * 4;
+					pixel_pixels[pixel_offset + 0] = colour.r;
+					pixel_pixels[pixel_offset + 1] = colour.g;
+					pixel_pixels[pixel_offset + 2] = colour.b;
+					pixel_pixels[pixel_offset + 3] = colour.a;
+				}
+			}
+			if (SDL_UpdateTexture(pixel_texture, nullptr, pixel_pixels.data(), source.logical_width * 4) != 0) {
+				SDL_Log("Mirror update failed: cannot update pixel texture: %s", SDL_GetError());
+				return false;
+			}
+			if (SDL_RenderCopy(renderer, pixel_texture, nullptr, &dest) != 0) {
+				SDL_Log("Mirror update failed: cannot render pixel texture: %s", SDL_GetError());
+				return false;
+			}
+			return true;
+		}
+
+		SDL_Texture* pixel_texture = nullptr;
+		int pixel_width = 0;
+		int pixel_height = 0;
+		std::vector<uint8_t> pixel_pixels;
+		SDL_Surface* interface_surface = nullptr;
+		SDL_Texture* interface_texture = nullptr;
+		std::vector<SvgSpriteTextureCache> svg_texture_cache;
+	};
+
+	bool CapturePixelPerfectScreenshot(
+		SDL_Renderer* renderer,
+		SDL_Texture* interface_texture,
+		SDL_Surface* interface_surface,
+		const std::vector<SpriteInfo>& sprite_info,
+		const std::vector<uint8_t>& sprite_available,
+		const ColourInfo& ink_colour,
+		const float* screen_ink_alpha,
+		int logical_width,
+		int logical_height,
+		const SDL_Rect& lcd_dest,
+		int capture_scale,
+		const SDL_Color& background,
+		bool render_pixel_layer = true) {
+		ScreenCaptureSource source{
+			interface_texture,
+			interface_surface,
+			&sprite_info,
+			&sprite_available,
+			&ink_colour,
+			screen_ink_alpha,
+			logical_width,
+			logical_height,
+			lcd_dest,
+			render_pixel_layer};
+
+		ScreenCaptureLayout layout{};
+		if (!BuildScreenCaptureLayout(source, capture_scale, false, layout, "Screenshot"))
+			return false;
+
+		SDL_Surface* screenSurface = SDL_CreateRGBSurfaceWithFormat(0, layout.output_width, layout.output_height, 32, SDL_PIXELFORMAT_RGBA32);
+		if (!screenSurface) {
+			SDL_Log("Error creating screenshot surface: %s", SDL_GetError());
+			return false;
+		}
+
+		ScreenCaptureComposer composer;
+		if (!composer.Render(renderer, source, layout, screenSurface, background, "Screenshot")) {
+			SDL_FreeSurface(screenSurface);
+			return false;
+		}
+		SaveScreenshotSurface(screenSurface, MakeTimestampedName("screenshot-", ".png"));
+		SDL_FreeSurface(screenSurface);
+		return true;
 	}
 
-	void UpdatePreview(SDL_Renderer* renderer, ScreenMirror* sm, const std::vector<SDL_Rect>& spriteRects, const std::vector<SDL_Rect>& pixelRects) {
+	std::pair<int, int> GetSize(const ScreenCaptureSource& source) {
 		SDL_Rect captureRect{};
-		if (!GetCaptureRect(spriteRects, pixelRects, captureRect)) {
-			SDL_Log("Preview update failed: invalid capture region.");
-			return;
+		if (!source.sprite_info || !source.sprite_available)
+			return {0, 0};
+		std::vector<SDL_Rect> spriteRects;
+		for (size_t ix = 1; ix < source.sprite_info->size() && ix < source.sprite_available->size(); ++ix) {
+			if ((*source.sprite_available)[ix])
+				spriteRects.push_back((*source.sprite_info)[ix].dest);
 		}
-
-		int captureWidth = captureRect.w;
-		int captureHeight = captureRect.h;
-
-		// Create a surface to capture the screen content
-		SDL_Surface* screenSurface = SDL_CreateRGBSurface(0, captureWidth, captureHeight, 32, 0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
-		if (screenSurface != nullptr) {
-			// Copy the renderer to the surface
-			if (SDL_RenderReadPixels(renderer, &captureRect, SDL_PIXELFORMAT_RGBA32, screenSurface->pixels, screenSurface->pitch) == 0) {
-				sm->update(screenSurface->pixels, screenSurface->pitch);
-			}
-			else {
-				SDL_Log("Error capturing screen pixels: %s", SDL_GetError());
-			}
-			SDL_FreeSurface(screenSurface); // Free the surface after use
-		}
-		else {
-			SDL_Log("Error creating surface: %s", SDL_GetError());
-		}
-	}
-
-	std::pair<int, int> GetSize(const std::vector<SDL_Rect>& spriteRects, const std::vector<SDL_Rect>& pixelRects) {
-		SDL_Rect captureRect{};
-		if (!GetCaptureRect(spriteRects, pixelRects, captureRect)) {
+		if (!GetCaptureRect(spriteRects, std::vector<SDL_Rect>{source.lcd_dest}, captureRect)) {
 			return { 0, 0 };
 		}
 		return { captureRect.w, captureRect.h };
@@ -2062,8 +3351,14 @@ n为行扫描计数，[0xF03B] = ( ( n / ( [0xF036] == 0 ? 64 : [0xF035] ) ) % 2
 	void Screen<hardware_id>::Frame() {
 #ifdef __EMSCRIPTEN__
 		tick();
+#elif defined(TEST_BUILD)
+		if constexpr (IsEpsFamily(hardware_id))
+			tick();
 #endif
-		int x = 0;
+		if constexpr (IsEpsFamily(hardware_id)) {
+			std::lock_guard<std::mutex> lock(eps_screen_alpha_mutex);
+			std::copy(eps_screen_ink_alpha.begin(), eps_screen_ink_alpha.end(), screen_ink_alpha);
+		}
 		int screenWidth = 0, screenHeight = 0;
 
 		// Get the renderer output size if not already available
@@ -2073,67 +3368,70 @@ n为行扫描计数，[0xF03B] = ( ( n / ( [0xF036] == 0 ? 64 : [0xF035] ) ) % 2
 			SDL_SetTextureColorMod(interface_texture, ink_colour.r, ink_colour.g, ink_colour.b);
 		}
 
-		// Store all the rendering rectangles (sprites and pixel areas)
-		std::vector<SDL_Rect> spriteRects;
-		std::vector<SDL_Rect> pixelRects;
-
-		// Set texture transparency and copy sprites as before
-		for (int ix = 1; ix != SPR_MAX; ++ix) {
-			SDL_SetTextureAlphaMod(interface_texture, Uint8(std::clamp((int)screen_ink_alpha[x], 0, 255)));
-			x++;
-			SDL_Rect tmp1 = sprite_info[ix].src;
-			SDL_Rect tmp2 = sprite_info[ix].dest;
-			SDL_RenderCopy(renderer, interface_texture, &tmp1, &tmp2);
-			// Store the sprite rectangle for later
-			spriteRects.push_back(sprite_info[ix].dest);
+		for (int ix = 1; ix != SpriteCount(); ++ix) {
+			if (ix >= static_cast<int>(sprite_available.size()) || !sprite_available[ix])
+				continue;
+			const int alpha_index = ix - 1;
+			const uint8_t alpha = Uint8(std::clamp((int)screen_ink_alpha[alpha_index], 0, 255));
+			if (alpha == 0)
+				continue;
+			RenderModelSprite(renderer, interface_texture,
+				ix < static_cast<int>(sprite_svg_textures.size()) ? &sprite_svg_textures[ix] : nullptr,
+				sprite_info[ix], ink_colour, alpha);
 		}
 
 		static constexpr auto SPR_PIXEL = 0;
 		SDL_Rect dest = Screen<hardware_id>::sprite_info[SPR_PIXEL].dest;
-		for (int iy2 = 1; iy2 != (N_ROW + 1); ++iy2) {
-			int x = 0;
-			dest.x = sprite_info[SPR_PIXEL].dest.x;
-			dest.y = sprite_info[SPR_PIXEL].dest.y + (iy2 - 1) * sprite_info[SPR_PIXEL].src.h;
-			for (int ix = 0; ix != ROW_SIZE_DISP; ++ix) {
-				for (uint8_t mask = 0x80; mask; mask >>= 1, dest.x += sprite_info[SPR_PIXEL].src.w) {
-					// Calculate pixel-specific colors and modify texture
-					if (screen_ink_alpha[x + iy2 * 192] > 255) {
-						SDL_SetTextureColorMod(interface_texture,
-							std::max(0, ink_colour.r - (int)(screen_ink_alpha[x + iy2 * 192] - 255)),
-							std::max(0, ink_colour.g - (int)((screen_ink_alpha[x + iy2 * 192] - 255) * 0.8)),
-							std::max(0, ink_colour.b - (int)((screen_ink_alpha[x + iy2 * 192] - 255) * 0.1)));
-						SDL_SetTextureAlphaMod(interface_texture, 255);
-					}
-					else {
-						SDL_SetTextureColorMod(interface_texture, ink_colour.r, ink_colour.g, ink_colour.b);
-						SDL_SetTextureAlphaMod(interface_texture, Uint8(std::clamp((int)screen_ink_alpha[x + iy2 * 192], 0, 255)));
-					}
-					x++;
-					SDL_Rect tmp1 = sprite_info[SPR_PIXEL].src;
-					SDL_RenderCopy(renderer, interface_texture, &tmp1, &dest);
-					// Store the pixel rectangle for later
-					pixelRects.push_back(dest);
-				}
-			}
+		const bool board_screen_slot = !emulator.ModelDefinition.board_path.empty();
+		const bool segment_lcd = IsEpsSegmentLcd(hardware_id);
+		const int logical_width = segment_lcd ? std::max(1, emulator.ModelDefinition.screen_width) : ROW_SIZE_DISP * 8;
+		const int logical_height = segment_lcd ? std::max(1, emulator.ModelDefinition.screen_height) : N_ROW;
+		SDL_Rect lcd_dest = dest;
+		if (!board_screen_slot) {
+			lcd_dest.w = std::max(1, (logical_width - 1) * sprite_info[SPR_PIXEL].src.w + sprite_info[SPR_PIXEL].dest.w);
+			lcd_dest.h = std::max(1, (logical_height - 1) * sprite_info[SPR_PIXEL].src.h + sprite_info[SPR_PIXEL].dest.h);
 		}
 
-#ifndef __EMSCRIPTEN__
+#ifndef CASIOEMU_CORE_WEB
+		if (!segment_lcd)
+			RenderPixelScreenTexture(lcd_dest, logical_width, logical_height);
+#endif
+
+#if !defined(__EMSCRIPTEN__) && !defined(CASIOEMU_CORE_WEB)
+		const SDL_Color capture_background = CaptureBackgroundColour(emulator.capture_background_rgb.load());
+		ScreenCaptureSource captureSource{
+			interface_texture,
+			emulator.interface_surface,
+			&sprite_info,
+			&sprite_available,
+			&ink_colour,
+			screen_ink_alpha,
+			logical_width,
+			logical_height,
+			lcd_dest,
+			!segment_lcd};
+
 		// If screenshot is requested, capture only the rendered screen region
 		if (emulator.screenshot_requested.load()) {
-			// Capture the region using both sprite and pixel rectangles or just pixels
-			std::vector<SDL_Rect> emptyRects;
-			const auto& spritesToUse = emulator.screenshot_full_ui.load() ? spriteRects : emptyRects;
-			CaptureScreenshot(renderer, spritesToUse, pixelRects);
+			CapturePixelPerfectScreenshot(
+				renderer,
+				interface_texture,
+				emulator.interface_surface,
+				sprite_info,
+				sprite_available,
+				ink_colour,
+				screen_ink_alpha,
+				logical_width,
+				logical_height,
+				lcd_dest,
+				emulator.capture_scale.load(),
+				capture_background,
+				!segment_lcd);
 			emulator.screenshot_requested.store(false);
-			emulator.screenshot_taken.store(true);
 		}
-#ifndef IOS
 		static ScreenRecorder recorder;
 		if (emulator.recording_requested.exchange(false) && !recorder.IsRecording()) {
-			SDL_Rect captureRect{};
-			std::vector<SDL_Rect> emptyRects;
-			const auto& spritesToUse = emulator.recording_full_ui.load() ? spriteRects : emptyRects;
-			if (GetCaptureRect(spritesToUse, pixelRects, captureRect) && recorder.Start(renderer, captureRect, 30)) {
+			if (recorder.Start(captureSource, emulator.capture_scale.load(), 30)) {
 				emulator.recording_frame_count.store(0);
 				emulator.recording_active.store(true);
 			}
@@ -2146,7 +3444,7 @@ n为行扫描计数，[0xF03B] = ( ( n / ( [0xF036] == 0 ? 64 : [0xF035] ) ) % 2
 			emulator.recording_active.store(false);
 		}
 		if (recorder.IsRecording()) {
-			if (recorder.CaptureFrame(renderer)) {
+			if (recorder.CaptureFrame(renderer, captureSource, capture_background)) {
 				emulator.recording_active.store(true);
 				emulator.recording_frame_count.store(recorder.FrameCount());
 			}
@@ -2157,26 +3455,34 @@ n为行扫描计数，[0xF03B] = ( ( n / ( [0xF036] == 0 ? 64 : [0xF035] ) ) % 2
 		else {
 			emulator.recording_active.store(false);
 		}
-#endif
+		static ScreenMirror* mirror = nullptr;
+		static ScreenMirrorComposer mirrorComposer;
 		if (emulator.mirroring_requested.load()) {
-			auto p = GetSize(spriteRects, pixelRects);
-			auto sm = new ScreenMirror(p.first, p.second, emulator.mirror_as_tab.load());
-			sm->create();
-			g_mirror = sm;
-			if (sm->is_tab) {
-				windows.push_back(sm);
+			auto p = GetSize(captureSource);
+			if (mirror) {
+				delete mirror;
+				mirror = nullptr;
+				mirrorComposer.Reset();
+			}
+			if (p.first > 0 && p.second > 0) {
+				auto sm = new ScreenMirror(p.first, p.second);
+				if (sm->create()) {
+					mirror = sm;
+				}
+				else {
+					delete sm;
+				}
 			}
 			emulator.mirroring_requested.store(false);
 		}
-		if (g_mirror) {
-			if (!g_mirror->isAlive()) {
-				if (g_mirror->is_tab) {
-					windows.erase(std::remove(windows.begin(), windows.end(), (UIWindow*)g_mirror), windows.end());
-				}
-				delete g_mirror;
-				g_mirror = nullptr;
-			} else {
-				UpdatePreview(renderer, g_mirror, spriteRects, pixelRects);
+		if (mirror) {
+			if (mirror->handleEvents()) {
+				mirrorComposer.Render(*mirror, captureSource, capture_background);
+			}
+			else {
+				delete mirror;
+				mirror = nullptr;
+				mirrorComposer.Reset();
 			}
 		}
 #endif
@@ -2189,6 +3495,7 @@ n为行扫描计数，[0xF03B] = ( ( n / ( [0xF036] == 0 ? 64 : [0xF035] ) ) % 2
 	Peripheral* CreateScreen(Emulator& emulator) {
 		switch (emulator.hardware_id) {
 		case HW_FX_5800P:
+			return new Screen<HW_FX_5800P>(emulator);
 		case HW_ES_PLUS:
 			return new Screen<HW_ES_PLUS>(emulator);
 
@@ -2198,10 +3505,19 @@ n为行扫描计数，[0xF03B] = ( ( n / ( [0xF036] == 0 ? 64 : [0xF035] ) ) % 2
 		case HW_CLASSWIZ_II:
 			return new Screen<HW_CLASSWIZ_II>(emulator);
 
+		case HW_SOLARII:
+			return new SolarIIScreen(emulator);
+
 		case HW_TI:
 			return new Screen<HW_TI>(emulator);
 		case HW_EPS6800:
 			return new Screen<HW_EPS6800>(emulator);
+		case HW_EPS6800_W192:
+			return new Screen<HW_EPS6800_W192>(emulator);
+		case HW_EPS6009:
+			return new Screen<HW_EPS6009>(emulator);
+		case HW_EPS9500:
+			return new Screen<HW_EPS9500>(emulator);
 		default:
 			PANIC("Unknown hardware id\n");
 		}

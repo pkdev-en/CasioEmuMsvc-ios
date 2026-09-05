@@ -116,6 +116,8 @@ RecordStartBtn=Aufnahme starten
 RecordStopBtn=Aufnahme stoppen
 RecordStatus=Aufnahme: %u Frames
 
+HwController.CaptureScale=Aufnahmeskalierung
+HwController.CaptureBackground=Aufnahmehintergrund
 HwController.Value1=Flimmerschwelle
 HwController.Value2=Helligkeitskoeff.
 HwController.ScreenBufferSelect=Puffer-Auswahl
@@ -386,5 +388,50 @@ ClickableAddress.BothTooltip=0x%05X — Klicken zum Springen
 ClickableAddress.RightClickHint=Rechtsklick für mehr Optionen
 
 MemBP.ColPC=PC-Adresse
+
+QrCode.Copy=Kopieren
+QrCode.OpenUrl=URL öffnen
+QrCode.StatusFmt=Status: %s
+QrCode.Active=Aktiv
+QrCode.Inactive=Inaktiv
+QrCode.CompleteFmt=Vollständig: %s
+QrCode.Yes=Ja
+QrCode.No=Nein
+QrCode.VersionFmt=Version: %d
+QrCode.LengthFmt=Länge: %zu
+QrCode.HistoryFmt=Verlauf: %zu
+QrCode.RealRomProgressFmt=Erfassungsfortschritt der echten ROM: Seite %u / %u, erfasst %zu / %u
+QrCode.Current=Aktuell
+QrCode.IncompleteCapture=Der QR-Code wird angezeigt, aber der vollständige mehrseitige Inhalt wurde noch nicht erfasst.
+QrCode.NoCurrent=Der Rechner zeigt derzeit keinen QR-Code an.
+QrCode.History=Verlauf
+QrCode.NoHistory=In dieser Sitzung wurde noch kein QR-Code erfasst.
+QrCode.HistoryEntryFmt=#%llu  Version %d  Länge %zu
+
+StartupUI.OnlineModels=Online-Modelle ...
+StartupUI.OnlineApiAddress=API-Adresse
+StartupUI.OnlineLogin=Anmelden
+StartupUI.OnlineLogout=Abmelden
+StartupUI.OnlineLoggedOut=Abgemeldet.
+StartupUI.OnlineRelogin=Erneut anmelden
+StartupUI.OnlineBrowserOpened=Schließe die Autorisierung im Browser ab.
+StartupUI.OnlineLoginSuccess=Autorisierung erfolgreich.
+StartupUI.OnlineLoginExpired=Die Online-Anmeldung ist abgelaufen oder die Berechtigungen wurden geändert. Bitte erneut anmelden.
+StartupUI.OnlineModelsLoaded=Modelle geladen.
+StartupUI.OnlineLaunch=Starten
+StartupUI.OnlineDownloading=Modell wird heruntergeladen und überprüft ...
+StartupUI.OnlineLoading=Online-Modelle werden geladen ...
+StartupUI.OnlineStartingLogin=Browser-Autorisierung wird gestartet ...
+StartupUI.OnlineCompletingLogin=Autorisierung wird abgeschlossen ...
+StartupUI.OnlineAuthorizationExpired=Die Browser-Autorisierung ist abgelaufen. Bitte erneut anmelden.
+StartupUI.OnlineLoggingOut=Abmeldung ...
+StartupUI.OnlineLoginSessionOnly=Autorisierung erfolgreich. Sichere Token-Speicherung ist nicht verfügbar; die Anmeldung gilt nur für diesen Lauf.
+
+StartupUI.UpdateAvailableTitle=Update verfügbar
+StartupUI.UpdateAvailableMessage=Eine neue Version ist verfügbar:
+StartupUI.ReleaseNotes=Versionshinweise
+StartupUI.OpenReleasePage=Release-Seite öffnen
+StartupUI.UpdateLater=Später
+StartupUI.UpdateDismissToday=Heute nicht mehr erinnern
 
 placeholder2=a)"

@@ -8,6 +8,7 @@
 
 
 class CodeViewer;
+class SnapshotWindow;
 CodeViewer* test_gui(bool* guiCreated, SDL_Window*, SDL_Renderer*);
 void gui_cleanup();
 void gui_loop();
@@ -18,68 +19,63 @@ extern casioemu::Emulator* m_emu;
 extern SDL_Window* window;
 extern SDL_Renderer* renderer;
 extern std::vector<Label> g_labels;
-void SaveUIState();
 extern uint32_t pc_cache;
 extern CodeViewer* code_viewer;
+extern SnapshotWindow* snapshot_window;
 extern std::vector<class UIWindow*> windows;
 
 void SetDebugbreak(void); 
 class UIWindow {
 public:
-    UIWindow(const char* name) : name(name) {
-#if defined(__ANDROID__) || defined(IOS)
-        inital_size = ImVec2(
-            800 * ThemeManager::Instance().fontScale,
-            800 * ThemeManager::Instance().fontScale);
+	UIWindow(const char* name) : name(name) {
+#ifdef __ANDROID__
+		inital_size = ImVec2(
+			800 * ThemeManager::Instance().fontScale,
+			800 * ThemeManager::Instance().fontScale);
 #else
-        inital_size = ImVec2(800, 800);
+		inital_size = ImVec2(800, 800);
 #endif
-    }
-    const char* name{};
-    bool open = false;
-    bool bring_to_front_requested = false;
-    ImVec2 inital_size;
-    ImGuiWindowFlags flags{};
+	}
+	const char* name{};
+	bool open = true;
+	bool bring_to_front_requested = false;
+	ImVec2 inital_size;
+	ImGuiWindowFlags flags{};
 
-    virtual void Render() {
-        if (!open && !bring_to_front_requested)
-            return;
-        #if defined(__ANDROID__) || defined(IOS)
-        ImGui::PushStyleVar(
-            ImGuiStyleVar_WindowPadding,
-            ImVec2(ThemeManager::Instance().padding,
-                   ThemeManager::Instance().padding));
-        #endif
-    
-        //ImGui::SetNextWindowCollapsed(!open, ImGuiCond_Always);
-        ImGui::SetNextWindowSize(inital_size, ImGuiCond_FirstUseEver);
-    
-        if (bring_to_front_requested) {
-            ImGui::SetNextWindowFocus();
-            bring_to_front_requested = false;
-        }
-    
-        //if (!open) return;
+	virtual void Render() {
+		if (!open)
+			return;
+#ifdef __ANDROID__
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+			ImVec2(ThemeManager::Instance().padding, ThemeManager::Instance().padding));
+#endif
+		if (bring_to_front_requested) {
+			ImGui::SetNextWindowFocus();
+			bring_to_front_requested = false;
+		}
+		ImGui::SetNextWindowSize(inital_size, ImGuiCond_FirstUseEver);
+#ifdef CASIOEMU_CORE_WEB
+		if (ImGui::Begin(name, nullptr, flags)) {
+#else
+		if (ImGui::Begin(name, &open, flags)) {
+#endif
+			RenderCore();
+		}
+		ImGui::End();
 
-        bool keep_open = open;
-        if (ImGui::Begin(name, &keep_open, flags)) {
-            RenderCore();
-        }
-        ImGui::End();
-        
-        open = keep_open;
-    
-        #if defined(__ANDROID__) || defined(IOS)
-        ImGui::PopStyleVar();
-        #endif
+#ifdef __ANDROID__
+		ImGui::PopStyleVar();
+#endif
 	}
 	void BringToFront() {
+		open = true;
 		bring_to_front_requested = true;
 	}
 	virtual void RenderCore() = 0;
 	// Optional: navigate the window to a specific memory address. No-op by default.
-	virtual bool GotoMemoryAddress(uint32_t /*addr*/) { return false; }
+	virtual void GotoMemoryAddress(uint32_t /*addr*/) {}
 	virtual ~UIWindow() {}
+
 
 };
 

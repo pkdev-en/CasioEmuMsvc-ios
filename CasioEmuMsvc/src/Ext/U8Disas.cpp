@@ -1,4 +1,4 @@
-#include <iomanip>
+﻿#include <iomanip>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -38,7 +38,7 @@ inline std::string tobin(int n, int len) {
 	}
 	return retval;
 }
-thread_local std::map<int,bool> p_labels;
+std::map<int,bool> p_labels;
 inline void LABEL_FUNCTION(auto x) {
 	p_labels[x] = true;
 }

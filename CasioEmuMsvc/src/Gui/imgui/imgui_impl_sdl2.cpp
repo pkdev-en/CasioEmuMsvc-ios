@@ -1,4 +1,4 @@
-// dear imgui: Platform Backend for SDL2
+﻿// dear imgui: Platform Backend for SDL2
 // This needs to be used along with a Renderer (e.g. DirectX11, OpenGL3, Vulkan..)
 // (Info: SDL2 is a cross-platform general purpose library for handling windows, inputs, graphics context creation, etc.)
 // (Prefer SDL 2.0.5+ for full feature support.)
@@ -146,26 +146,15 @@ static void ImGui_ImplSDL2_SetPlatformImeData(ImGuiContext*,ImGuiViewport*, ImGu
 {
     if (data->WantVisible)
     {
-        // FIX: SDL_SetTextInputRect must be called alongside SDL_StartTextInput.
-        // On iOS this tells the system exactly where the cursor/input field is,
-        // which is required for the system keyboard toolbar to enable its
-        // Paste button (and autocorrect positioning). Without it the Paste
-        // button stays greyed out even when the clipboard has content.
-        SDL_Rect r;
+        /*SDL_Rect r;
         r.x = (int)data->InputPos.x;
         r.y = (int)data->InputPos.y;
         r.w = 1;
         r.h = (int)data->InputLineHeight;
-        SDL_SetTextInputRect(&r);
+        SDL_SetTextInputRect(&r);*/
         SDL_StartTextInput();
     }else {
-#if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IOS)
-        // On mobile, the on-screen keyboard must be explicitly dismissed
-        // when no ImGui text field is focused (e.g. user tapped outside
-        // the input area). Desktop platforms keep this disabled to avoid
-        // IME flicker, see note above.
-        SDL_StopTextInput();
-#endif
+        // SDL_StopTextInput();
     }
 }
 

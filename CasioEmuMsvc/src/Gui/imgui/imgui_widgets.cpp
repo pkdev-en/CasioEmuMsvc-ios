@@ -1,4 +1,4 @@
-// dear imgui, v1.91.0 WIP
+﻿// dear imgui, v1.91.0 WIP
 // (widgets code)
 
 /*
@@ -8364,13 +8364,8 @@ static void ImGui::TabBarLayout(ImGuiTabBar* tab_bar)
         TabBarScrollToTab(tab_bar, scroll_to_tab_id, sections);
     else if ((tab_bar->Flags & ImGuiTabBarFlags_FittingPolicyScroll) && IsMouseHoveringRect(tab_bar->BarRect.Min, tab_bar->BarRect.Max, true) && IsWindowContentHoverable(g.CurrentWindow))
     {
-        float wheel = g.IO.MouseWheelRequestAxisSwap ? g.IO.MouseWheel : g.IO.MouseWheelH;
-        ImGuiKey wheel_key = g.IO.MouseWheelRequestAxisSwap ? ImGuiKey_MouseWheelY : ImGuiKey_MouseWheelX;
-        if (wheel == 0.0f && g.IO.MouseWheel != 0.0f)
-        {
-            wheel = g.IO.MouseWheel;
-            wheel_key = ImGuiKey_MouseWheelY;
-        }
+        const float wheel = g.IO.MouseWheelRequestAxisSwap ? g.IO.MouseWheel : g.IO.MouseWheelH;
+        const ImGuiKey wheel_key = g.IO.MouseWheelRequestAxisSwap ? ImGuiKey_MouseWheelY : ImGuiKey_MouseWheelX;
         if (TestKeyOwner(wheel_key, tab_bar->ID) && wheel != 0.0f)
         {
             const float scroll_step = wheel * TabBarCalcScrollableWidth(tab_bar, sections) / 3.0f;

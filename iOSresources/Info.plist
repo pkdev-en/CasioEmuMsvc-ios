@@ -27,7 +27,26 @@
     <key>UIViewControllerBasedStatusBarAppearance</key>
     <false/>
 
-    <!-- Icon: dÃÂ¹ng CFBundleIconFiles thay vÃÂ¬ xcassets -->
+    <!-- Camera: needed by QR Code capture feature (QrCode.cpp / Gui/QrCodeWindow.cpp) -->
+    <key>NSCameraUsageDescription</key>
+    <string>CasioEmuMsvc needs camera access to scan QR codes displayed by the calculator for importing data.</string>
+
+    <!-- Photo Library: needed for saving/exporting snapshots and QR captures to user's photos -->
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>CasioEmuMsvc needs photo library access to export calculator snapshots and QR code captures.</string>
+    <key>NSPhotoLibraryAddUsageDescription</key>
+    <string>CasioEmuMsvc needs to save calculator snapshots and QR captures to your photo library.</string>
+
+    <!-- Network: Online Model Client fetches ROMs from the online server; Update Checker pings github -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsArbitraryLoads</key>
+        <true/>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+    </dict>
+
+    <!-- Icon: uses CFBundleIconFiles instead of xcassets -->
     <key>CFBundleIcons</key>
     <dict>
         <key>CFBundlePrimaryIcon</key>

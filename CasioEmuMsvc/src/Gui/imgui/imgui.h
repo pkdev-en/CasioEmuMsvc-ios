@@ -1,4 +1,4 @@
-// dear imgui, v1.91.0 WIP
+﻿// dear imgui, v1.91.0 WIP
 // (headers)
 
 // Help:
@@ -1266,7 +1266,7 @@ enum ImGuiTabBarFlags_
     ImGuiTabBarFlags_FittingPolicyResizeDown        = 1 << 7,   // Resize tabs when they don't fit
     ImGuiTabBarFlags_FittingPolicyScroll            = 1 << 8,   // Add scroll buttons when tabs don't fit
     ImGuiTabBarFlags_FittingPolicyMask_             = ImGuiTabBarFlags_FittingPolicyResizeDown | ImGuiTabBarFlags_FittingPolicyScroll,
-    ImGuiTabBarFlags_FittingPolicyDefault_          = ImGuiTabBarFlags_FittingPolicyScroll,
+    ImGuiTabBarFlags_FittingPolicyDefault_          = ImGuiTabBarFlags_FittingPolicyResizeDown,
 };
 
 // Flags for ImGui::BeginTabItem()

@@ -3,18 +3,7 @@ cmake_minimum_required(VERSION 3.10...3.22)
 project(CasioEmuMsvc)
 include(FetchContent)
 #set(CMAKE_MESSAGE_LOG_LEVEL NOTICE)
-set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 20)
-
-set(HAVE_ITOA 0 CACHE BOOL "" FORCE)
-set(HAVE_UI64TOA 0 CACHE BOOL "" FORCE)
-set(HAVE_I64TOA 0 CACHE BOOL "" FORCE)
-
-if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU" AND NOT MSVC)
-    add_compile_options(-Wno-error=implicit-function-declaration)
-endif()
-
-add_definitions(-D_GNU_SOURCE)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 option(CASIOEMU_WEB "Build the Emscripten/WebAssembly version" OFF)
 option(CASIOEMU_CORE_WEB "Build the Emscripten/WebAssembly core API" OFF)
@@ -27,15 +16,6 @@ endif()
 if(EMSCRIPTEN OR CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     set(CASIOEMU_WEB ON CACHE BOOL "Build the Emscripten/WebAssembly version" FORCE)
     set(BUILD_EXECUTABLE ON CACHE BOOL "Web builds produce an executable html/js/wasm bundle" FORCE)
-endif()
-
-if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
-    set(IOS TRUE)
-endif()
-
-if(IOS)
-    # Code signing handled per-target after the target is created below
-    set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "NO")
 endif()
 
 #set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fms-extensions")
@@ -208,7 +188,7 @@ if(NOT CASIOEMU_WEB AND NOT IOS)
         message(WARNING "Target asmjit::asmjit NOT FOUND after add_subdirectory")
     endif()
 else()
-    message(STATUS "Web/Mobile build: skipping AsmJit")
+    message(STATUS "Web/iOS build: skipping AsmJit; this target uses the interpreter")
 endif()
 
 if(NOT ANDROID AND NOT IOS AND NOT CASIOEMU_WEB)
@@ -259,6 +239,11 @@ file(GLOB MAIN_SOURCES_CHIPSET "${SOURCE_DIR}/Chipset/*.cpp")
 file(GLOB MAIN_SOURCES_EPS6800_CORE "${SOURCE_DIR}/Chipset/EPS6800Core/*.c")
 file(GLOB MAIN_SOURCES_CRASH "${SOURCE_DIR}/CrashHandler/*.cpp")
 file(GLOB MAIN_SOURCES_EXT "${SOURCE_DIR}/Ext/*.cpp" "${SOURCE_DIR}/Ext/*.mm")
+# On non-Apple platforms, .mm files can't be compiled (no Objective-C++ compiler).
+# Filter them out so CMake doesn't try to invoke cc1objplus.
+if(NOT APPLE)
+    list(FILTER MAIN_SOURCES_EXT EXCLUDE REGEX "\\.mm$")
+endif()
 file(GLOB MAIN_SOURCES_EXT_CAM "${SOURCE_DIR}/Ext/cam/*.cc")
 file(GLOB MAIN_SOURCES_ROP "${SOURCE_DIR}/Rop/*.cpp")
 file(GLOB MAIN_SOURCES_GUI "${SOURCE_DIR}/Gui/*.cpp")
@@ -268,7 +253,6 @@ file(GLOB MAIN_SOURCES_PERIPHERAL "${SOURCE_DIR}/Peripheral/*.cpp")
 file(GLOB MAIN_SOURCES_PLUGIN "${SOURCE_DIR}/Plugin/*.cpp")
 file(GLOB MAIN_SOURCES_STARTUP CONFIGURE_DEPENDS "${SOURCE_DIR}/StartupUi/*.cpp")
 file(GLOB MAIN_SOURCES_WEB "${SOURCE_DIR}/Web/*.cpp")
-file(GLOB MAIN_SOURCES_EXT_MM "${SOURCE_DIR}/Ext/*.mm")
 
 if(CASIOEMU_WEB)
     list(FILTER MAIN_SOURCES_ROOT EXCLUDE REGEX "casioemu\\.cpp$")
@@ -315,12 +299,6 @@ if(CASIOEMU_WEB)
         )
     endif()
 else()
-    # .mm (Objective-C++) files only compile on Apple platforms (iOS/macOS)
-    if(APPLE)
-        set(APPLE_MM_SOURCES ${MAIN_SOURCES_EXT_MM})
-    else()
-        set(APPLE_MM_SOURCES "")
-    endif()
     set(MAIN_SOURCES
         ${MAIN_SOURCES_ROOT}
         ${MAIN_SOURCES_MINIZ}
@@ -329,7 +307,6 @@ else()
         ${MAIN_SOURCES_CRASH}
         ${MAIN_SOURCES_EXT}
         ${MAIN_SOURCES_EXT_CAM}
-        ${APPLE_MM_SOURCES}
         ${MAIN_SOURCES_GUI}
         ${MAIN_SOURCES_ROP}
         ${MAIN_SOURCES_IMGUI}
@@ -346,16 +323,21 @@ list(APPEND MAIN_SOURCES ${MAIN_SOURCES_EPS6800_CORE})
 
 if(BUILD_EXECUTABLE)
     message(STATUS "Building executable")
-    set(TARGET_NAME "CasioEmuMsvc")
-    if(NOT MAIN_SOURCES)
-        message(FATAL_ERROR "MAIN_SOURCES is EMPTY on this platform 💀")
+    if(CASIOEMU_CORE_WEB)
+        set(TARGET_NAME "CasioEmuCore")
+    elseif(CASIOEMU_WEB)
+        set(TARGET_NAME "CasioEmuWeb")
+    else()
+        set(TARGET_NAME "CasioEmuMsvc")
+    endif()
+    
+    if(WIN32)
+        set(WIN_RESOURCES ${CMAKE_CURRENT_SOURCE_DIR}/Resource.rc)
     endif()
 
     if(APPLE)
-        set(TARGET_NAME "CasioEmuMsvc")
-    
         if(IOS)
-            # 1. Copy PNG icon trực tiếp vào bundle (không dùng xcassets)
+            # iOS executable: bundle with icons, LaunchScreen, and iOS GUI shell
             set(IOS_ICON_DIR "${CMAKE_SOURCE_DIR}/iOSresources/Assets.xcassets/AppIcon.appiconset")
             set(IOS_ICON_FILES
                 "${IOS_ICON_DIR}/180.png"
@@ -372,20 +354,12 @@ if(BUILD_EXECUTABLE)
             set_source_files_properties(${IOS_ICON_FILES} PROPERTIES
                 MACOSX_PACKAGE_LOCATION "Resources"
             )
-
-            # 2. Cấu hình LaunchScreen
             set(LAUNCH_SCREEN ${CMAKE_SOURCE_DIR}/MacResources/LaunchScreen.storyboard)
             set_source_files_properties(${LAUNCH_SCREEN} PROPERTIES
                 MACOSX_PACKAGE_LOCATION "Resources"
             )
 
-            # Kiểm tra khẩn cấp xem MAIN_SOURCES có bị trống do filter trước đó không
-            if(NOT MAIN_SOURCES)
-                message(FATAL_ERROR "MAIN_SOURCES is empty before creating iOS executable!")
-            endif()
-
-            # 2b. GUI shell riêng cho iOS (không dùng chung code cửa sổ desktop) —
-            # port từ app/src/main/java/com/tele/u8emulator/Game.java
+            # GUI shell for iOS (port of app/src/main/java/com/tele/u8emulator/Game.java)
             set(IOS_GUI_DIR "${CMAKE_SOURCE_DIR}/iOSresources/Sources")
             set(IOS_GUI_SOURCES
                 "${IOS_GUI_DIR}/game_controller_core.cpp"
@@ -395,12 +369,11 @@ if(BUILD_EXECUTABLE)
                 "${IOS_GUI_DIR}/game_controller_core.hpp"
                 "${IOS_GUI_DIR}/GameViewController.h"
             )
-            # .mm cần Objective-C ARC bật riêng (không áp dụng cho các file .cpp/.mm khác)
+            # GameViewController.mm needs ARC enabled separately
             set_source_files_properties(${IOS_GUI_DIR}/GameViewController.mm PROPERTIES
                 COMPILE_FLAGS "-fobjc-arc"
             )
 
-            # 3. Tạo executable với icon PNG trực tiếp
             add_executable(${TARGET_NAME}
                 MACOSX_BUNDLE
                 ${MAIN_SOURCES}
@@ -409,86 +382,60 @@ if(BUILD_EXECUTABLE)
                 ${IOS_ICON_FILES}
                 ${LAUNCH_SCREEN}
             )
-
             target_include_directories(${TARGET_NAME} PRIVATE ${IOS_GUI_DIR})
-
-            # 4. Deployment target
             set_target_properties(${TARGET_NAME} PROPERTIES
                 XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET "14.0"
+                XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
+                MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/iOSresources/Info.plist"
+                MACOSX_BUNDLE_IDENTIFIER "com.pkdevvn.casioemu"
+                MACOSX_BUNDLE_GUI_IDENTIFIER "com.pkdevvn.casioemu"
+                INSTALL_RPATH "@executable_path/Frameworks"
+                BUILD_WITH_INSTALL_RPATH TRUE
             )
-
-            # 5. Framework UIKit cần cho GameViewController.mm (UNUserNotifications, Photos)
+            # Frameworks needed by GameViewController.mm + SysDialog.mm (UIKit UIDocumentPicker)
             target_link_libraries(${TARGET_NAME} PRIVATE
+                "-framework Foundation"
                 "-framework UIKit"
+                "-framework CoreGraphics"
+                "-framework QuartzCore"
+                "-framework Metal"
+                "-framework ImageIO"
+                "-framework MobileCoreServices"
+                "-framework UniformTypeIdentifiers"
+                "-framework SafariServices"
                 "-framework UserNotifications"
                 "-framework Photos"
-                "-framework CoreGraphics"
             )
-    
+            # Compile SysDialog.cpp as Objective-C++ for iOS native file picker interop
+            set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/src/Ext/SysDialog.cpp PROPERTIES COMPILE_FLAGS "-x objective-c++")
         else()
-            # Cấu hình giữ nguyên cho macOS
-            set(APP_ICON ${CMAKE_SOURCE_DIR}/MacResources/AppIcon.icns)
-            set_source_files_properties(${APP_ICON} PROPERTIES
-                MACOSX_PACKAGE_LOCATION "Resources"
-            )
+            # macOS executable
+            set(MAC_RESOURCES ${CMAKE_CURRENT_SOURCE_DIR}/icon.icns)
+            set_source_files_properties(${MAC_RESOURCES} PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
             set(LAUNCH_SCREEN ${CMAKE_SOURCE_DIR}/MacResources/LaunchScreen.storyboard)
-            set_source_files_properties(${LAUNCH_SCREEN} PROPERTIES
-                MACOSX_PACKAGE_LOCATION "Resources"
-            )
-    
-            add_executable(${TARGET_NAME}
-                MACOSX_BUNDLE
-                ${MAIN_SOURCES}
-                ${APP_ICON}
-                ${LAUNCH_SCREEN}
+            set_source_files_properties(${LAUNCH_SCREEN} PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+            add_executable(${TARGET_NAME} MACOSX_BUNDLE ${MAIN_SOURCES} ${WIN_RESOURCES} ${MAC_RESOURCES} ${LAUNCH_SCREEN})
+            set_target_properties(${TARGET_NAME} PROPERTIES
+                MACOSX_BUNDLE_INFO_STRING "Casio nX-U8/100 & nX-U16/100 Emulator"
+                MACOSX_BUNDLE_BUNDLE_NAME "CasioEmuMsvc"
+                MACOSX_BUNDLE_IDENTIFIER "com.telecomadm1145.casioemumsvc"
+                MACOSX_BUNDLE_GUI_IDENTIFIER "com.telecomadm1145.casioemumsvc"
+                MACOSX_BUNDLE_BUNDLE_VERSION "1.0.0"
+                MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0.0"
+                MACOSX_BUNDLE_COPYRIGHT "Copyright (C) 2024-2026 telecomadm1145"
+                MACOSX_BUNDLE_ICON_FILE "icon.icns"
+                MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/MacResources/Info.plist"
+                INSTALL_RPATH "@executable_path/../Frameworks"
+                BUILD_WITH_INSTALL_RPATH TRUE
             )
         endif()
-
-
-
     else()
-        if(CASIOEMU_CORE_WEB)
-            set(TARGET_NAME "CasioEmuCore")
-        elseif(CASIOEMU_WEB)
-            set(TARGET_NAME "CasioEmuWeb")
-        
-
-        elseif(WIN32)
-            set(WIN_RESOURCES ${CMAKE_CURRENT_SOURCE_DIR}/Resource.rc)
-        endif()
-
-        add_executable(${TARGET_NAME}
-            ${MAIN_SOURCES}
-            ${WIN_RESOURCES}
-        )
+        add_executable(${TARGET_NAME} ${MAIN_SOURCES} ${WIN_RESOURCES})
     endif()
-
-
-
 else()
     message(STATUS "Building shared library")
     set(TARGET_NAME "main")
     add_library(${TARGET_NAME} SHARED ${MAIN_SOURCES})
-endif()
-
-if(APPLE AND NOT IOS)
-    set_target_properties(${TARGET_NAME} PROPERTIES
-        MACOSX_BUNDLE_INFO_PLIST
-        ${CMAKE_SOURCE_DIR}/MacResources/Info.plist
-        XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.pkdevvn.casioemu"
-
-        INSTALL_RPATH "@executable_path/../Frameworks"
-        BUILD_WITH_INSTALL_RPATH TRUE
-    )
-elseif(IOS)
-    set_target_properties(${TARGET_NAME} PROPERTIES
-        MACOSX_BUNDLE_INFO_PLIST
-        ${CMAKE_SOURCE_DIR}/iOSResources/Info.plist
-        XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.pkdevvn.casioemu"
-
-        INSTALL_RPATH "@executable_path/Frameworks"
-        BUILD_WITH_INSTALL_RPATH TRUE
-    )
 endif()
 
 if(CASIOEMU_CORE_WEB)
@@ -533,23 +480,19 @@ if(NOT CASIOEMU_WEB)
     )
 endif()
 
-if(CASIOEMU_WEB OR IOS)
-    target_compile_definitions(${TARGET_NAME} PRIVATE DISABLE_SENTRY ASMJIT_NO_JIT)
-    if(CASIOEMU_WEB)
-        target_compile_definitions(${TARGET_NAME} PRIVATE CASIOEMU_WEB)
-    endif()
-    if(IOS)
-        target_compile_definitions(${TARGET_NAME} PRIVATE __IOS__)
-    endif()
+if(CASIOEMU_WEB)
+    target_compile_definitions(${TARGET_NAME} PRIVATE DISABLE_SENTRY ASMJIT_NO_JIT CASIOEMU_WEB)
+elseif(IOS)
+    # iOS: disable sentry (no crashpad on iOS), disable asmjit JIT (uses x86 asm),
+    # and define __IOS__ so source files can branch on it.
+    target_compile_definitions(${TARGET_NAME} PRIVATE DISABLE_SENTRY ASMJIT_NO_JIT __IOS__)
 else()
     target_compile_definitions(${TARGET_NAME} PRIVATE ASMJIT_STATIC)
 endif()
 
-set(PLATFORM_LIBS "")
-
 if(WIN32)
     #target_link_options(${TARGET_NAME} PRIVATE "-mconsole")
-    if(NOT MSVC AND NOT APPLE)
+    if(NOT MSVC)
         target_link_options(${TARGET_NAME} PRIVATE
             "-static-libgcc"
             "-static-libstdc++"
@@ -636,15 +579,12 @@ if(CASIOEMU_WEB)
     endif()
 elseif(BUILD_EXECUTABLE)
     target_link_libraries(${TARGET_NAME} PRIVATE
-        SDL2::SDL2main
         SDL2::SDL2
         SDL2_image::SDL2_image-static
-        #CpuFeatures::cpu_features
     )
     if(NOT IOS)
         target_link_libraries(${TARGET_NAME} PRIVATE asmjit::asmjit)
     endif()
-
     find_package(CURL QUIET)
     if(NOT CURL_FOUND)
         include(FetchContent)
@@ -680,38 +620,28 @@ elseif(BUILD_EXECUTABLE)
             ws2_32
         )
         set_target_properties(${TARGET_NAME} PROPERTIES PREFIX "")
-    elseif(APPLE AND NOT IOS)
-        find_library(APPKIT_FRAMEWORK AppKit)
-        find_library(SECURITY_FRAMEWORK Security REQUIRED)
-        target_link_libraries(${TARGET_NAME} PRIVATE
-            "-framework Cocoa"
-            "-framework OpenGL"
-            -lpthread
-            -ldl
-            -lm
-            ${APPKIT_FRAMEWORK}
-            ${SECURITY_FRAMEWORK}
-        )
-    elseif(IOS)
-        target_link_libraries(${TARGET_NAME} PRIVATE
-            "-framework Foundation"
-            "-framework UIKit"
-            "-framework CoreGraphics"
-            "-framework QuartzCore"
-            "-framework Metal"
-            "-framework ImageIO"
-            "-framework MobileCoreServices"
-            "-framework UniformTypeIdentifiers"
-            "-framework SafariServices"
-        )
-
-        # Compile SysDialog.cpp as Objective-C++ for iOS native file picker
-        set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/src/Ext/SysDialog.cpp PROPERTIES COMPILE_FLAGS "-x objective-c++")
-
-        set_target_properties(${TARGET_NAME} PROPERTIES
-            XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
-        )
-        )
+    elseif(APPLE)
+        if(IOS)
+            # iOS already linked to UIKit/CoreGraphics/etc. above in the add_executable block.
+            # Just add pthread/dl/m and Security (for Crypto.hpp's CommonCrypto usage).
+            find_library(SECURITY_FRAMEWORK Security REQUIRED)
+            target_link_libraries(${TARGET_NAME} PRIVATE
+                -lpthread
+                -ldl
+                -lm
+                ${SECURITY_FRAMEWORK}
+            )
+        else()
+            find_library(APPKIT_FRAMEWORK AppKit)
+            find_library(SECURITY_FRAMEWORK Security REQUIRED)
+            target_link_libraries(${TARGET_NAME} PRIVATE
+                -lpthread
+                -ldl
+                -lm
+                ${APPKIT_FRAMEWORK}
+                ${SECURITY_FRAMEWORK}
+            )
+        endif()
     else()
         find_package(PkgConfig QUIET)
         if(PkgConfig_FOUND)
@@ -735,10 +665,8 @@ else()
         SDL2::SDL2
         SDL2_image::SDL2_image
         #CpuFeatures::cpu_features
+        asmjit::asmjit
     )
-    if(NOT IOS)
-        target_link_libraries(${TARGET_NAME} PRIVATE asmjit::asmjit)
-    endif()
     if(ANDROID)
         target_link_libraries(${TARGET_NAME} PRIVATE log mediandk)
     endif()
@@ -752,11 +680,46 @@ endif()
 file(GLOB LOCALE_FILES "${CMAKE_CURRENT_SOURCE_DIR}/locales/*.lc")
 
 if(ANDROID)
-    set(ASSET_DIR ${CMAKE_SOURCE_DIR}/app/src/main/assets)
-elseif(APPLE AND BUILD_EXECUTABLE AND NOT IOS)
-    set(ASSET_DIR $<TARGET_BUNDLE_DIR:${TARGET_NAME}>/Contents/Resources)
+    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/app/src/main/assets/locales)
+    foreach(FILE_PATH ${LOCALE_FILES})
+        add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${FILE_PATH}
+            ${CMAKE_SOURCE_DIR}/app/src/main/assets/locales/)
+    endforeach()
+    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_CURRENT_SOURCE_DIR}/roms.db
+        ${CMAKE_SOURCE_DIR}/app/src/main/assets/roms.db || ${CMAKE_COMMAND} -E true)
 elseif(IOS AND BUILD_EXECUTABLE)
-    set(ASSET_DIR $<TARGET_BUNDLE_DIR:${TARGET_NAME}>)
+    # iOS: copy locales/roms.db/fonts into the app bundle Resources
+    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_BUNDLE_DIR:${TARGET_NAME}>/locales)
+    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_CURRENT_SOURCE_DIR}/locales
+        $<TARGET_BUNDLE_DIR:${TARGET_NAME}>/locales)
+    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_CURRENT_SOURCE_DIR}/roms.db
+        $<TARGET_BUNDLE_DIR:${TARGET_NAME}>/roms.db || ${CMAKE_COMMAND} -E true)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fonts")
+        add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_BUNDLE_DIR:${TARGET_NAME}>/fonts)
+        add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_CURRENT_SOURCE_DIR}/fonts
+            $<TARGET_BUNDLE_DIR:${TARGET_NAME}>/fonts)
+    endif()
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fonts_cjk")
+        add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_BUNDLE_DIR:${TARGET_NAME}>/fonts_cjk)
+        add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_CURRENT_SOURCE_DIR}/fonts_cjk
+            $<TARGET_BUNDLE_DIR:${TARGET_NAME}>/fonts_cjk)
+    endif()
 elseif(BUILD_EXECUTABLE AND NOT CASIOEMU_WEB)
     add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:${TARGET_NAME}>/locales)
@@ -770,28 +733,10 @@ elseif(BUILD_EXECUTABLE AND NOT CASIOEMU_WEB)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CMAKE_CURRENT_SOURCE_DIR}/roms.db
         $<TARGET_FILE_DIR:${TARGET_NAME}>/roms.db || ${CMAKE_COMMAND} -E true)
-else()
-    set(ASSET_DIR $<TARGET_FILE_DIR:${TARGET_NAME}>)
-    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/app/src/main/assets/locales)
-    foreach(FILE_PATH ${LOCALE_FILES})
-        add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${FILE_PATH}
-            ${CMAKE_SOURCE_DIR}/app/src/main/assets/locales/)
-    endforeach()
-    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${CMAKE_CURRENT_SOURCE_DIR}/roms.db
-        ${CMAKE_SOURCE_DIR}/app/src/main/assets/roms.db || ${CMAKE_COMMAND} -E true)
 endif()
 
-add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory
-    ${ASSET_DIR}/locales
-)
 
-if(NOT WIN32 AND NOT ANDROID AND NOT IOS AND NOT APPLE AND NOT CASIOEMU_WEB)
+if(NOT WIN32 AND NOT ANDROID AND NOT IOS AND NOT CASIOEMU_WEB AND NOT APPLE)
     if(BUILD_EXECUTABLE)
         target_link_options(${TARGET_NAME} PRIVATE "-static-libgcc" "-static-libstdc++")
     endif()
@@ -806,74 +751,3 @@ if(NOT ANDROID AND NOT IOS AND NOT CASIOEMU_WEB)
         )
     endif()
 endif()
-
-if(APPLE AND BUILD_EXECUTABLE AND NOT IOS)
-    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-        $<TARGET_BUNDLE_DIR:${TARGET_NAME}>/Contents/Resources/locales
-    )
-
-    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_CURRENT_SOURCE_DIR}/locales
-        $<TARGET_BUNDLE_DIR:${TARGET_NAME}>/Contents/Resources/locales
-    )
-
-    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-        $<TARGET_BUNDLE_DIR:${TARGET_NAME}>/Contents/Resources/fonts
-    )
-
-    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_CURRENT_SOURCE_DIR}/fonts
-        $<TARGET_BUNDLE_DIR:${TARGET_NAME}>/Contents/Resources/fonts
-    )
-
-    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-        $<TARGET_BUNDLE_DIR:${TARGET_NAME}>/Contents/Resources/fonts_cjk
-    )
-
-    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_CURRENT_SOURCE_DIR}/fonts_cjk
-        $<TARGET_BUNDLE_DIR:${TARGET_NAME}>/Contents/Resources/fonts_cjk
-    )
-elseif(IOS AND BUILD_EXECUTABLE)
-    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-        $<TARGET_BUNDLE_DIR:${TARGET_NAME}>/locales
-    )
-
-    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_CURRENT_SOURCE_DIR}/locales
-        $<TARGET_BUNDLE_DIR:${TARGET_NAME}>/locales
-    )
-
-    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-        $<TARGET_BUNDLE_DIR:${TARGET_NAME}>/fonts
-    )
-
-    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_CURRENT_SOURCE_DIR}/fonts
-        $<TARGET_BUNDLE_DIR:${TARGET_NAME}>/fonts
-    )
-
-    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-        $<TARGET_BUNDLE_DIR:${TARGET_NAME}>/fonts_cjk
-    )
-
-    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_CURRENT_SOURCE_DIR}/fonts_cjk
-        $<TARGET_BUNDLE_DIR:${TARGET_NAME}>/fonts_cjk
-    )
-endif()
-
-set(CPACK_GENERATOR "DragNDrop")
-include(CPack)

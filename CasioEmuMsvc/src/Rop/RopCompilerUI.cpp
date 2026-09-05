@@ -2,7 +2,6 @@
 #include "Compiler.h"
 #include "Localization.h"
 #include "Models.h"
-#include <SDL.h> // Them de dung SDL_StartTextInput / SDL_StopTextInput tren iOS
 #ifdef CASIOEMU_CORE_WEB
 #include "WebDebuggerGui.h"
 #else
@@ -96,9 +95,6 @@ public:
 
 		drawDiagnosticsPanel(diagnosticsHeight);
 		handleShortcuts();
-		
-		// FIX: Quan ly ban phim iOS/Android
-		manageMobileKeyboard();
 	}
 
 	void SetSource(const std::string& source) {
@@ -136,10 +132,6 @@ private:
 	// Inject feedback (transient banner)
 	double injectFeedbackTimer_ = 0.0;
 	std::string injectFeedbackText_;
-	
-	// FIX: State theo doi ban phim mobile
-	bool editorFocused_ = false;
-	bool isKeyboardActive_ = false;
 
 private:
 	// ============================================================
@@ -546,15 +538,6 @@ private:
 			copyOutputHexToClipboard();
 		}
 		ImGui::SameLine();
-		if (ImGui::SmallButton("Paste")) {
-			pasteSourceFromClipboard();
-		}
-		if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
-			ImGui::BeginTooltip();
-			ImGui::TextDisabled("Paste clipboard text into source editor (Ctrl+V)");
-			ImGui::EndTooltip();
-		}
-		ImGui::SameLine();
 		if (ImGui::SmallButton("RopCompiler.ClearOutput"_lc)) {
 			outputBytes_.clear();
 			diagnosticsText_.clear();
@@ -589,31 +572,12 @@ private:
 
 
 	void drawSourcePanel(float height) {
-		// border=false: tranh them clip layer lam mat hit-test tren touch iOS/Android
-		ImGui::BeginChild("##source_panel", ImVec2(-1, height), false,
-			ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+		ImGui::BeginChild("##source_panel", ImVec2(-1, height), true);
 		ImGui::TextUnformatted("RopCompiler.SourceTitle"_lc);
 		ImGui::Separator();
-		const float footerHeight = ImGui::GetFrameHeightWithSpacing();
-		const float editorHeight = ImGui::GetContentRegionAvail().y - footerHeight;
-		// Render truc tiep, khong co child wrapper bo sung
-		editor_.Render("##source_editor", ImVec2(-1, editorHeight));
-		
-		// --- FIX: Bat su kien touch de mo ban phim tren iOS ---
-		bool isHovered = ImGui::IsItemHovered();
-		bool isClicked = ImGui::IsMouseClicked(0);
-		
-		if (isHovered && isClicked) {
-			editorFocused_ = true;
-			ImGui::SetKeyboardFocusHere(-1);
-		} else if (!isHovered && isClicked) {
-			// Cham ra ngoai editor, tat focus neu khong co o nhap nao khac cua ImGui dang active
-			if (!ImGui::GetIO().WantTextInput) {
-				editorFocused_ = false;
-			}
-		}
-		// -----------------------------------------------------
-
+		const float footerHeight = 24.0f;
+		editor_.Render("##source_editor",
+			ImVec2(-1, ImGui::GetContentRegionAvail().y - footerHeight), true);
 		auto cpos = editor_.GetCursorPosition();
 		auto statusText = g_local.Format("RopCompiler.CursorStatus",
 			cpos.mLine + 1, cpos.mColumn + 1, editor_.GetTotalLines());
@@ -690,48 +654,12 @@ private:
 
 	void handleShortcuts() {
 		ImGuiIO& io = ImGui::GetIO();
-		// Dung ImGuiKey thay vi io.KeysDown de tuong thich iOS/Android
-		const bool ctrl = io.KeyCtrl || io.KeySuper; // Super = Cmd tren iOS
-		if (ImGui::IsKeyPressed(ImGuiKey_F5, false)) {
+		if (ImGui::IsKeyPressed(ImGuiKey_F5)) {
 			compile();
 		}
-		if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Enter, false)) {
+		if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Enter)) {
 			compile();
 		}
-		// Ctrl+V / Cmd+V: paste vao editor (chi khi editor khong tu xu ly)
-		if (ctrl && ImGui::IsKeyPressed(ImGuiKey_V, false)) {
-			pasteSourceFromClipboard();
-		}
-	}
-
-	// ============================================================
-	// FIX: Quan ly ban phim iOS / Android
-	// ============================================================
-	void manageMobileKeyboard() {
-		ImGuiIO& io = ImGui::GetIO();
-		
-		// Kiem tra xem ImGui co dang muon nhap lieu (InputInt, InputText) 
-		// hoac TextEditor custom cua chung ta co dang duoc focus khong
-		bool needsKeyboard = io.WantTextInput || editorFocused_;
-		
-		if (needsKeyboard && !isKeyboardActive_) {
-			SDL_StartTextInput();
-			isKeyboardActive_ = true;
-		} else if (!needsKeyboard && isKeyboardActive_) {
-			SDL_StopTextInput();
-			isKeyboardActive_ = false;
-		}
-	}
-
-	// ============================================================
-	// Paste
-	// ============================================================
-	void pasteSourceFromClipboard() {
-		const char* text = ImGui::GetClipboardText();
-		if (!text || text[0] == '\0')
-			return;
-		// Replace entire editor content with clipboard text
-		editor_.SetText(text);
 	}
 
 	// ============================================================
