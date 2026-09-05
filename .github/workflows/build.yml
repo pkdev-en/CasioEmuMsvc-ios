@@ -2,17 +2,39 @@ name: Auto build and pre-release
 
 on:
   workflow_dispatch:
+    inputs:
+      target:
+        description: "Build target"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - all
+          - windows-x64
+          - windows-x86
+          - android
+          - linux
+          - macos
+          - ios
+          - web
   push:
     branches: [ "stable", "master" ]
 
 env:
   BUILD_CONFIGURATION: Release
+  CASIOEMU_ONLINE_BUILD_KEY_ID: ${{ secrets.CASIOEMU_ONLINE_BUILD_KEY_ID }}
+  CASIOEMU_ONLINE_BUILD_KEY_B64: ${{ secrets.CASIOEMU_ONLINE_BUILD_KEY_B64 }}
+  CASIOEMU_ONLINE_SERVER_KEY_ID: ${{ secrets.CASIOEMU_ONLINE_SERVER_KEY_ID }}
+  CASIOEMU_ONLINE_SERVER_PUBLIC_KEY_B64: ${{ secrets.CASIOEMU_ONLINE_SERVER_PUBLIC_KEY_B64 }}
 
 permissions:
   contents: write
 
 jobs:
   build:
+    if: >-
+      github.event_name != 'workflow_dispatch' ||
+      github.event.inputs.target != 'web'
     strategy:
       matrix:
         include:
@@ -42,7 +64,7 @@ jobs:
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
       with:
         submodules: recursive
 
@@ -56,18 +78,29 @@ jobs:
       working-directory: ${{env.GITHUB_WORKSPACE}}
       run: cmake --build build --config ${{ env.BUILD_CONFIGURATION }} --parallel
 
-    # - name: Upload PDBs to Sentry
-    #   if: matrix.platform == 'windows'
-    #   env:
-    #     SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_TOKEN }}
-    #     SENTRY_ORG: "t5-j7"
-    #     SENTRY_PROJECT: "native"
-    #     COMMIT_HASH: ${{ github.sha }}
-    #     RELEASE_TAG: "CasioEmuMsvc@${{ github.sha }}"
-    #   working-directory: build/CasioEmuMsvc/${{ env.BUILD_CONFIGURATION }}
-    #   run: |
-    #         $sentry_cli = "${{ github.workspace }}\CasioEmuMsvc\sentry-cli.exe"
-    #         & $sentry_cli debug-files upload -o $env:SENTRY_ORG -p $env:SENTRY_PROJECT .
+    - name: Check Sentry token
+      if: matrix.platform == 'windows'
+      shell: pwsh
+      run: |
+        if ("${{ secrets.SENTRY_TOKEN }}" -ne "") {
+          "HAS_SENTRY_TOKEN=true" >> $env:GITHUB_ENV
+        } else {
+          "HAS_SENTRY_TOKEN=false" >> $env:GITHUB_ENV
+          Write-Host "SENTRY_TOKEN is not configured; skipping PDB upload."
+        }
+
+    - name: Upload PDBs to Sentry
+      if: matrix.platform == 'windows' && env.HAS_SENTRY_TOKEN == 'true'
+      env:
+        SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_TOKEN }}
+        SENTRY_ORG: "t5-j7"
+        SENTRY_PROJECT: "native"
+        COMMIT_HASH: ${{ github.sha }}
+        RELEASE_TAG: "CasioEmuMsvc@${{ github.sha }}"
+      working-directory: build/CasioEmuMsvc/${{ env.BUILD_CONFIGURATION }}
+      run: |
+            $sentry_cli = "${{ github.workspace }}\CasioEmuMsvc\sentry-cli.exe"
+            & $sentry_cli debug-files upload -o $env:SENTRY_ORG -p $env:SENTRY_PROJECT .
 
     - name: Upload ${{ matrix.platform_arch }} Build Artifact
       if: matrix.platform == 'windows'
@@ -341,17 +374,105 @@ jobs:
         find . -name "CMakeError.log" -exec cat {} \;
         find . -name "CMakeOutput.log" -exec cat {} \;
 
+    - name: Configure CMake
+      if: matrix.platform == 'macos'
+      working-directory: ${{env.GITHUB_WORKSPACE}}
+      run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ env.BUILD_CONFIGURATION }} -DBUILD_EXECUTABLE=ON -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64"
+
+    - name: Build with CMake
+      if: matrix.platform == 'macos'
+      working-directory: ${{env.GITHUB_WORKSPACE}}
+      run: cmake --build build --config ${{ env.BUILD_CONFIGURATION }} --parallel
+
+    - name: Code Sign App Bundle
+      if: matrix.platform == 'macos'
+      working-directory: ${{env.GITHUB_WORKSPACE}}
+      run: codesign --force --deep --sign - build/CasioEmuMsvc/CasioEmuMsvc.app # it may seem unnecessary but it is for precautionary purposes
+
+    - name: Package App Bundle
+      if: matrix.platform == 'macos'
+      working-directory: build/CasioEmuMsvc
+      run: ditto -c -k --sequesterRsrc --keepParent CasioEmuMsvc.app CasioEmuMsvc-macos.zip
+
+    - name: Upload macOS Build Artifact
+      if: matrix.platform == 'macos'
+      uses: actions/upload-artifact@v7
+      with:
+        path: build/CasioEmuMsvc/CasioEmuMsvc-macos.zip
+        if-no-files-found: error
+        archive: false
+
+  web-build:
+    runs-on: ubuntu-latest
+    name: Build Web
+    if: >-
+      github.event_name != 'workflow_dispatch' ||
+      github.event.inputs.target == 'all' ||
+      github.event.inputs.target == 'web'
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v7
+      with:
+        submodules: recursive
+
+    - name: Install build tools
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake ninja-build python3 python3-pip
+
+    - name: Install Emscripten
+      run: |
+        git clone https://github.com/emscripten-core/emsdk.git "$RUNNER_TEMP/emsdk"
+        "$RUNNER_TEMP/emsdk/emsdk" install latest
+        "$RUNNER_TEMP/emsdk/emsdk" activate latest
+
+    - name: Build CASIOEMU_WEB
+      run: |
+        source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+        emcmake cmake -S CasioEmuMsvc -B CasioEmuMsvc/build-web -G Ninja \
+          -DCMAKE_BUILD_TYPE=${{ env.BUILD_CONFIGURATION }} \
+          -DCASIOEMU_WEB=ON \
+          -DBUILD_EXECUTABLE=ON
+        cmake --build CasioEmuMsvc/build-web --config ${{ env.BUILD_CONFIGURATION }} --parallel
+
+    - name: Upload CASIOEMU_WEB Artifact
+      uses: actions/upload-artifact@v7
+      with:
+        name: Release-Web-CASIOEMU_WEB
+        path: |
+          CasioEmuMsvc/build-web/CasioEmuWeb.*
+        if-no-files-found: error
+
+    - name: Build CASIOEMU_CORE_WEB
+      run: |
+        source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+        emcmake cmake -S CasioEmuMsvc -B CasioEmuMsvc/build-core-web -G Ninja \
+          -DCMAKE_BUILD_TYPE=${{ env.BUILD_CONFIGURATION }} \
+          -DCASIOEMU_CORE_WEB=ON \
+          -DBUILD_EXECUTABLE=ON
+        cmake --build CasioEmuMsvc/build-core-web --config ${{ env.BUILD_CONFIGURATION }} --parallel
+
+    - name: Upload CASIOEMU_CORE_WEB Artifact
+      uses: actions/upload-artifact@v7
+      with:
+        name: Release-Web-CASIOEMU_CORE_WEB
+        path: |
+          CasioEmuMsvc/build-core-web/CasioEmuCore.*
+        if-no-files-found: error
+
   release:
     name: Create Release
-    needs: build
+    needs: [build, web-build]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/stable'
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
       with:
         fetch-depth: 0
+        fetch-tags: true
 
     - name: Download All Artifacts
       uses: actions/download-artifact@v8
@@ -367,8 +488,15 @@ jobs:
         echo "COMMIT_HASH=$SHORT_HASH" >> $GITHUB_ENV
         echo "RELEASE_TAG=stable-$(date +'%Y%m%d%H%M%S')-$SHORT_HASH" >> $GITHUB_ENV
         echo "RELEASE_DATE=$(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
-        
-        CHANGELOG_CONTENT=$(git log -5 --pretty=format:"- %s (%h)" --abbrev-commit)
+        PREV_TAG=$(git describe --tags --match "stable-*" --abbrev=0 2>/dev/null | tr -d '\n' | tr -d '\r')
+        if [ -z "$PREV_TAG" ]; then
+          CHANGELOG_CONTENT=$(git log -5 --pretty=format:"- %s (%h)" --abbrev-commit)
+        else
+          CHANGELOG_CONTENT=$(git log ${PREV_TAG}..HEAD --pretty=format:"- %s (%h)" --abbrev-commit)
+          if [ -z "$CHANGELOG_CONTENT" ]; then
+            CHANGELOG_CONTENT="- No changes"
+          fi
+        fi
         echo "CHANGELOG<<EOF" >> $GITHUB_ENV
         echo "$CHANGELOG_CONTENT" >> $GITHUB_ENV
         echo "EOF" >> $GITHUB_ENV
@@ -383,11 +511,11 @@ jobs:
         if [ -f "./artifacts/Release-x86.zip" ]; then
           mv "./artifacts/Release-x86.zip" "./release_assets/windows-x86-${{ env.COMMIT_HASH }}.zip"
         fi
-        
+
         if [ -f "./artifacts/Release-x64.zip" ]; then
           mv "./artifacts/Release-x64.zip" "./release_assets/windows-x64-${{ env.COMMIT_HASH }}.zip"
         fi
-        
+
         if [ -f "./artifacts/Release-Linux-x64.zip" ]; then
           mv "./artifacts/Release-Linux-x64.zip" "./release_assets/linux-x64-${{ env.COMMIT_HASH }}.zip"
         fi
@@ -399,7 +527,19 @@ jobs:
         if [ -f "./artifacts/CasioEmuMsvc.ipa" ]; then
           mv "./artifacts/CasioEmuMsvc.ipa" "./release_assets/iOS-build-${{ env.COMMIT_HASH }}.ipa"
         fi
-        
+
+        if [ -f "./artifacts/Release-Web-CASIOEMU_WEB.zip" ]; then
+          mv "./artifacts/Release-Web-CASIOEMU_WEB.zip" "./release_assets/web-casioemu-web-${{ env.COMMIT_HASH }}.zip"
+        fi
+
+        if [ -f "./artifacts/Release-Web-CASIOEMU_CORE_WEB.zip" ]; then
+          mv "./artifacts/Release-Web-CASIOEMU_CORE_WEB.zip" "./release_assets/web-casioemu-core-web-${{ env.COMMIT_HASH }}.zip"
+        fi
+
+        if [ -f "./artifacts/CasioEmuMsvc-macos.zip" ]; then
+          mv "./artifacts/CasioEmuMsvc-macos.zip" "./release_assets/macos-universal-${{ env.COMMIT_HASH }}.zip"
+        fi
+
         echo "=== ARTIFACTS ==="
         ls -R ./artifacts
         
@@ -419,7 +559,7 @@ jobs:
         body: |
           ## [WARNING] Pre-release Auto Build
           
-          > **Warning**: This is an automated pre-release build for testing purposes. 
+          > **Warning**: This is an automated pre-release build for testing purposes.
           > It may contain bugs and is not recommended for production use.
           
           **Build Date:** ${{ env.RELEASE_DATE }}
