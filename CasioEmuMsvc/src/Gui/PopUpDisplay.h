@@ -2,6 +2,9 @@
 #include <SDL.h>
 #include "Ui.hpp"
 #include "imgui/imgui.h"
+#include "RendererBackend.h"
+
+inline constexpr const char* SCREEN_MIRROR_WINDOW_DATA_KEY = "CasioEmu.ScreenMirror";
 
 class ScreenMirror;
 extern ScreenMirror* g_mirror;
@@ -14,9 +17,26 @@ private:
 	SDL_Texture* mirrorTexture = nullptr;
 	int captureWidth;
 	int captureHeight;
+	Uint32 windowId;
 	SDL_Rect displayRect;
 	int lastWindowWidth = 0;
 	int lastWindowHeight = 0;
+	bool watchingEvents = false;
+
+	static int SDLCALL eventWatch(void* userdata, SDL_Event* event) {
+		auto* self = static_cast<ScreenMirror*>(userdata);
+		if (!self || !event || !self->open || event->type != SDL_WINDOWEVENT || event->window.windowID != self->windowId) {
+			return 0;
+		}
+
+		if (event->window.event == SDL_WINDOWEVENT_CLOSE) {
+			self->open = false;
+		}
+		else if (event->window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
+			self->updateDisplayRect(event->window.data1, event->window.data2);
+		}
+		return 0;
+	}
 
 	void updateDisplayRect(int windowWidth, int windowHeight) {
 		float aspectRatio = (float)captureWidth / captureHeight;
@@ -40,7 +60,7 @@ private:
 
 public:
 	ScreenMirror(int captureWidth, int captureHeight, bool is_tab)
-		: UIWindow("Screen Mirror"), is_tab(is_tab), captureWidth(captureWidth), captureHeight(captureHeight) {
+		: UIWindow("Screen Mirror"), is_tab(is_tab), captureWidth(captureWidth), captureHeight(captureHeight), windowId(0), watchingEvents(false) {
 	}
 
 	~ScreenMirror() override {
@@ -73,10 +93,16 @@ public:
 				return false;
 			}
 
+			windowId = SDL_GetWindowID(mirrorWindow);
+			SDL_SetWindowData(mirrorWindow, SCREEN_MIRROR_WINDOW_DATA_KEY, this);
+
+			casioemu::SetPreferredRendererDriverHint();
 			mirrorRenderer = SDL_CreateRenderer(mirrorWindow, -1,
 				SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
 
 			if (!mirrorRenderer) {
+				SDL_Log("Error creating mirror renderer: %s", SDL_GetError());
+				SDL_SetWindowData(mirrorWindow, SCREEN_MIRROR_WINDOW_DATA_KEY, nullptr);
 				SDL_DestroyWindow(mirrorWindow);
 				mirrorWindow = nullptr;
 				return false;
@@ -98,24 +124,28 @@ public:
 			updateDisplayRect(captureWidth, captureHeight);
 
 			open = true;
+			SDL_AddEventWatch(eventWatch, this);
+			watchingEvents = true;
 			return true;
 		}
 	}
 
 	void destroy() {
-		if (mirrorTexture) {
-			SDL_DestroyTexture(mirrorTexture);
-			mirrorTexture = nullptr;
+		if (watchingEvents) {
+			SDL_DelEventWatch(eventWatch, this);
+			watchingEvents = false;
 		}
 		if (mirrorRenderer) {
 			SDL_DestroyRenderer(mirrorRenderer);
 			mirrorRenderer = nullptr;
 		}
 		if (mirrorWindow) {
+			SDL_SetWindowData(mirrorWindow, SCREEN_MIRROR_WINDOW_DATA_KEY, nullptr);
 			SDL_DestroyWindow(mirrorWindow);
 			mirrorWindow = nullptr;
 		}
 		open = false;
+		windowId = 0;
 	}
 
 	Uint32 getWindowID() const {
