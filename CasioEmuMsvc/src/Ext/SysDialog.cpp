@@ -169,7 +169,6 @@ void SystemDialogs::OpenFileDialog(std::function<void(std::filesystem::path)> ca
         env->DeleteLocalRef(activity);
         return;
     }
-
     env->CallStaticVoidMethod(systemDialogsClass, openFileMethod, activity);
     env->DeleteLocalRef(systemDialogsClass);
     env->DeleteLocalRef(activity);
@@ -261,26 +260,24 @@ extern "C" {
             const char* cPath = env->GetStringUTFChars(path, nullptr);
             jbyte* bytes = env->GetByteArrayElements(data, nullptr);
             jsize length = env->GetArrayLength(data);
-            
             if (bytes == nullptr || length == 0) {
                 SDL_Log("Error: Received empty or null data");
                 if (bytes) env->ReleaseByteArrayElements(data, bytes, JNI_ABORT);
                 if (cPath) env->ReleaseStringUTFChars(path, cPath);
                 return;
             }
-    
             std::vector<unsigned char> fileData(bytes, bytes + length);
             std::filesystem::path tempDir = "./tmp";
             std::filesystem::create_directories(tempDir);
             std::filesystem::path fileName = std::filesystem::path(cPath).filename();
             std::filesystem::path tempPath = tempDir / fileName;
-    
             try {
                 std::ofstream test(tempPath, std::ios::binary);
                 if (!test) throw std::runtime_error("Cannot create temp file for writing");
                 test.close();
-                
                 WriteFile(tempPath, fileData);
+                SDL_Log("Successfully wrote temp file: %s", tempPath.string().c_str());
+                SDL_Log("File size: %zu bytes", fileData.size());
                 SystemDialogs::fileOpenCallback(tempPath);
                 
                 std::error_code ec;
@@ -290,7 +287,6 @@ extern "C" {
             catch (const std::exception& e) {
                 SDL_Log("Failed to write temp file: %s", e.what());
             }
-    
             env->ReleaseByteArrayElements(data, bytes, JNI_ABORT);
             env->ReleaseStringUTFChars(path, cPath);
         }
@@ -602,7 +598,6 @@ void SystemDialogs::OpenFileDialog(std::function<void(std::filesystem::path)> ca
     } else if (command_exists("kdialog")) {
         cmd = "kdialog --getopenfilename";
     }
-
     if (!cmd.empty()) {
         std::string path = exec_and_get_output(cmd.c_str());
         if (!path.empty()) {
@@ -621,7 +616,6 @@ void SystemDialogs::SaveFileDialog(std::string preferred_name, std::function<voi
     } else if (command_exists("kdialog")) {
         cmd = "kdialog --getsavefilename " + safe_preferred_name;
     }
-
     if (!cmd.empty()) {
         std::string path = exec_and_get_output(cmd.c_str());
         if (!path.empty()) {
@@ -639,7 +633,6 @@ void SystemDialogs::OpenFolderDialog(std::function<void(std::filesystem::path)> 
     } else if (command_exists("kdialog")) {
         cmd = "kdialog --getexistingdirectory";
     }
-
     if (!cmd.empty()) {
         std::string path = exec_and_get_output(cmd.c_str());
         if (!path.empty()) {
