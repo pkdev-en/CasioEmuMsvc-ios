@@ -711,7 +711,6 @@ elseif(BUILD_EXECUTABLE)
         set_target_properties(${TARGET_NAME} PROPERTIES
             XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
         )
-        )
     else()
         find_package(PkgConfig QUIET)
         if(PkgConfig_FOUND)
