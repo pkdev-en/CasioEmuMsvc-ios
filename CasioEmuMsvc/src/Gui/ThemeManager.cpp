@@ -6,6 +6,12 @@
 #endif // !TEST_BUILD
 #include "Gui.h"
 #include "Localization.h"
+#ifdef __ANDROID__
+#include "RuntimeFontGlyphCache.h"
+#endif
+#ifdef CASIOEMU_CORE_WEB
+#include "WebDebuggerGui.h"
+#endif
 #include <SDL.h>
 #include <algorithm>
 #include <cmath>
@@ -23,23 +29,130 @@ using namespace material_color_utilities;
 #include "Ext/iOSNativeBridge.h"
 #endif
 
+namespace {
+#ifdef CASIOEMU_CORE_WEB
+constexpr const char* kThemeSettingsPath = "/persist/theme.bin";
+constexpr const char* kDefaultInjectionFilePath = "/persist/injections.txt";
+#else
+constexpr const char* kThemeSettingsPath = "./theme.bin";
+#endif
+
+void ApplyDefaultLayoutMetrics(ImGuiStyle& style) {
+	style.WindowRounding = 8.0f;
+	style.ChildRounding = 8.0f;
+	style.PopupRounding = 8.0f;
+	style.FrameRounding = 6.0f;
+	style.TabRounding = 6.0f;
+	style.GrabRounding = 6.0f;
+	style.ScrollbarRounding = 6.0f;
+	style.ScrollbarSize = 12.0f;
+	style.WindowPadding = ImVec2(10.0f, 10.0f);
+	style.FramePadding = ImVec2(8.0f, 4.0f);
+	style.ItemSpacing = ImVec2(8.0f, 6.0f);
+}
+
+bool FloatEquals(float lhs, float rhs) {
+	return std::fabs(lhs - rhs) < 0.001f;
+}
+
+bool VecEquals(const ImVec2& lhs, const ImVec2& rhs) {
+	return FloatEquals(lhs.x, rhs.x) && FloatEquals(lhs.y, rhs.y);
+}
+
+bool HasImGuiDefaultLayoutMetrics(const ImGuiStyle& style) {
+	ImGuiStyle defaultStyle;
+	return FloatEquals(style.WindowRounding, defaultStyle.WindowRounding)
+		&& FloatEquals(style.ChildRounding, defaultStyle.ChildRounding)
+		&& FloatEquals(style.FrameRounding, defaultStyle.FrameRounding)
+		&& FloatEquals(style.GrabRounding, defaultStyle.GrabRounding)
+		&& VecEquals(style.WindowPadding, defaultStyle.WindowPadding)
+		&& VecEquals(style.FramePadding, defaultStyle.FramePadding)
+		&& VecEquals(style.ItemSpacing, defaultStyle.ItemSpacing);
+}
+
+bool ColorEquals(const ImVec4& lhs, const ImVec4& rhs) {
+	return FloatEquals(lhs.x, rhs.x)
+		&& FloatEquals(lhs.y, rhs.y)
+		&& FloatEquals(lhs.z, rhs.z)
+		&& FloatEquals(lhs.w, rhs.w);
+}
+
+bool HasImGuiDefaultDarkColors(const ImGuiStyle& style) {
+	ImGuiStyle defaultStyle;
+	return ColorEquals(style.Colors[ImGuiCol_WindowBg], defaultStyle.Colors[ImGuiCol_WindowBg])
+		&& ColorEquals(style.Colors[ImGuiCol_Text], defaultStyle.Colors[ImGuiCol_Text])
+		&& ColorEquals(style.Colors[ImGuiCol_FrameBg], defaultStyle.Colors[ImGuiCol_FrameBg])
+		&& ColorEquals(style.Colors[ImGuiCol_Button], defaultStyle.Colors[ImGuiCol_Button]);
+}
+
+ImGuiStyle CreateBaseThemeStyle(bool isDark) {
+	ImGuiStyle style;
+	if (isDark) {
+		ImGui::StyleColorsDark(&style);
+	}
+	else {
+		ImGui::StyleColorsLight(&style);
+	}
+	ApplyDefaultLayoutMetrics(style);
+	return style;
+}
+
+bool EnsureThemeStyleInitialized(ImGuiStyle& style, bool isDark) {
+	if (is_mem_equal(style, ImGuiStyle{})) {
+		style = CreateBaseThemeStyle(isDark);
+		return true;
+	}
+
+	if (!isDark && HasImGuiDefaultDarkColors(style)) {
+		style = CreateBaseThemeStyle(false);
+		return true;
+	}
+
+	if (HasImGuiDefaultLayoutMetrics(style)) {
+		ApplyDefaultLayoutMetrics(style);
+		return true;
+	}
+
+	return false;
+}
+}
+
 // ============================================================================
 // 设置持久化
 // ============================================================================
 void ThemeManager::SaveSettings() {
-	std::ofstream file("./theme.bin", std::ios::binary);
+	std::ofstream file(kThemeSettingsPath, std::ios::binary);
 	if (file.is_open()) {
 		Binary::Write(file, m_settings);
 		file.close();
+#ifdef CASIOEMU_CORE_WEB
+		WebDebuggerRequestFsSync();
+#endif
 	}
 }
 
 void ThemeManager::LoadSettings() {
-	std::ifstream file("./theme.bin", std::ios::binary);
+	std::ifstream file(kThemeSettingsPath, std::ios::binary);
 	if (file.is_open()) {
-		Binary::Read(file, m_settings);
+		m_settings.Read(file);
 		file.close();
 
+#ifdef CASIOEMU_CORE_WEB
+		if (m_settings.injectionFilePath[0] == '\0' || m_settings.injectionFilePath[0] != '/') {
+			strncpy(m_settings.injectionFilePath, kDefaultInjectionFilePath, sizeof(m_settings.injectionFilePath));
+			m_settings.injectionFilePath[sizeof(m_settings.injectionFilePath) - 1] = '\0';
+			SaveSettings();
+		}
+#endif
+
+		bool migratedStyle = false;
+		migratedStyle |= EnsureThemeStyleInitialized(m_settings.igs_dark, true);
+		migratedStyle |= EnsureThemeStyleInitialized(m_settings.igs_light, false);
+		if (migratedStyle) {
+			SaveSettings();
+		}
+
+		m_fontScale = m_settings.scale;
 		if (m_settings.isDarkMode) {
 			SetDarkMode();
 		}
@@ -49,8 +162,9 @@ void ThemeManager::LoadSettings() {
 		if (strlen(m_settings.language) > 0) {
 			g_local.ChangeLanguage(m_settings.language);
 		}
-		m_fontScale = m_settings.scale;
-		m_fontRebuildRequested = true;
+		if (ImGui::GetCurrentContext() == nullptr) {
+			m_fontRebuildRequested = true;
+		}
 	}
 }
 
@@ -61,6 +175,14 @@ void ThemeManager::RequestFontRebuild() {
 	m_fontRebuildRequested = true;
 }
 
+#ifdef __ANDROID__
+void ThemeManager::RegisterInputGlyphs(const char* utf8_text) {
+	if (utf8_text && RuntimeFontGlyphCache::Instance().AddText(utf8_text)) {
+		RequestFontRebuild();
+	}
+}
+#endif
+
 void ThemeManager::SetFontScale(float scale) {
 	m_fontScale = scale;
 }
@@ -69,28 +191,23 @@ void ThemeManager::ProcessFontRebuild() {
 	if (!m_fontRebuildRequested)
 		return;
 
+#ifdef __ANDROID__
+	// RebuildFont() replaces the CPU-side atlas. Drop the renderer's old atlas
+	// texture first so the backend uploads the rebuilt glyphs on the next frame.
+	ImGui_ImplSDLRenderer2_DestroyFontsTexture();
+#endif
 	RebuildFont(m_fontScale);
 	if (m_fontScale != 0) {
 		ImGuiStyle igs;
 
 		// Load the user's saved unscaled base style (includes custom sizes + colors)
 		if (m_settings.isDarkMode) {
-			if (!is_mem_equal(m_settings.igs_dark, ImGuiStyle{})) {
-				igs = m_settings.igs_dark;
-			}
-			else {
-				igs = ImGuiStyle();
-				ImGui::StyleColorsDark(&igs);
-			}
+			EnsureThemeStyleInitialized(m_settings.igs_dark, true);
+			igs = m_settings.igs_dark;
 		}
 		else {
-			if (!is_mem_equal(m_settings.igs_light, ImGuiStyle{})) {
-				igs = m_settings.igs_light;
-			}
-			else {
-				igs = ImGuiStyle();
-				ImGui::StyleColorsLight(&igs);
-			}
+			EnsureThemeStyleInitialized(m_settings.igs_light, false);
+			igs = m_settings.igs_light;
 		}
 
 		// Apply scale to the unscaled base
@@ -261,6 +378,7 @@ void ThemeManager::SetLightMode() {
 	SaveSettings();
 }
 
+
 void ThemeManager::SetDarkMode() {
 	// Always initialize to ensure layout and color changes apply
 	ImGuiStyle base = ImGuiStyle();
@@ -321,15 +439,7 @@ void ThemeManager::ApplyDefaultTheme() {
 	ImGuiStyle& style = ImGui::GetStyle();
 	
 	// Premium modern layout styles
-	style.WindowRounding = 8.0f;
-	style.FrameRounding = 6.0f;
-	style.TabRounding = 6.0f;
-	style.GrabRounding = 6.0f;
-	style.ScrollbarRounding = 6.0f;
-	style.ScrollbarSize = 12.0f;
-	style.WindowPadding = ImVec2(10.0f, 10.0f);
-	style.FramePadding = ImVec2(8.0f, 4.0f);
-	style.ItemSpacing = ImVec2(8.0f, 6.0f);
+	ApplyDefaultLayoutMetrics(style);
 	
 	// Premium Dark Blue Palette
 	style.Colors[ImGuiCol_WindowBg] = ImVec4(0.08f, 0.08f, 0.12f, 0.97f);
