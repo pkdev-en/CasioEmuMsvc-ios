@@ -13,21 +13,33 @@
 #include "LabelFile.h"
 #include "LabelViewer.h"
 #include "MemBreakPoint.hpp"
+#include "ModelInfo.h"
 #include "Random.hpp"
+#include "RendererBackend.h"
 #include "Theme.h"
 #include "VariableWindow.h"
 #include "WatchWindow.hpp"
+#ifndef CASIOEMU_CORE_WEB
+#include "QrCodeWindow.h"
+#endif
+#ifndef TEST_BUILD
 #include "Rop/RopCompilerUI.h"
 #include "PluginLogWindow.hpp"
 #include "SnapshotWindow.h"
 #include "CalculatorWindow.h"
 #include "imgui/imgui.h"
 #include "imgui/imgui_internal.h"
+#ifdef CASIOEMU_CORE_WEB
+#include "WebDebuggerGui.h"
+#else
 #include "imgui/imgui_impl_sdl2.h"
 #include "imgui/imgui_impl_sdlrenderer2.h"
+#endif
 #include <Gui.h>
 #include <SDL.h>
 #include <algorithm>
+#include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -67,6 +79,7 @@ CodeViewer* code_viewer = 0;
 Injector* injector = 0;
 int top_bar_size = 0;
 Breakpoints* membp = 0;
+SnapshotWindow* snapshot_window = 0;
 
 std::vector<UIWindow*> windows{};
 
@@ -91,6 +104,116 @@ void SaveUIState() {
 #endif
 
 static float screenshot_toast_timer = 0.0f;
+
+#ifdef CASIOEMU_CORE_WEB
+SDL_Surface* background = nullptr;
+SDL_Texture* bg_txt = nullptr;
+#endif
+
+static float GetStatusBarHeight() {
+	return ImGui::GetFrameHeight() + 4.0f;
+}
+
+void RenderStatusBar() {
+	ImGuiViewport* viewport = ImGui::GetMainViewport();
+	float barHeight = GetStatusBarHeight();
+
+#ifdef __IOS__
+	// Thêm safe area bottom (home indicator iPhone)
+	extern float getSafeBottom();
+	float safeBottom = getSafeBottom();
+	if (safeBottom < 0.0f) safeBottom = 0.0f;
+	float posY = viewport->Pos.y + viewport->Size.y - barHeight - safeBottom;
+#else
+	float posY = viewport->Pos.y + viewport->Size.y - barHeight;
+#endif
+
+	ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x, posY));
+	ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, barHeight));
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 2.0f));
+#ifdef CASIOEMU_CORE_WEB
+	ImVec4 statusBg = ImGui::GetStyle().Colors[ImGuiCol_WindowBg];
+	statusBg.w = std::max(statusBg.w, 0.82f);
+	ImGui::PushStyleColor(ImGuiCol_WindowBg, statusBg);
+#else
+	ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.08f, 0.08f, 0.12f, 1.0f));
+#endif
+	
+	if (ImGui::Begin("##StatusBar", nullptr, 
+		ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | 
+		ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+		ImGuiWindowFlags_NoDocking)) {
+		
+		// Run/Pause state status indicator
+		if (m_emu->GetPaused()) {
+			ImGui::TextColored(UIHelpers::kColorWarning, "\xe2\x8f\xb8 %s", "StatusBar.Paused"_lc);  // ⏸
+		} else {
+			ImGui::TextColored(UIHelpers::kColorSuccess, "\xe2\x96\xb6 %s", "StatusBar.Running"_lc); // ▶
+		}
+		
+		ImGui::SameLine(0.0f, 20.0f);
+		ImGui::TextDisabled("|");
+		ImGui::SameLine(0.0f, 20.0f);
+		
+		// Current PC
+		ImGui::Text("PC: %05X", pc_cache);
+		
+		ImGui::SameLine(0.0f, 20.0f);
+		ImGui::TextDisabled("|");
+		ImGui::SameLine(0.0f, 20.0f);
+		
+		// Breakpoints count
+		int bpCount = code_viewer ? (int)code_viewer->GetBreakpointCount() : 0;
+		ImGui::Text("BP: %d", bpCount);
+	}
+	ImGui::End();
+	ImGui::PopStyleColor();
+	ImGui::PopStyleVar();
+}
+
+static ImGuiID RenderDockSpace(float reservedBottom) {
+	ImGuiViewport* viewport = ImGui::GetMainViewport();
+	float dockHeight = viewport->Size.y - reservedBottom;
+	if (dockHeight < 1.0f) dockHeight = 1.0f;
+
+	ImGui::SetNextWindowPos(viewport->Pos);
+	ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, dockHeight));
+	ImGui::SetNextWindowViewport(viewport->ID);
+	ImGui::SetNextWindowBgAlpha(0.0f);
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+	ImGuiWindowFlags flags =
+		ImGuiWindowFlags_NoDocking |
+		ImGuiWindowFlags_NoTitleBar |
+		ImGuiWindowFlags_NoCollapse |
+		ImGuiWindowFlags_NoResize |
+		ImGuiWindowFlags_NoMove |
+		ImGuiWindowFlags_NoBringToFrontOnFocus |
+		ImGuiWindowFlags_NoNavFocus |
+		ImGuiWindowFlags_NoBackground;
+
+	ImGui::Begin("##DebuggerDockSpaceHost", nullptr, flags);
+	ImGuiID dockspace_id = ImGui::GetID("DebuggerDockSpace");
+	ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_PassthruCentralNode);
+	ImGui::End();
+	ImGui::PopStyleVar(3);
+	return dockspace_id;
+}
+
+static void RenderDebuggerGuiWindows() {
+#if !defined(__ANDROID__) && !defined(__IOS__)
+	ImGuiID dockspace_id = RenderDockSpace(GetStatusBarHeight());
+#endif
+	for (auto win : windows) {
+#if !defined(__ANDROID__) && !defined(__IOS__)
+		if (dockspace_id != 0) {
+			ImGui::SetNextWindowDockID(dockspace_id, ImGuiCond_FirstUseEver);
+		}
+#endif
+		win->Render();
+	}
+}
 
 // ===================== TOOLBAR STATE (iOS) =====================
 static float g_toolbar_posY      = -1.0f;   
@@ -187,7 +310,6 @@ static void RenderToolbarContent(ImGuiViewport* viewport) {
             ImGui::SetWindowFocus(nullptr);
         }
 #endif
-
         if (ImGui::TabItemButton(isPaused ? "[>] Resume" : "[||] Pause"))
             m_emu->SetPaused(!isPaused);
 
@@ -463,47 +585,6 @@ void LoadUIState() {
     }
 }
 
-void RenderStatusBar() {
-    ImGuiViewport* viewport = ImGui::GetMainViewport();
-    float barHeight = ImGui::GetFrameHeight() + 4.0f;
-
-#ifdef __IOS__
-    // Thêm safe area bottom (home indicator iPhone)
-#if defined(__cplusplus)
-    extern float getSafeBottom(); 
-#endif
-    float safeBottom = getSafeBottom();
-    if (safeBottom < 0.0f) safeBottom = 0.0f;
-    float posY = viewport->Pos.y + viewport->Size.y - barHeight - safeBottom;
-#else
-    float posY = viewport->Pos.y + viewport->Size.y - barHeight;
-#endif
-
-    ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x, posY));
-    ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, barHeight));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 2.0f));
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.08f, 0.08f, 0.12f, 1.0f));
-    if (ImGui::Begin("##StatusBar", nullptr,
-        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-        ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoScrollbar |
-        ImGuiWindowFlags_NoDocking))
-    {
-        if (m_emu->GetPaused())
-            ImGui::TextColored(UIHelpers::kColorWarning, "[||] %s", "StatusBar.Paused"_lc);
-        else
-            ImGui::TextColored(UIHelpers::kColorSuccess, "[>] %s",  "StatusBar.Running"_lc);
-        ImGui::SameLine(0.0f, 20.0f); ImGui::TextDisabled("|");
-        ImGui::SameLine(0.0f, 20.0f); ImGui::Text("PC: %05X", pc_cache);
-        ImGui::SameLine(0.0f, 20.0f); ImGui::TextDisabled("|");
-        ImGui::SameLine(0.0f, 20.0f);
-        int bpCount = code_viewer ? (int)code_viewer->GetBreakpointCount() : 0;
-        ImGui::Text("BP: %d", bpCount);
-    }
-    ImGui::End();
-    ImGui::PopStyleColor();
-    ImGui::PopStyleVar();
-}
-
 // ======================== gui_loop ========================
 void gui_loop() {
     if (!m_emu->Running()) return;
@@ -625,6 +706,7 @@ void gui_loop() {
 #ifndef SINGLE_WINDOW
     SDL_RenderPresent(renderer);
 #endif
+#endif
 }
 // =====================================================================================
 
@@ -657,6 +739,71 @@ public:
     }
 };
 
+static CodeViewer* CreateDebuggerGuiWindows() {
+	while (!me_mmu)
+		std::this_thread::sleep_for(std::chrono::microseconds(1));
+	std::filesystem::path label_file = m_emu->GetModelFilePath("labels.txt");
+	if (!label_file.empty() && std::filesystem::exists(label_file))
+		g_labels = parseFile(label_file.string());
+	else if (!m_emu->IsMemoryModel())
+		std::cout << "[Warning] " << label_file.string() << " doesn't exist. You can consider create one for better debugging experiences. Format: address(0x1234),func name(can be quoted)\n";
+
+	if (m_emu->hardware_id == casioemu::HW_FX_5800P) {
+		windows.push_back(CreateFx5800FileSystem());
+	}
+
+	if (m_emu->hardware_id != casioemu::HW_SOLARII && !casioemu::IsEpsFamily(m_emu->hardware_id)) {
+		windows.push_back(new VariableWindow());
+	}
+
+	windows.push_back(new HwController());
+	windows.push_back(new LabelViewer());
+	auto* watch_window = new WatchWindow();
+	windows.push_back(watch_window);
+	windows.push_back(CreateCallAnalysisWindow());
+	windows.push_back(code_viewer = new CodeViewer());
+	if (!casioemu::IsEpsFamily(m_emu->hardware_id))
+		windows.push_back(injector = new Injector());
+	membp = new Breakpoints();
+	windows.push_back(membp);
+	windows.push_back(CreateAddressWindow());
+	if (!casioemu::IsEpsFamily(m_emu->hardware_id)) {
+#if !defined(TEST_BUILD)
+		windows.push_back(CreateRopCompilerWindow());
+#endif
+	}
+#if !defined(TEST_BUILD) && !defined(CASIOEMU_CORE_WEB)
+	windows.push_back(new PluginLogWindow());
+#endif
+#if !defined(TEST_BUILD)
+	windows.push_back(snapshot_window = static_cast<SnapshotWindow*>(CreateSnapshotWindow()));
+#endif
+#ifndef CASIOEMU_CORE_WEB
+	if (!casioemu::IsEpsFamily(m_emu->hardware_id))
+		windows.push_back(new QrCodeWindow());
+#endif
+	windows.push_back(MakeThemeWindow());
+	auto* bitmap_window = CreateBitmapViewer();
+	windows.push_back(bitmap_window);
+	for (auto item : GetEditors()) {
+		windows.push_back(item);
+	}
+
+#if defined(__IOS__) || defined(__ANDROID__)
+	// Mobile: chỉ hiện màn hình máy tính theo mặc định (giống bản gốc),
+	// các cửa sổ debugger phải được mở thủ công qua "Debugger Windows".
+	for (auto* item : windows) {
+		if (!item) continue;
+		bool is_calculator = (item->name && strcmp(item->name, "Calculator") == 0);
+		item->open = is_calculator;
+		item->bring_to_front_requested = false;
+	}
+#endif
+
+	return 0;
+}
+
+#ifndef CASIOEMU_CORE_WEB
 CodeViewer* test_gui(bool* guiCreated, SDL_Window* wnd, SDL_Renderer* rnd) {
     SDL_SetHint(SDL_HINT_IME_SHOW_UI, "1");
     if (window || renderer) {
@@ -698,8 +845,9 @@ CodeViewer* test_gui(bool* guiCreated, SDL_Window* wnd, SDL_Renderer* rnd) {
 #ifdef _WIN32
     EnableDarkTitleBar(GetSDLWindowHandle(window));
 #endif
-    renderer = SDL_CreateRenderer(window, -1,
-        SDL_RENDERER_PRESENTVSYNC | SDL_RENDERER_ACCELERATED);
+	casioemu::SetPreferredRendererDriverHint();
+	renderer = SDL_CreateRenderer(window, -1,
+		SDL_RENDERER_PRESENTVSYNC | SDL_RENDERER_ACCELERATED);
 #endif
     if (!renderer) {
         SDL_Log("Error creating SDL_Renderer!");
@@ -741,37 +889,13 @@ CodeViewer* test_gui(bool* guiCreated, SDL_Window* wnd, SDL_Renderer* rnd) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     if (!me_mmu) { SDL_Log("MMU not ready!"); return nullptr; }
 
-    auto label_file = m_emu->GetModelFilePath("labels.txt");
-    if (std::filesystem::exists(label_file))
-        g_labels = parseFile(label_file);
-    else
-        std::cout << "[Warning] labels.txt doesn't exist.\n";
+	ThemeManager::Instance().RequestFontRebuild();
+	ThemeManager::Instance().ProcessFontRebuild();
 
-    if (m_emu->hardware_id == casioemu::HW_FX_5800P)
-        windows.push_back(CreateFx5800FileSystem());
+	if (guiCreated)
+		*guiCreated = true;
 
-    for (auto item : std::initializer_list<UIWindow*>{
-             new CalculatorWindow(),
-             new VariableWindow(),
-             new HwController(),
-             new LabelViewer(),
-             new WatchWindow(),
-             CreateCallAnalysisWindow(),
-             code_viewer = new CodeViewer(),
-             injector    = new Injector(),
-             membp       = new Breakpoints(),
-             CreateAddressWindow(),
-             CreateRopCompilerWindow(),
-             new PluginLogWindow(),
-             CreateSnapshotWindow(),
-             MakeThemeWindow(),
-             CreateBitmapViewer(),
-             new ErrorLogWindow()
-         })
-        windows.push_back(item);
-
-    for (auto item : GetEditors())
-        windows.push_back(item);
+	auto* result = CreateDebuggerGuiWindows();
 
     if (!std::filesystem::exists(ui_state_fn)) {
 #if defined(__IOS__) || defined(__ANDROID__)
@@ -790,8 +914,32 @@ CodeViewer* test_gui(bool* guiCreated, SDL_Window* wnd, SDL_Renderer* rnd) {
     }
     LoadUIState();
     ui_ready = true;
-    return nullptr;
+    return result;
 }
+#endif
+
+#ifdef CASIOEMU_CORE_WEB
+void InitWebDebuggerGuiWindows() {
+	if (windows.empty()) {
+		CreateDebuggerGuiWindows();
+	}
+}
+
+void RenderWebDebuggerGuiWindows() {
+	RenderDebuggerGuiWindows();
+}
+
+void CleanupWebDebuggerGuiWindows() {
+	for (auto* win : windows) {
+		delete win;
+	}
+	windows.clear();
+	code_viewer = nullptr;
+	injector = nullptr;
+	membp = nullptr;
+	g_labels.clear();
+}
+#endif
 
 namespace UIHelpers {
     void JumpToMemory(uint32_t addr) {
@@ -803,48 +951,99 @@ namespace UIHelpers {
             if (win->GotoMemoryAddress(addr)) return;
     }
 
-    void ClickableAddress(uint32_t addr, JumpTarget defaultTarget) {
-        ImGui::PushStyleColor(ImGuiCol_Text, kColorInfo);
-        char addrLabel[16];
-        snprintf(addrLabel, sizeof(addrLabel), "%05X", addr);
-        ImGui::TextUnformatted(addrLabel);
-        ImGui::PopStyleColor();
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-            ImGui::BeginTooltip();
-            if (defaultTarget == JumpTarget::Code) {
-                ImGui::Text("ClickableAddress.CodeJumpTooltip"_lc, addr);
-                ImGui::TextDisabled("%s", "ClickableAddress.RightClickHint"_lc);
-            } else if (defaultTarget == JumpTarget::Memory) {
-                ImGui::Text("ClickableAddress.MemJumpTooltip"_lc, addr);
-                ImGui::TextDisabled("%s", "ClickableAddress.RightClickHint"_lc);
-            } else {
-                ImGui::Text("ClickableAddress.BothTooltip"_lc, addr);
-            }
-            ImGui::EndTooltip();
-        }
-        if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
-            if (defaultTarget == JumpTarget::Code || defaultTarget == JumpTarget::Both) {
-                if (code_viewer) { code_viewer->JumpTo(addr); code_viewer->BringToFront(); }
-            } else { JumpToMemory(addr); }
-        }
-        char popupId[32];
-        snprintf(popupId, sizeof(popupId), "##ca_popup_%05X", addr);
-        if (ImGui::IsItemClicked(ImGuiMouseButton_Right))
-            ImGui::OpenPopup(popupId);
-        if (ImGui::BeginPopup(popupId)) {
-            ImGui::TextDisabled("0x%05X", addr);
-            ImGui::Separator();
-            if (ImGui::MenuItem("ClickableAddress.CodeJump"_lc))
-                if (code_viewer) { code_viewer->JumpTo(addr); code_viewer->BringToFront(); }
-            if (ImGui::MenuItem("ClickableAddress.MemJump"_lc))
-                JumpToMemory(addr);
-            ImGui::EndPopup();
-        }
-    }
+	void JumpToMemory(uint32_t addr) {
+		// Prefer the "Ram" window; fall back to any window that overrides GotoMemoryAddress.
+		UIWindow* fallback = nullptr;
+		for (auto* win : windows) {
+			const char* n = win->name;
+			if (n && strcmp(n, "Ram") == 0) {
+				win->GotoMemoryAddress(addr);
+				win->BringToFront();
+				return;
+			}
+			// Track first editor-like window as fallback
+			if (!fallback && n && (strcmp(n, "Rom") == 0 || strcmp(n, "All") == 0
+				|| strcmp(n, "PRam") == 0 || strcmp(n, "Flash") == 0)) {
+				fallback = win;
+			}
+		}
+		if (fallback) {
+			fallback->GotoMemoryAddress(addr);
+			fallback->BringToFront();
+		}
+	}
+
+	void ClickableAddress(uint32_t addr, JumpTarget defaultTarget) {
+		char addrLabel[16];
+		snprintf(addrLabel, sizeof(addrLabel), "%05X", addr);
+		ImGui::PushID(addrLabel);
+		const ImVec2 textSize = ImGui::CalcTextSize(addrLabel);
+		const ImVec2 textPos = ImGui::GetCursorScreenPos();
+		ImGui::InvisibleButton("##clickable_address", textSize);
+		const bool hovered = ImGui::IsItemHovered();
+		const bool leftClicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
+		const bool rightClicked = ImGui::IsItemClicked(ImGuiMouseButton_Right);
+		ImDrawList* drawList = ImGui::GetWindowDrawList();
+		const ImU32 textColor = ImGui::GetColorU32(hovered ? ImVec4(0.55f, 0.72f, 1.0f, 1.0f) : kColorInfo);
+		drawList->AddText(textPos, textColor, addrLabel);
+		if (hovered) {
+			const float underlineY = textPos.y + textSize.y;
+			drawList->AddLine(ImVec2(textPos.x, underlineY), ImVec2(textPos.x + textSize.x, underlineY), textColor);
+		}
+
+		if (hovered) {
+			ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+			ImGui::BeginTooltip();
+			if (defaultTarget == JumpTarget::Code) {
+				ImGui::Text("ClickableAddress.CodeJumpTooltip"_lc, addr);
+				ImGui::TextDisabled("%s", "ClickableAddress.RightClickHint"_lc);
+			} else if (defaultTarget == JumpTarget::Memory) {
+				ImGui::Text("ClickableAddress.MemJumpTooltip"_lc, addr);
+				ImGui::TextDisabled("%s", "ClickableAddress.RightClickHint"_lc);
+			} else {
+				ImGui::Text("ClickableAddress.BothTooltip"_lc, addr);
+			}
+			ImGui::EndTooltip();
+		}
+
+		// Left-click: default action
+		if (leftClicked) {
+			if (defaultTarget == JumpTarget::Code || defaultTarget == JumpTarget::Both) {
+				if (code_viewer) {
+					code_viewer->JumpTo(addr);
+					code_viewer->BringToFront();
+				}
+			} else {
+				JumpToMemory(addr);
+			}
+		}
+
+		// Right-click: context menu with both options
+		char popupId[32];
+		snprintf(popupId, sizeof(popupId), "##ca_popup_%05X", addr);
+		if (rightClicked) {
+			ImGui::OpenPopup(popupId);
+		}
+		if (ImGui::BeginPopup(popupId)) {
+			ImGui::TextDisabled("0x%05X", addr);
+			ImGui::Separator();
+			if (ImGui::MenuItem("ClickableAddress.CodeJump"_lc)) {
+				if (code_viewer) {
+					code_viewer->JumpTo(addr);
+					code_viewer->BringToFront();
+				}
+			}
+			if (ImGui::MenuItem("ClickableAddress.MemJump"_lc)) {
+				JumpToMemory(addr);
+			}
+			ImGui::EndPopup();
+		}
+		ImGui::PopID();
+	}
 }
 
 void gui_cleanup() {
+#ifndef CASIOEMU_CORE_WEB
 #if !defined(__ANDROID__) && !defined(__IOS__)
 #ifndef SINGLE_WINDOW
     if (window) {
@@ -867,4 +1066,7 @@ void gui_cleanup() {
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();
+#else
+	CleanupWebDebuggerGuiWindows();
+#endif
 }
