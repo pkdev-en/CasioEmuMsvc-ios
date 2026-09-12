@@ -52,16 +52,13 @@ public:
             ImVec2(ThemeManager::Instance().padding,
                    ThemeManager::Instance().padding));
         #endif
-    
-        //ImGui::SetNextWindowCollapsed(!open, ImGuiCond_Always);
+
         ImGui::SetNextWindowSize(inital_size, ImGuiCond_FirstUseEver);
-    
+
         if (bring_to_front_requested) {
             ImGui::SetNextWindowFocus();
             bring_to_front_requested = false;
         }
-    
-        //if (!open) return;
 #ifdef CASIOEMU_CORE_WEB
 		if (ImGui::Begin(name, nullptr, flags)) {
 #else
@@ -71,14 +68,6 @@ public:
 		}
 		ImGui::End();
 
-        bool keep_open = open;
-        if (ImGui::Begin(name, &keep_open, flags)) {
-            RenderCore();
-        }
-        ImGui::End();
-        
-        open = keep_open;
-    
         #if defined(__ANDROID__) || defined(IOS)
         ImGui::PopStyleVar();
         #endif

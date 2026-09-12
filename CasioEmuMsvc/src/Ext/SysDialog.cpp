@@ -532,7 +532,9 @@ void SystemDialogs::SaveFolderDialog(std::function<void(std::filesystem::path)> 
 
 // --- SỬA ĐỔI KHỐI ĐỂ TRÁNH XUNG ĐỘT VỚI MACOS ---
 #endif
-#elif !defined(_WIN32) && !defined(__ANDROID__) && !defined(__APPLE__)
+#endif
+
+#if !defined(_WIN32) && !defined(__ANDROID__) && !defined(__APPLE__)
 #include <iostream>
 #include <cstdio>
 #include <memory>

@@ -26,7 +26,7 @@ using namespace material_color_utilities;
 #endif
 
 #ifdef __IOS__
-#include "Ext/iOSNativeBridge.h"
+#include "Ext/IOSNativeBridge.h"
 #endif
 
 namespace {
@@ -350,30 +350,12 @@ void ThemeManager::UpdateUIScale() {
 // 主题切换
 // ============================================================================
 void ThemeManager::SetLightMode() {
-	// Always initialize to ensure layout and color changes apply
-	ImGuiStyle base = ImGuiStyle();
-	ImGui::StyleColorsLight(&base);
-
-	// Apply Premium modern layout styles to base
-	base.WindowRounding = 8.0f;
-	base.FrameRounding = 6.0f;
-	base.TabRounding = 6.0f;
-	base.GrabRounding = 6.0f;
-	base.ScrollbarRounding = 6.0f;
-	base.ScrollbarSize = 12.0f;
-	base.WindowPadding = ImVec2(10.0f, 10.0f);
-	base.FramePadding = ImVec2(8.0f, 4.0f);
-	base.ItemSpacing = ImVec2(8.0f, 6.0f);
-
-	m_settings.igs_light = base;
-
-	// Apply the unscaled base, then scale it
-	ImGuiStyle styled = m_settings.igs_light;
-	styled.ScaleAllSizes(m_fontScale);
-	if (ImGui::GetCurrentContext() != nullptr) {
+	EnsureThemeStyleInitialized(m_settings.igs_light, false);
+	if (ImGui::GetCurrentContext()) {
+		ImGuiStyle styled = m_settings.igs_light;
+		styled.ScaleAllSizes(m_fontScale);
 		ImGui::GetStyle() = styled;
 	}
-
 	m_settings.isDarkMode = false;
 	SaveSettings();
 }

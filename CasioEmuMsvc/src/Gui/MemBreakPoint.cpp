@@ -231,7 +231,7 @@ void Breakpoints::SetupHooks() {
 		if (RegisterBreakpointTriggered(sender.reg_sp.raw))
 			SetDebugbreak();
 
-		// ===== REGISTER BREAKPOINT =====
+		// ===== REGISTER BREAKPOINT (multi-register watch list) =====
 		for (auto& bp : reg_bps) {
 			if (!bp.enabled) continue;
 
@@ -431,7 +431,7 @@ void Breakpoints::RenderCore() {
 
 				ImGui::PopID();
 			}
-			
+
 			ImGui::EndTabItem();
 		}
 		ImGui::EndTabBar();

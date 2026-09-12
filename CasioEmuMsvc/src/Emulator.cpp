@@ -19,7 +19,7 @@
 #include <utility>
 
 #ifdef __IOS__
-#include "Ext/iOSNativeBridge.h"
+#include "Ext/IOSNativeBridge.h"
 #endif
 
 namespace casioemu {

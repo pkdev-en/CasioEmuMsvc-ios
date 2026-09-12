@@ -19,14 +19,18 @@ else()
 endif()
 
 set(SDL_TEST OFF CACHE BOOL "Disable building the SDL_test library" FORCE)
+option(BUILD_EXECUTABLE "Build a statically linked executable" OFF)
 option(BUILD_MCP_PLUGIN "Build the MCP debugger plugin" ON)
 
-if(ANDROID OR IOS)
-    set(DEFAULT_BUILD_EXECUTABLE OFF)
-else()
-    set(DEFAULT_BUILD_EXECUTABLE ON)
+if(NOT DEFINED BUILD_EXECUTABLE)
+    if(ANDROID OR IOS)
+        set(BUILD_EXECUTABLE OFF)
+        message(STATUS "Auto-setting BUILD_EXECUTABLE: OFF (Mobile platform)")
+    else()
+        set(BUILD_EXECUTABLE ON)
+        message(STATUS "Auto-setting BUILD_EXECUTABLE: ON (Desktop platform)")
+    endif()
 endif()
-option(BUILD_EXECUTABLE "Build a statically linked executable" ${DEFAULT_BUILD_EXECUTABLE})
 
 if(IOS)
     # let Xcode handle the team selection, remove the "-" default which causes an error.

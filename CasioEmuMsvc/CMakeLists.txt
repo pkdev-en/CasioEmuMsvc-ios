@@ -355,6 +355,7 @@ if(BUILD_EXECUTABLE)
         set(TARGET_NAME "CasioEmuMsvc")
     
         if(IOS)
+
             # 1. Copy PNG icon trực tiếp vào bundle (không dùng xcassets)
             set(IOS_ICON_DIR "${CMAKE_SOURCE_DIR}/iOSresources/Assets.xcassets/AppIcon.appiconset")
             set(IOS_ICON_FILES
@@ -442,6 +443,16 @@ if(BUILD_EXECUTABLE)
                 ${APP_ICON}
                 ${LAUNCH_SCREEN}
             )
+            set_target_properties(${TARGET_NAME} PROPERTIES
+                MACOSX_BUNDLE_INFO_STRING "Casio nX-U8/100 & nX-U16/100 Emulator"
+                MACOSX_BUNDLE_BUNDLE_NAME "CasioEmuMsvc"
+                MACOSX_BUNDLE_IDENTIFIER "com.telecomadm1145.casioemumsvc"
+                MACOSX_BUNDLE_GUI_IDENTIFIER "com.telecomadm1145.casioemumsvc"
+                MACOSX_BUNDLE_BUNDLE_VERSION "1.0.0"
+                MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0.0"
+                MACOSX_BUNDLE_COPYRIGHT "Copyright (C) 2024-2026 telecomadm1145"
+                MACOSX_BUNDLE_ICON_FILE "AppIcon.icns"
+            )
         endif()
 
 
@@ -516,6 +527,22 @@ endif()
 # Apply include dirs to target (scoped) to reduce global includes and compiler parsing
 target_include_directories(${TARGET_NAME} PRIVATE ${PROJECT_INCLUDE_DIRS})
 target_include_directories(${TARGET_NAME} BEFORE PRIVATE "${ONLINE_GENERATED_DIR}")
+
+if(NOT CASIOEMU_WEB)
+    FetchContent_Declare(monocypher
+        GIT_REPOSITORY https://github.com/LoupVaillant/Monocypher.git
+        GIT_TAG ab2b16dd619ad5f6979a4fbe69cfa324a6fcc35f
+    )
+    FetchContent_MakeAvailable(monocypher)
+    target_sources(${TARGET_NAME} PRIVATE
+        "${monocypher_SOURCE_DIR}/src/monocypher.c"
+        "${monocypher_SOURCE_DIR}/src/optional/monocypher-ed25519.c"
+    )
+    target_include_directories(${TARGET_NAME} PRIVATE
+        "${monocypher_SOURCE_DIR}/src"
+        "${monocypher_SOURCE_DIR}/src/optional"
+    )
+endif()
 
 if(NOT CASIOEMU_WEB)
     FetchContent_Declare(monocypher

@@ -46,7 +46,6 @@
 #include <unordered_map>
 #include <vector>
 #include <sstream>
-
 #ifdef ENABLE_SENTRY
 #include <sentry.h>
 #endif
@@ -100,7 +99,7 @@ void SaveUIState() {
 }
 
 #ifdef __IOS__
-#include "iOSNativeBridge.h"
+#include "IOSNativeBridge.h"
 #endif
 
 static float screenshot_toast_timer = 0.0f;
@@ -120,7 +119,6 @@ void RenderStatusBar() {
 
 #ifdef __IOS__
 	// Thêm safe area bottom (home indicator iPhone)
-	extern float getSafeBottom();
 	float safeBottom = getSafeBottom();
 	if (safeBottom < 0.0f) safeBottom = 0.0f;
 	float posY = viewport->Pos.y + viewport->Size.y - barHeight - safeBottom;
@@ -708,37 +706,6 @@ void gui_loop() {
 #endif
 #endif
 }
-// =====================================================================================
-
-class ErrorLogWindow : public UIWindow {
-public:
-    ErrorLogWindow() : UIWindow("Error Log") {}
-    virtual void RenderCore() override {
-        if (ImGui::Button("Copy All")) {
-            std::string full_log;
-            for (const auto& line : g_error_logs) full_log += line + "\n";
-            ImGui::SetClipboardText(full_log.c_str());
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Clear")) g_error_logs.clear();
-        ImGui::SameLine();
-        ImGui::TextDisabled("(max %zu lines)", MAX_ERROR_LOGS);
-        ImGui::Separator();
-        ImGui::BeginChild("ErrorLogScrolling", ImVec2(0,0), false, ImGuiWindowFlags_HorizontalScrollbar);
-        for (const auto& line : g_error_logs) {
-            if (line.find("Function:") == 0)
-                ImGui::TextColored(ImVec4(0.2f,0.8f,0.2f,1.0f), "%s", line.c_str());
-            else if (line.find("0x") != std::string::npos)
-                ImGui::TextColored(ImVec4(0.3f,0.6f,1.0f,1.0f), "%s", line.c_str());
-            else
-                ImGui::TextWrapped("%s", line.c_str());
-        }
-        if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
-            ImGui::SetScrollHereY(1.0f);
-        ImGui::EndChild();
-    }
-};
-
 static CodeViewer* CreateDebuggerGuiWindows() {
 	while (!me_mmu)
 		std::this_thread::sleep_for(std::chrono::microseconds(1));
@@ -803,7 +770,6 @@ static CodeViewer* CreateDebuggerGuiWindows() {
 	return 0;
 }
 
-#ifndef CASIOEMU_CORE_WEB
 CodeViewer* test_gui(bool* guiCreated, SDL_Window* wnd, SDL_Renderer* rnd) {
     SDL_SetHint(SDL_HINT_IME_SHOW_UI, "1");
     if (window || renderer) {

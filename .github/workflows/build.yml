@@ -36,28 +36,7 @@ jobs:
       github.event_name != 'workflow_dispatch' ||
       github.event.inputs.target != 'web'
     strategy:
-      matrix:
-        include:
-          - platform: windows
-            platform_arch: x64
-            os: windows-latest
-            name: "Windows-x64"
-          - platform: windows
-            platform_arch: x86
-            os: windows-latest
-            name: "Windows-x86"
-          - platform: android
-            os: ubuntu-latest
-            name: "Android"
-          - platform: mac
-            os: macos-latest
-            name: "macOS"
-          - platform: linux
-            os: ubuntu-latest
-            name: "Linux-x64"
-          - platform: ios
-            os: macos-latest
-            name: "iOS"
+      matrix: ${{ fromJSON(github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'windows-x64' && '{"include":[{"platform":"windows","platform_arch":"x64","os":"windows-latest","name":"Windows-x64"}]}' || github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'windows-x86' && '{"include":[{"platform":"windows","platform_arch":"x86","os":"windows-latest","name":"Windows-x86"}]}' || github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'android' && '{"include":[{"platform":"android","os":"ubuntu-latest","name":"Android"}]}' || github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'linux' && '{"include":[{"platform":"linux","os":"ubuntu-latest","name":"Linux-x64"}]}' || github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'macos' && '{"include":[{"platform":"macos","os":"macos-latest","name":"macOS-universal"}]}' || github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'ios' && '{"include":[{"platform":"ios","os":"macos-latest","name":"iOS"}]}' || '{"include":[{"platform":"windows","platform_arch":"x64","os":"windows-latest","name":"Windows-x64"},{"platform":"windows","platform_arch":"x86","os":"windows-latest","name":"Windows-x86"},{"platform":"android","os":"ubuntu-latest","name":"Android"},{"platform":"linux","os":"ubuntu-latest","name":"Linux-x64"},{"platform":"macos","os":"macos-latest","name":"macOS-universal"},{"platform":"ios","os":"macos-latest","name":"iOS"}]}') }}
     
     runs-on: ${{ matrix.os }}
     name: Build ${{ matrix.name }}
@@ -373,6 +352,93 @@ jobs:
       run: |
         find . -name "CMakeError.log" -exec cat {} \;
         find . -name "CMakeOutput.log" -exec cat {} \;
+
+    - name: Configure CMake
+      if: matrix.platform == 'macos'
+      working-directory: ${{env.GITHUB_WORKSPACE}}
+      run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ env.BUILD_CONFIGURATION }} -DBUILD_EXECUTABLE=ON -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64"
+
+    - name: Build with CMake
+      if: matrix.platform == 'macos'
+      working-directory: ${{env.GITHUB_WORKSPACE}}
+      run: cmake --build build --config ${{ env.BUILD_CONFIGURATION }} --parallel
+
+    - name: Code Sign App Bundle
+      if: matrix.platform == 'macos'
+      working-directory: ${{env.GITHUB_WORKSPACE}}
+      run: codesign --force --deep --sign - build/CasioEmuMsvc/CasioEmuMsvc.app # it may seem unnecessary but it is for precautionary purposes
+
+    - name: Package App Bundle
+      if: matrix.platform == 'macos'
+      working-directory: build/CasioEmuMsvc
+      run: ditto -c -k --sequesterRsrc --keepParent CasioEmuMsvc.app CasioEmuMsvc-macos.zip
+
+    - name: Upload macOS Build Artifact
+      if: matrix.platform == 'macos'
+      uses: actions/upload-artifact@v7
+      with:
+        path: build/CasioEmuMsvc/CasioEmuMsvc-macos.zip
+        if-no-files-found: error
+        archive: false
+
+  web-build:
+    runs-on: ubuntu-latest
+    name: Build Web
+    if: >-
+      github.event_name != 'workflow_dispatch' ||
+      github.event.inputs.target == 'all' ||
+      github.event.inputs.target == 'web'
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v7
+      with:
+        submodules: recursive
+
+    - name: Install build tools
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake ninja-build python3 python3-pip
+
+    - name: Install Emscripten
+      run: |
+        git clone https://github.com/emscripten-core/emsdk.git "$RUNNER_TEMP/emsdk"
+        "$RUNNER_TEMP/emsdk/emsdk" install latest
+        "$RUNNER_TEMP/emsdk/emsdk" activate latest
+
+    - name: Build CASIOEMU_WEB
+      run: |
+        source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+        emcmake cmake -S CasioEmuMsvc -B CasioEmuMsvc/build-web -G Ninja \
+          -DCMAKE_BUILD_TYPE=${{ env.BUILD_CONFIGURATION }} \
+          -DCASIOEMU_WEB=ON \
+          -DBUILD_EXECUTABLE=ON
+        cmake --build CasioEmuMsvc/build-web --config ${{ env.BUILD_CONFIGURATION }} --parallel
+
+    - name: Upload CASIOEMU_WEB Artifact
+      uses: actions/upload-artifact@v7
+      with:
+        name: Release-Web-CASIOEMU_WEB
+        path: |
+          CasioEmuMsvc/build-web/CasioEmuWeb.*
+        if-no-files-found: error
+
+    - name: Build CASIOEMU_CORE_WEB
+      run: |
+        source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+        emcmake cmake -S CasioEmuMsvc -B CasioEmuMsvc/build-core-web -G Ninja \
+          -DCMAKE_BUILD_TYPE=${{ env.BUILD_CONFIGURATION }} \
+          -DCASIOEMU_CORE_WEB=ON \
+          -DBUILD_EXECUTABLE=ON
+        cmake --build CasioEmuMsvc/build-core-web --config ${{ env.BUILD_CONFIGURATION }} --parallel
+
+    - name: Upload CASIOEMU_CORE_WEB Artifact
+      uses: actions/upload-artifact@v7
+      with:
+        name: Release-Web-CASIOEMU_CORE_WEB
+        path: |
+          CasioEmuMsvc/build-core-web/CasioEmuCore.*
+        if-no-files-found: error
 
     - name: Configure CMake
       if: matrix.platform == 'macos'

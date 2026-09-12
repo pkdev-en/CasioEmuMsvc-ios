@@ -184,7 +184,7 @@ inline std::string GetCJKFontPath(int* font_no = nullptr) {
 			"/System/Library/Fonts/Supplemental/Arial Unicode.ttf"
 		});
 	}
-	}
+
 #else // Linux
 	// 尝试寻找 CJK 的 Mono 版本 (如果有)，否则使用 Regular
 	candidates.insert(candidates.end(), {
@@ -356,7 +356,6 @@ inline void RebuildFont(float scale = 0.0f) {
 		config.MergeMode = false;
 	}
 #endif
-
 
 	// 2. 合并 CJK 字体
 	const std::string enable_cjk = "Localization.EnableCJK"_l;

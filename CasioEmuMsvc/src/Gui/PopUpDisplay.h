@@ -59,7 +59,7 @@ private:
 	}
 
 public:
-	ScreenMirror(int captureWidth, int captureHeight, bool is_tab)
+	ScreenMirror(int captureWidth, int captureHeight, bool is_tab = false)
 		: UIWindow("Screen Mirror"), is_tab(is_tab), captureWidth(captureWidth), captureHeight(captureHeight), windowId(0), watchingEvents(false) {
 	}
 
@@ -231,4 +231,38 @@ public:
 	}
 
 	bool isAlive() const { return open; }
+
+	// --- API bổ sung từ upstream: cho phép caller (Screen.cpp's
+	// ScreenMirrorComposer) tự vẽ trực tiếp qua nhiều bước thay vì gọi
+	// update() một lần. Giữ song song vì cả hai lối gọi đều tồn tại thật
+	// trong Screen.cpp (xem ScreenMirrorComposer::Render và dòng gọi
+	// mirror->handleEvents() riêng với g_mirror->handleEvent(event)). ---
+	bool handleEvents() {
+		return open;
+	}
+
+	SDL_Renderer* renderer() const {
+		return mirrorRenderer;
+	}
+
+	SDL_Rect contentRect() {
+		int windowWidth = 0, windowHeight = 0;
+		SDL_GetWindowSize(mirrorWindow, &windowWidth, &windowHeight);
+		updateDisplayRect(windowWidth, windowHeight);
+		return displayRect;
+	}
+
+	void clear(const SDL_Color& colour) {
+		if (!open)
+			return;
+
+		SDL_SetRenderDrawColor(mirrorRenderer, colour.r, colour.g, colour.b, colour.a);
+		SDL_RenderClear(mirrorRenderer);
+	}
+
+	void present() {
+		if (!open)
+			return;
+		SDL_RenderPresent(mirrorRenderer);
+	}
 };
