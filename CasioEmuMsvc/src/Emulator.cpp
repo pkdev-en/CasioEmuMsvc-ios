@@ -830,7 +830,9 @@ namespace casioemu {
 		dest.h = render_target_h * uf;
 		dest.x = (w - dest.w) / 2;
 		dest.y = (h - dest.h) / 2;
+#ifndef CASIOEMU_CORE_WEB
 		if (!calculator_as_tab.load()) {
+#endif
 			SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
 			SDL_RenderClear(renderer);
 #ifdef __IOS__
@@ -855,7 +857,9 @@ namespace casioemu {
 			SDL_RenderCopy(renderer, tx, nullptr, &dest);
 			emu_rect = dest;
 #endif
+#ifndef CASIOEMU_CORE_WEB
 		}
+#endif
 
 		Repaint();
 	}
