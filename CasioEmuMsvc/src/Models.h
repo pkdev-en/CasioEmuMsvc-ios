@@ -1,24 +1,31 @@
-﻿#pragma once
+#pragma once
 #include "Gui/hex.hpp"
 #include "ModelInfo.h"
 #include <vector>
 
 namespace casioemu {
 	inline constexpr size_t GetRamBaseAddr(HardwareId hid) {
-		if (hid == HW_EPS6800)
+		if (IsEpsFamily(hid))
 			return 0;
 		if (hid == HW_TI)
 			return 0xB000;
+		if (hid == HW_SOLARII)
+			return 0xE000;
 		return (hid == HW_FX_5800P || hid == HW_ES_PLUS) ? 0x8000 : hid == HW_CLASSWIZ ? 0xD000
 																					   : 0x9000;
 	}
 	inline constexpr size_t GetRamSize(HardwareId hid) {
-		if (hid == HW_EPS6800)
+		if (IsEpsFamily(hid))
 			return 64 * 128;
 		if (hid == HW_TI)
 			return 0xF000 - 0xB000;
+		if (hid == HW_SOLARII)
+			return 0x1000;
 		return (hid == HW_FX_5800P || hid == HW_ES_PLUS) ? 0x0E00 : hid == HW_CLASSWIZ ? 0x2000
 																					   : 0x6000;
+	}
+	inline constexpr size_t GetRamEditorSize(HardwareId hid) {
+		return hid == HW_SOLARII || IsEpsFamily(hid) ? GetRamSize(hid) : 0x10000 - GetRamBaseAddr(hid);
 	}
 #define ColorA ImColor{40, 150, 40, 255}
 #define ColorB ImColor{40, 40, 150, 255}
@@ -554,6 +561,11 @@ namespace casioemu {
 		return hid == HW_ES_PLUS ? 0x8154 : hid == HW_CLASSWIZ ? 0xD180
 															   : 0x9268;
 	}
+	inline constexpr bool HasInputArea(HardwareId hid) {
+		if (IsEpsSegmentLcd(hid))
+			return false;
+		return hid != HW_SOLARII;
+	}
 	inline constexpr size_t GetInputAreaSize(HardwareId hid) {
 		return hid == HW_ES_PLUS ? 100 : 200;
 	}
@@ -563,7 +575,7 @@ namespace casioemu {
 	inline constexpr size_t GetModeOffset(HardwareId hid) {
 		if (hid == HW_TI)
 			return 0xB000;
-		if (hid == HW_EPS6800)
+		if (IsEpsFamily(hid))
 			return 0;
 		return hid == HW_ES_PLUS ? 0x80F9 : hid == HW_CLASSWIZ ? 0xD111
 															   : 0x91A1;
@@ -606,6 +618,9 @@ namespace casioemu {
 	}
 	inline size_t GetReImOffset(HardwareId hid) {
 		if (hid == HW_FX_5800P) {
+			return {};
+		}
+		if (IsEpsFamily(hid)) {
 			return {};
 		}
 		if (hid == HW_TI) {
@@ -688,7 +703,7 @@ namespace casioemu {
 			//	{0xE490 + 16 * i++, "ans"},
 			// }; // Invalid
 		}
-		else if (hid == HW_EPS6800)
+		else if (IsEpsFamily(hid))
 			;
 		else {
 			PANIC("HardwareId");

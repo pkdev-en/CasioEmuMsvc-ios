@@ -116,6 +116,8 @@ RecordStartBtn=Démarrer l'enregistrement
 RecordStopBtn=Arrêter l'enregistrement
 RecordStatus=Enregistrement : %u images
 
+HwController.CaptureScale=Échelle de capture
+HwController.CaptureBackground=Arrière-plan de capture
 HwController.Value1=Seuil de scintillement
 HwController.Value2=Coeff. de luminosité
 HwController.ScreenBufferSelect=Sélection du tampon
@@ -386,5 +388,50 @@ ClickableAddress.BothTooltip=0x%05X — Cliquez pour naviguer
 ClickableAddress.RightClickHint=Clic droit pour plus d'options
 
 MemBP.ColPC=Adresse PC
+
+QrCode.Copy=Copier
+QrCode.OpenUrl=Ouvrir l’URL
+QrCode.StatusFmt=État : %s
+QrCode.Active=Actif
+QrCode.Inactive=Inactif
+QrCode.CompleteFmt=Complet : %s
+QrCode.Yes=Oui
+QrCode.No=Non
+QrCode.VersionFmt=Version : %d
+QrCode.LengthFmt=Longueur : %zu
+QrCode.HistoryFmt=Historique : %zu
+QrCode.RealRomProgressFmt=Progression de capture ROM réelle : page %u / %u, capturé %zu / %u
+QrCode.Current=Actuel
+QrCode.IncompleteCapture=Le code QR est affiché, mais le contenu complet sur plusieurs pages n’a pas encore été capturé.
+QrCode.NoCurrent=Aucun code QR n’est actuellement affiché par la calculatrice.
+QrCode.History=Historique
+QrCode.NoHistory=Aucun code QR n’a été capturé dans cette session.
+QrCode.HistoryEntryFmt=#%llu  Version %d  Longueur %zu
+
+StartupUI.OnlineModels=Modèles en ligne...
+StartupUI.OnlineApiAddress=Adresse de l'API
+StartupUI.OnlineLogin=Se connecter
+StartupUI.OnlineLogout=Se déconnecter
+StartupUI.OnlineLoggedOut=Déconnecté.
+StartupUI.OnlineRelogin=Se reconnecter
+StartupUI.OnlineBrowserOpened=Terminez l'autorisation dans le navigateur.
+StartupUI.OnlineLoginSuccess=Autorisation réussie.
+StartupUI.OnlineLoginExpired=La connexion en ligne a expiré ou les autorisations ont changé. Veuillez vous reconnecter.
+StartupUI.OnlineModelsLoaded=modèles chargés.
+StartupUI.OnlineLaunch=Lancer
+StartupUI.OnlineDownloading=Téléchargement et validation du modèle...
+StartupUI.OnlineLoading=Chargement des modèles en ligne...
+StartupUI.OnlineStartingLogin=Démarrage de l'autorisation dans le navigateur...
+StartupUI.OnlineCompletingLogin=Finalisation de l'autorisation...
+StartupUI.OnlineAuthorizationExpired=L'autorisation du navigateur a expiré. Veuillez vous reconnecter.
+StartupUI.OnlineLoggingOut=Déconnexion...
+StartupUI.OnlineLoginSessionOnly=Autorisation réussie. Le stockage sécurisé du jeton est indisponible ; la connexion ne durera que cette session.
+
+StartupUI.UpdateAvailableTitle=Mise à jour disponible
+StartupUI.UpdateAvailableMessage=Une nouvelle version est disponible :
+StartupUI.ReleaseNotes=Notes de version
+StartupUI.OpenReleasePage=Ouvrir la page de la version
+StartupUI.UpdateLater=Plus tard
+StartupUI.UpdateDismissToday=Ne plus rappeler aujourd'hui
 
 placeholder2=a)"

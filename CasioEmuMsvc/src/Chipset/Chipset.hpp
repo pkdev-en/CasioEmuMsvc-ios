@@ -7,9 +7,12 @@
 #include "Peripheral/ExternalInterrupts.hpp"
 #include "Peripheral/IOPorts.hpp"
 #include <SDL.h>
+#include <condition_variable>
 #include <forward_list>
 #include <iosfwd>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace casioemu {
@@ -51,6 +54,7 @@ namespace casioemu {
 
 		void ConstructPeripherals();
 		void DestructPeripherals();
+		void SetupEpsCpu();
 
 		void ConstructClockGenerator();
 		void GenerateTickForClock();
@@ -73,6 +77,12 @@ namespace casioemu {
 		int LSCLKFreqAddition{};
 
 		bool real_hardware;
+		std::thread eps_ram_save_thread;
+		std::mutex eps_ram_save_thread_mutex;
+		std::condition_variable eps_ram_save_thread_cv;
+		bool eps_ram_save_thread_stop{};
+		/* Serializes PersistEpsRam with other RAM operations and teardown. */
+		std::mutex eps_ram_save_mutex;
 
 	public:
 		void* QueryInterface(const char* name);
@@ -90,12 +100,12 @@ namespace casioemu {
 
 		bool remap = false;
 
-		InterruptSource* MaskableInterrupts;
-		size_t EffectiveMICount;
+		InterruptSource* MaskableInterrupts = nullptr;
+		size_t EffectiveMICount = 0;
 
 		// Reserve these pointers to make it easy for other peripherals to input to pins.
-		IOPorts* ioport;
-		ExternalInterrupts* EXIhandle;
+		IOPorts* ioport = nullptr;
+		ExternalInterrupts* EXIhandle = nullptr;
 
 		bool WDT_enabled = false;
 
@@ -165,11 +175,14 @@ namespace casioemu {
 		void RemovePortInput(int, int);
 
 		void Tick();
+		bool RunEpsFrame(uint32_t idle_timer_cycles = 0);
 		void EmulatorTick();
 		void Frame();
 		void UIEvent(SDL_Event event);
 		void SaveStateAll(std::ostream& os);
 		void LoadStateAll(std::istream& is);
+		void PersistEpsRam();
+		bool ReloadRom(std::string& error);
 
 		template <typename T>
 		T* QueryInterface() {

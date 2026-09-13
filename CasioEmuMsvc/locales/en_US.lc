@@ -116,6 +116,8 @@ RecordStartBtn=Start Recording
 RecordStopBtn=Stop Recording
 RecordStatus=Recording: %u frames
 
+HwController.CaptureScale=Capture scale
+HwController.CaptureBackground=Capture background
 HwController.Value1=Flicker Threshold
 HwController.Value2=Brightness Coeff.
 HwController.ScreenBufferSelect=Buffer Selection
@@ -386,5 +388,50 @@ ClickableAddress.BothTooltip=0x%05X — Click to navigate
 ClickableAddress.RightClickHint=Right-click for more options
 
 MemBP.ColPC=PC Address
+
+QrCode.Copy=Copy
+QrCode.OpenUrl=Open URL
+QrCode.StatusFmt=Status: %s
+QrCode.Active=Active
+QrCode.Inactive=Inactive
+QrCode.CompleteFmt=Complete: %s
+QrCode.Yes=Yes
+QrCode.No=No
+QrCode.VersionFmt=Version: %d
+QrCode.LengthFmt=Length: %zu
+QrCode.HistoryFmt=History: %zu
+QrCode.RealRomProgressFmt=Real ROM capture progress: page %u / %u, captured %zu / %u
+QrCode.Current=Current
+QrCode.IncompleteCapture=QR code is displayed, but full multi-page payload has not been captured yet.
+QrCode.NoCurrent=No QR code is currently displayed by the calculator.
+QrCode.History=History
+QrCode.NoHistory=No QR code has been captured in this session.
+QrCode.HistoryEntryFmt=#%llu  Version %d  Length %zu
+
+StartupUI.OnlineModels=Online models...
+StartupUI.OnlineApiAddress=API address
+StartupUI.OnlineLogin=Sign in
+StartupUI.OnlineLogout=Sign out
+StartupUI.OnlineLoggedOut=Signed out.
+StartupUI.OnlineRelogin=Sign in again
+StartupUI.OnlineBrowserOpened=Complete authorization in the browser.
+StartupUI.OnlineLoginSuccess=Authorization succeeded.
+StartupUI.OnlineLoginExpired=Online login expired or permissions changed. Please sign in again.
+StartupUI.OnlineModelsLoaded=models loaded.
+StartupUI.OnlineLaunch=Launch
+StartupUI.OnlineDownloading=Downloading and validating model...
+StartupUI.OnlineLoading=Loading online models...
+StartupUI.OnlineStartingLogin=Starting browser authorization...
+StartupUI.OnlineCompletingLogin=Completing authorization...
+StartupUI.OnlineAuthorizationExpired=Browser authorization expired. Please sign in again.
+StartupUI.OnlineLoggingOut=Signing out...
+StartupUI.OnlineLoginSessionOnly=Authorization succeeded. Secure token storage is unavailable; sign-in lasts for this run only.
+
+StartupUI.UpdateAvailableTitle=Update available
+StartupUI.UpdateAvailableMessage=A new release is available:
+StartupUI.ReleaseNotes=Release notes
+StartupUI.OpenReleasePage=Open release page
+StartupUI.UpdateLater=Later
+StartupUI.UpdateDismissToday=Don't remind me again today
 
 placeholder2=a)"

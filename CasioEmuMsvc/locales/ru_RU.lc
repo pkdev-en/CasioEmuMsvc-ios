@@ -116,6 +116,8 @@ RecordStartBtn=Начать запись
 RecordStopBtn=Остановить запись
 RecordStatus=Запись: %u кадров
 
+HwController.CaptureScale=Масштаб захвата
+HwController.CaptureBackground=Фон захвата
 HwController.Value1=Порог мерцания
 HwController.Value2=Коэф. яркости
 HwController.ScreenBufferSelect=Выбор буфера экрана
@@ -386,5 +388,50 @@ ClickableAddress.BothTooltip=0x%05X — Нажмите для перехода
 ClickableAddress.RightClickHint=Нажмите правой кнопкой для вывода меню
 
 MemBP.ColPC=Адрес PC
+
+QrCode.Copy=Копировать
+QrCode.OpenUrl=Открыть URL
+QrCode.StatusFmt=Статус: %s
+QrCode.Active=Активен
+QrCode.Inactive=Неактивен
+QrCode.CompleteFmt=Завершено: %s
+QrCode.Yes=Да
+QrCode.No=Нет
+QrCode.VersionFmt=Версия: %d
+QrCode.LengthFmt=Длина: %zu
+QrCode.HistoryFmt=История: %zu
+QrCode.RealRomProgressFmt=Прогресс захвата ROM устройства: страница %u / %u, захвачено %zu / %u
+QrCode.Current=Текущий
+QrCode.IncompleteCapture=QR-код отображается, но полный многостраничный набор данных еще не захвачен.
+QrCode.NoCurrent=Сейчас калькулятор не отображает QR-код.
+QrCode.History=История
+QrCode.NoHistory=В этом сеансе QR-коды еще не захвачены.
+QrCode.HistoryEntryFmt=#%llu  Версия %d  Длина %zu
+
+StartupUI.OnlineModels=Онлайн-модели...
+StartupUI.OnlineApiAddress=Адрес API
+StartupUI.OnlineLogin=Войти
+StartupUI.OnlineLogout=Выйти
+StartupUI.OnlineLoggedOut=Вы вышли из системы.
+StartupUI.OnlineRelogin=Войти снова
+StartupUI.OnlineBrowserOpened=Завершите авторизацию в браузере.
+StartupUI.OnlineLoginSuccess=Авторизация выполнена.
+StartupUI.OnlineLoginExpired=Срок действия онлайн-сеанса истёк или разрешения изменились. Войдите снова.
+StartupUI.OnlineModelsLoaded=модели загружены.
+StartupUI.OnlineLaunch=Запустить
+StartupUI.OnlineDownloading=Загрузка и проверка модели...
+StartupUI.OnlineLoading=Загрузка онлайн-моделей...
+StartupUI.OnlineStartingLogin=Запуск авторизации в браузере...
+StartupUI.OnlineCompletingLogin=Завершение авторизации...
+StartupUI.OnlineAuthorizationExpired=Срок действия авторизации в браузере истёк. Войдите снова.
+StartupUI.OnlineLoggingOut=Выход из системы...
+StartupUI.OnlineLoginSessionOnly=Авторизация выполнена. Безопасное хранение токена недоступно; вход действует только до завершения текущего запуска.
+
+StartupUI.UpdateAvailableTitle=Доступно обновление
+StartupUI.UpdateAvailableMessage=Доступен новый выпуск:
+StartupUI.ReleaseNotes=Примечания к выпуску
+StartupUI.OpenReleasePage=Открыть страницу выпуска
+StartupUI.UpdateLater=Позже
+StartupUI.UpdateDismissToday=Больше не напоминать сегодня
 
 placeholder2=a)"
