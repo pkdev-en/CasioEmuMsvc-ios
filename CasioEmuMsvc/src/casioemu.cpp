@@ -700,15 +700,13 @@ int main(int argc, char* argv[]) {
 		}
 	}
 #endif
-	break;
-	} // end while(true)
-	
 #ifdef ENABLE_SENTRY
 	sentry_close();
 #endif
   DiscordRPC::Shutdown();
 	return 0;
-};
+}
+
 #ifdef __IOS__
 #include <chrono>
 #include <thread>
