@@ -882,7 +882,6 @@ CodeViewer* test_gui(bool* guiCreated, SDL_Window* wnd, SDL_Renderer* rnd) {
     ui_ready = true;
     return result;
 }
-#endif
 
 #ifdef CASIOEMU_CORE_WEB
 void InitWebDebuggerGuiWindows() {
@@ -908,15 +907,6 @@ void CleanupWebDebuggerGuiWindows() {
 #endif
 
 namespace UIHelpers {
-    void JumpToMemory(uint32_t addr) {
-        for (auto* win : windows)
-            if (win->name && strcmp(win->name, "Ram") == 0 && win->GotoMemoryAddress(addr)) return;
-        for (auto* win : windows)
-            if (win->name && strcmp(win->name, "PRam") == 0 && win->GotoMemoryAddress(addr)) return;
-        for (auto* win : windows)
-            if (win->GotoMemoryAddress(addr)) return;
-    }
-
 	void JumpToMemory(uint32_t addr) {
 		// Prefer the "Ram" window; fall back to any window that overrides GotoMemoryAddress.
 		UIWindow* fallback = nullptr;
