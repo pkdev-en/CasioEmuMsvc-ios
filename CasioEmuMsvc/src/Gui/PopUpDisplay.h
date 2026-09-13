@@ -69,7 +69,7 @@ public:
 
 	bool create() {
 		if (is_tab) {
-			mirrorTexture = SDL_CreateTexture(renderer,
+			mirrorTexture = SDL_CreateTexture(::renderer,
 				SDL_PIXELFORMAT_RGBA32,
 				SDL_TEXTUREACCESS_STREAMING,
 				captureWidth, captureHeight);
