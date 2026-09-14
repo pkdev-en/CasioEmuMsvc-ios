@@ -311,6 +311,7 @@ static void RenderToolbarContent(ImGuiViewport* viewport) {
         if (ImGui::TabItemButton(isPaused ? "[>] Resume" : "[||] Pause"))
             m_emu->SetPaused(!isPaused);
 
+#ifndef CASIOEMU_CORE_WEB
         if (ImGui::TabItemButton("[C] Screenshot"))
             ImGui::OpenPopup("ScreenshotMenuPopup");
         ImGui::SetNextWindowPos(ImVec2(ImGui::GetItemRectMin().x, ImGui::GetItemRectMax().y + 4.0f));
@@ -347,6 +348,7 @@ static void RenderToolbarContent(ImGuiViewport* viewport) {
                 ImGui::EndPopup();
             }
         }
+#endif
 
         if (ImGui::TabItemButton(ThemeManager::Instance().Settings().isDarkMode ? "Light Theme" : "Dark Theme")) {
             if (ThemeManager::Instance().Settings().isDarkMode)
@@ -358,6 +360,7 @@ static void RenderToolbarContent(ImGuiViewport* viewport) {
         ImGui::EndTabBar();
     }
 
+#ifndef CASIOEMU_CORE_WEB
     if (m_emu->screenshot_taken.exchange(false))
         screenshot_toast_timer = 3.0f;
 
@@ -371,6 +374,7 @@ static void RenderToolbarContent(ImGuiViewport* viewport) {
         ImGui::SameLine(ImGui::GetWindowWidth() - (screenshot_toast_timer > 0.0f ? 450.0f : 200.0f));
         ImGui::TextColored(ImVec4(1.0f,0.2f,0.2f,1.0f), "[O] Recording: %u frames", m_emu->recording_frame_count.load());
     }
+#endif
 }
 
 void RenderDebuggerToolbar() {
@@ -594,7 +598,9 @@ void gui_loop() {
 
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
+#ifndef CASIOEMU_CORE_WEB
         ImGui_ImplSDL2_ProcessEvent(&event);
+#endif
 
         if (event.type == SDL_MOUSEBUTTONDOWN || event.type == SDL_FINGERDOWN) {
             int x, y;
@@ -623,8 +629,10 @@ void gui_loop() {
         }
     }
 
+#ifndef CASIOEMU_CORE_WEB
     ImGui_ImplSDLRenderer2_NewFrame();
     ImGui_ImplSDL2_NewFrame();
+#endif
     ImGui::NewFrame();
 
 #if !defined(__ANDROID__) && !defined(__IOS__)
@@ -700,7 +708,9 @@ void gui_loop() {
     RenderStatusBar();
 #endif
     ImGui::Render();
+#ifndef CASIOEMU_CORE_WEB
     ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData());
+#endif
 #ifndef SINGLE_WINDOW
     SDL_RenderPresent(renderer);
 #endif
@@ -832,8 +842,10 @@ CodeViewer* test_gui(bool* guiCreated, SDL_Window* wnd, SDL_Renderer* rnd) {
     io.WantCaptureKeyboard = true;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+#ifndef CASIOEMU_CORE_WEB
     ImGui_ImplSDL2_InitForSDLRenderer(window, renderer);
     ImGui_ImplSDLRenderer2_Init(renderer);
+#endif
     if (guiCreated) *guiCreated = true;
 
     g_toolbar_posY          = -1.0f;
@@ -1013,15 +1025,17 @@ void gui_cleanup() {
         ThemeManager::Instance().SaveSettings();
     }
 #endif
-#endif
+#ifndef CASIOEMU_CORE_WEB
     ImGui_ImplSDLRenderer2_Shutdown();
     ImGui_ImplSDL2_Shutdown();
+#endif
     ImGui::DestroyContext();
     SaveUIState();
     windows.clear();
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();
+#endif
 #else
 	CleanupWebDebuggerGuiWindows();
 #endif
