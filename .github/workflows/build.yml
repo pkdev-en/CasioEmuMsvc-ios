@@ -47,6 +47,10 @@ jobs:
       with:
         submodules: recursive
 
+    - name: Patch SDL_image CMakeLists for iOS ImageIO frameworks
+      if: matrix.platform == 'ios'
+      run: cp patches/SDL_image_CMakeLists.txt SDL_image/CMakeLists.txt
+
     - name: Configure CMake
       if: matrix.platform == 'windows'
       working-directory: ${{env.GITHUB_WORKSPACE}}
