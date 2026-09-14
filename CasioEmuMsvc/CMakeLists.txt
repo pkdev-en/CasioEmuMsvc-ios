@@ -321,6 +321,14 @@ else()
     else()
         set(APPLE_MM_SOURCES "")
     endif()
+    if(APPLE AND NOT IOS)
+        # SysDialog.mm (NSOpenPanel-based) is the macOS implementation;
+        # SysDialog.cpp's __APPLE__ branch also defines the same symbols
+        # (an older AppleScript-based fallback), so it must be excluded here
+        # to avoid duplicate-symbol link errors. It stays in the build on
+        # iOS, where it's compiled as Objective-C++ for the native picker.
+        list(FILTER MAIN_SOURCES_EXT EXCLUDE REGEX "SysDialog\\.cpp$")
+    endif()
     set(MAIN_SOURCES
         ${MAIN_SOURCES_ROOT}
         ${MAIN_SOURCES_MINIZ}
