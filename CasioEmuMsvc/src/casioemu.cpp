@@ -387,7 +387,6 @@ int main(int argc, char* argv[]) {
 				return -1;
 			}
 		}
-	}
 
 	// After startupui has done its job:
 	// startupui doesn't need that.
@@ -700,6 +699,9 @@ int main(int argc, char* argv[]) {
 		}
 	}
 #endif
+	break;
+	}
+
 #ifdef ENABLE_SENTRY
 	sentry_close();
 #endif
