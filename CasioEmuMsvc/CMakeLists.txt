@@ -680,29 +680,36 @@ elseif(BUILD_EXECUTABLE)
         target_link_libraries(${TARGET_NAME} PRIVATE asmjit::asmjit)
     endif()
 
-    find_package(CURL QUIET)
-    if(NOT CURL_FOUND)
-        include(FetchContent)
-        set(BUILD_CURL_EXE OFF CACHE BOOL "" FORCE)
-        set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-        set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
-        set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-        if(WIN32)
-            set(CURL_USE_SCHANNEL ON CACHE BOOL "" FORCE)
+    if(NOT IOS)
+        # UpdateChecker.cpp only uses curl on non-Android, non-iOS platforms
+        # (Android uses JNI, iOS update-checking is disabled - see
+        # UpdateChecker.cpp). Cross-compiling curl (or discovering it via
+        # find_package) for iOS with the Xcode generator is unreliable, so
+        # we skip curl entirely for iOS builds.
+        find_package(CURL QUIET)
+        if(NOT CURL_FOUND)
+            include(FetchContent)
+            set(BUILD_CURL_EXE OFF CACHE BOOL "" FORCE)
+            set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+            set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+            set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+            if(WIN32)
+                set(CURL_USE_SCHANNEL ON CACHE BOOL "" FORCE)
+            endif()
+            set(CURL_USE_LIBPSL OFF CACHE BOOL "" FORCE)
+            set(CURL_USE_LIBSSH2 OFF CACHE BOOL "" FORCE)
+            set(CURL_ZLIB OFF CACHE STRING "" FORCE)
+            set(CURL_DISABLE_LDAP ON CACHE BOOL "" FORCE)
+            set(CURL_DISABLE_LDAPS ON CACHE BOOL "" FORCE)
+            FetchContent_Declare(curl
+                GIT_REPOSITORY https://github.com/curl/curl.git
+                GIT_TAG curl-8_11_1
+                GIT_SHALLOW TRUE
+            )
+            FetchContent_MakeAvailable(curl)
         endif()
-        set(CURL_USE_LIBPSL OFF CACHE BOOL "" FORCE)
-        set(CURL_USE_LIBSSH2 OFF CACHE BOOL "" FORCE)
-        set(CURL_ZLIB OFF CACHE STRING "" FORCE)
-        set(CURL_DISABLE_LDAP ON CACHE BOOL "" FORCE)
-        set(CURL_DISABLE_LDAPS ON CACHE BOOL "" FORCE)
-        FetchContent_Declare(curl
-            GIT_REPOSITORY https://github.com/curl/curl.git
-            GIT_TAG curl-8_11_1
-            GIT_SHALLOW TRUE
-        )
-        FetchContent_MakeAvailable(curl)
+        target_link_libraries(${TARGET_NAME} PRIVATE CURL::libcurl)
     endif()
-    target_link_libraries(${TARGET_NAME} PRIVATE CURL::libcurl)
     if(WIN32)
         target_link_libraries(${TARGET_NAME} PRIVATE
             SDL2::SDL2main
