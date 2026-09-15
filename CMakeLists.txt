@@ -80,6 +80,21 @@ endif()
 # SDL sources are in a subfolder named "SDL"
 add_subdirectory(SDL)
 
+# On iOS, SDL2 builds as its own dylib (libSDL2.dylib) separate from the
+# main executable's dylib. SDLUIKitDelegate is defined in
+# SDL/src/video/uikit/SDL_uikitappdelegate.m and only referenced from
+# outside libSDL2.dylib -- CasioEmuAppDelegate.mm subclasses it in the
+# 'main' target. Nothing inside libSDL2.dylib itself calls it, so with
+# -dead_strip on (Xcode's default dylib link), the linker treats that
+# class's Objective-C metadata as unused and strips it from the dylib.
+# main then fails to link with "Undefined symbols ... _OBJC_CLASS_$_SDLUIKitDelegate"
+# even though SDL_uikitappdelegate.m compiled without error. -ObjC forces
+# the linker to keep every class/category from any object file that
+# defines one, which is exactly what's needed here.
+if(IOS AND TARGET SDL2)
+    target_link_options(SDL2 PRIVATE "-ObjC")
+endif()
+
 # Compilation of companion libraries
 set(SDL2IMAGE_AVIF OFF CACHE BOOL "Disable AVIF" FORCE)
 set(SDL2IMAGE_WEBP OFF CACHE BOOL "Disable WEBP" FORCE)
