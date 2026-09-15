@@ -286,10 +286,16 @@ jobs:
     - name: Build for iOS
       if: matrix.platform == 'ios'
       run: |
-        # Build without code signing - sign manually in the .ipa step.
-        # Setting CODE_SIGNING_ALLOWED=NO on ALL_BUILD prevents the
-        # "conflicting provisioning settings" error on SDL subprojects.
-        cmake -S . -B build -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+        set -e
+
+        rm -rf build
+
+        cmake -S . -B build -G Xcode \
+          -DCMAKE_SYSTEM_NAME=iOS \
+          -DCMAKE_OSX_SYSROOT=iphoneos \
+          -DCMAKE_OSX_ARCHITECTURES=arm64 \
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+          -DBUILD_EXECUTABLE=ON \
           -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
           -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
           -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY="" \
