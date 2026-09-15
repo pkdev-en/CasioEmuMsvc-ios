@@ -258,7 +258,7 @@ file(GLOB MAIN_SOURCES_TINYXML2 "${TINYXML2_DIR}/*.cpp")
 file(GLOB MAIN_SOURCES_CHIPSET "${SOURCE_DIR}/Chipset/*.cpp")
 file(GLOB MAIN_SOURCES_EPS6800_CORE "${SOURCE_DIR}/Chipset/EPS6800Core/*.c")
 file(GLOB MAIN_SOURCES_CRASH "${SOURCE_DIR}/CrashHandler/*.cpp")
-file(GLOB MAIN_SOURCES_EXT "${SOURCE_DIR}/Ext/*.cpp" "${SOURCE_DIR}/Ext/*.mm")
+file(GLOB MAIN_SOURCES_EXT "${SOURCE_DIR}/Ext/*.cpp")
 file(GLOB MAIN_SOURCES_EXT_CAM "${SOURCE_DIR}/Ext/cam/*.cc")
 file(GLOB MAIN_SOURCES_ROP "${SOURCE_DIR}/Rop/*.cpp")
 file(GLOB MAIN_SOURCES_GUI "${SOURCE_DIR}/Gui/*.cpp")
@@ -290,6 +290,8 @@ if(CASIOEMU_WEB)
         ${MAIN_SOURCES_PERIPHERAL}
         ${MAIN_SOURCES_WEB}
     )
+    # .mm (Objective-C++) sources never belong in the Web build: Emscripten
+    # has no Apple SDK, so TargetConditionals.h and friends do not exist.
     if(CASIOEMU_CORE_WEB)
         list(APPEND MAIN_SOURCES
             ${MAIN_SOURCES_IMGUI}
