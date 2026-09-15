@@ -328,6 +328,29 @@ else()
     else()
         set(APPLE_MM_SOURCES "")
     endif()
+    if(IOS)
+        # SysDialog.cpp needs to be compiled as Objective-C++ on iOS (it
+        # imports UIKit under __APPLE__/TARGET_OS_IPHONE). Two different
+        # CMake mechanisms for forcing that on a .cpp file under the Xcode
+        # generator -- COMPILE_FLAGS "-x objective-c++" and
+        # XCODE_EXPLICIT_FILE_TYPE "sourcecode.cpp.objcpp" -- have both been
+        # tried here and neither is honored by this generator/Xcode version:
+        # the actual compile invocation still shows up as `-x c++` /
+        # `... c++ com.apple.compilers.llvm.clang...` and Foundation/UIKit's
+        # Objective-C headers fail to parse (@class/@protocol syntax errors).
+        # The only mechanism that reliably works is the file *extension*,
+        # which Xcode uses to pick the compiler language before any CMake
+        # source property is applied. So for iOS we copy SysDialog.cpp to a
+        # generated .mm file at configure time and build that copy instead.
+        set(SYSDIALOG_IOS_MM "${CMAKE_CURRENT_BINARY_DIR}/generated/SysDialog.mm")
+        configure_file(
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/Ext/SysDialog.cpp"
+            "${SYSDIALOG_IOS_MM}"
+            COPYONLY
+        )
+        list(FILTER MAIN_SOURCES_EXT EXCLUDE REGEX "SysDialog\\.cpp$")
+        list(APPEND APPLE_MM_SOURCES "${SYSDIALOG_IOS_MM}")
+    endif()
     set(MAIN_SOURCES
         ${MAIN_SOURCES_ROOT}
         ${MAIN_SOURCES_MINIZ}
@@ -712,16 +735,10 @@ elseif(BUILD_EXECUTABLE)
             "-framework SafariServices"
         )
 
-        # Compile SysDialog.cpp as Objective-C++ for iOS native file picker.
-        # NOTE: under the Xcode generator, COMPILE_FLAGS "-x objective-c++" is
-        # not honored — Xcode picks the compiler invocation from the file
-        # extension (.cpp -> -x c++) before CMake's extra flags are applied,
-        # so the override silently loses and Foundation/UIKit headers get
-        # parsed as plain C++, breaking on @class/@protocol syntax.
-        # XCODE_EXPLICIT_FILE_TYPE is the property Xcode itself checks.
-        set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/src/Ext/SysDialog.cpp PROPERTIES
-            XCODE_EXPLICIT_FILE_TYPE "sourcecode.cpp.objcpp"
-        )
+        # NOTE: SysDialog.cpp is compiled for iOS from a generated .mm copy
+        # (see SYSDIALOG_IOS_MM above), not via a source-file-property
+        # override on the .cpp -- see the comment at APPLE_MM_SOURCES for
+        # why those overrides don't take effect under this generator.
 
         set_target_properties(${TARGET_NAME} PROPERTIES
             XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
