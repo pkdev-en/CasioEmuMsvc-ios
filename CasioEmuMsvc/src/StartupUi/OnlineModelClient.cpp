@@ -6,9 +6,9 @@
 #include "monocypher-ed25519.h"
 
 #include <algorithm>
-#ifndef __ANDROID__
+#if !defined(__ANDROID__) && !defined(__IOS__)
 #include <curl/curl.h>
-#else
+#elif defined(__ANDROID__)
 #include <jni.h>
 #include <SDL_system.h>
 #endif
@@ -46,7 +46,7 @@ namespace casioemu {
 			std::vector<std::uint8_t> body;
 		};
 
-#ifndef __ANDROID__
+#if !defined(__ANDROID__) && !defined(__IOS__)
 		size_t CurlWrite(void* data, size_t size, size_t count, void* user_data) {
 			auto& output = *static_cast<std::vector<std::uint8_t>*>(user_data);
 			if (size != 0 && count > kMaxOnlineResponseSize / size) return 0;
@@ -215,6 +215,8 @@ namespace casioemu {
 			auto result = AndroidHttpRequest(url, body, user_agent, android_headers);
 			VerifyServerResponse(result, canonical);
 			return result;
+#elif defined(__IOS__)
+			throw std::runtime_error("Online model service is not available on iOS yet.");
 #else
 
 			CURL* curl = curl_easy_init();
