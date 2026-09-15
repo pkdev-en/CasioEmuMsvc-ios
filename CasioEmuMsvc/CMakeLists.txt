@@ -258,7 +258,7 @@ file(GLOB MAIN_SOURCES_TINYXML2 "${TINYXML2_DIR}/*.cpp")
 file(GLOB MAIN_SOURCES_CHIPSET "${SOURCE_DIR}/Chipset/*.cpp")
 file(GLOB MAIN_SOURCES_EPS6800_CORE "${SOURCE_DIR}/Chipset/EPS6800Core/*.c")
 file(GLOB MAIN_SOURCES_CRASH "${SOURCE_DIR}/CrashHandler/*.cpp")
-file(GLOB MAIN_SOURCES_EXT "${SOURCE_DIR}/Ext/*.cpp")
+file(GLOB MAIN_SOURCES_EXT "${SOURCE_DIR}/Ext/*.cpp" "${SOURCE_DIR}/Ext/*.mm")
 file(GLOB MAIN_SOURCES_EXT_CAM "${SOURCE_DIR}/Ext/cam/*.cc")
 file(GLOB MAIN_SOURCES_ROP "${SOURCE_DIR}/Rop/*.cpp")
 file(GLOB MAIN_SOURCES_GUI "${SOURCE_DIR}/Gui/*.cpp")
@@ -321,22 +321,6 @@ else()
     else()
         set(APPLE_MM_SOURCES "")
     endif()
-    if(APPLE AND NOT IOS)
-        # SysDialog.mm (NSOpenPanel-based) is the macOS implementation;
-        # SysDialog.cpp's __APPLE__ branch also defines the same symbols
-        # (an older AppleScript-based fallback), so it must be excluded here
-        # to avoid duplicate-symbol link errors. It stays in the build on
-        # iOS, where it's compiled as Objective-C++ for the native picker.
-        list(FILTER MAIN_SOURCES_EXT EXCLUDE REGEX "SysDialog\\.cpp$")
-    endif()
-    if(IOS)
-        # SysDialog.mm hard-codes #import <AppKit/AppKit.h>, which doesn't
-        # exist on the iOS SDK. It's the macOS implementation only -- on
-        # iOS, SysDialog.cpp's TARGET_OS_IPHONE branch (UIDocumentPicker-
-        # based) is the real implementation, so drop the .mm from the
-        # iOS source list to avoid the missing-header build failure.
-        list(FILTER APPLE_MM_SOURCES EXCLUDE REGEX "SysDialog\\.mm$")
-    endif()
     set(MAIN_SOURCES
         ${MAIN_SOURCES_ROOT}
         ${MAIN_SOURCES_MINIZ}
@@ -371,7 +355,6 @@ if(BUILD_EXECUTABLE)
         set(TARGET_NAME "CasioEmuMsvc")
     
         if(IOS)
-
             # 1. Copy PNG icon trực tiếp vào bundle (không dùng xcassets)
             set(IOS_ICON_DIR "${CMAKE_SOURCE_DIR}/iOSresources/Assets.xcassets/AppIcon.appiconset")
             set(IOS_ICON_FILES
@@ -459,16 +442,6 @@ if(BUILD_EXECUTABLE)
                 ${APP_ICON}
                 ${LAUNCH_SCREEN}
             )
-            set_target_properties(${TARGET_NAME} PROPERTIES
-                MACOSX_BUNDLE_INFO_STRING "Casio nX-U8/100 & nX-U16/100 Emulator"
-                MACOSX_BUNDLE_BUNDLE_NAME "CasioEmuMsvc"
-                MACOSX_BUNDLE_IDENTIFIER "com.telecomadm1145.casioemumsvc"
-                MACOSX_BUNDLE_GUI_IDENTIFIER "com.telecomadm1145.casioemumsvc"
-                MACOSX_BUNDLE_BUNDLE_VERSION "1.0.0"
-                MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0.0"
-                MACOSX_BUNDLE_COPYRIGHT "Copyright (C) 2024-2026 telecomadm1145"
-                MACOSX_BUNDLE_ICON_FILE "AppIcon.icns"
-            )
         endif()
 
 
@@ -543,22 +516,6 @@ endif()
 # Apply include dirs to target (scoped) to reduce global includes and compiler parsing
 target_include_directories(${TARGET_NAME} PRIVATE ${PROJECT_INCLUDE_DIRS})
 target_include_directories(${TARGET_NAME} BEFORE PRIVATE "${ONLINE_GENERATED_DIR}")
-
-if(NOT CASIOEMU_WEB)
-    FetchContent_Declare(monocypher
-        GIT_REPOSITORY https://github.com/LoupVaillant/Monocypher.git
-        GIT_TAG ab2b16dd619ad5f6979a4fbe69cfa324a6fcc35f
-    )
-    FetchContent_MakeAvailable(monocypher)
-    target_sources(${TARGET_NAME} PRIVATE
-        "${monocypher_SOURCE_DIR}/src/monocypher.c"
-        "${monocypher_SOURCE_DIR}/src/optional/monocypher-ed25519.c"
-    )
-    target_include_directories(${TARGET_NAME} PRIVATE
-        "${monocypher_SOURCE_DIR}/src"
-        "${monocypher_SOURCE_DIR}/src/optional"
-    )
-endif()
 
 if(NOT CASIOEMU_WEB)
     FetchContent_Declare(monocypher
@@ -688,36 +645,29 @@ elseif(BUILD_EXECUTABLE)
         target_link_libraries(${TARGET_NAME} PRIVATE asmjit::asmjit)
     endif()
 
-    if(NOT IOS)
-        # UpdateChecker.cpp only uses curl on non-Android, non-iOS platforms
-        # (Android uses JNI, iOS update-checking is disabled - see
-        # UpdateChecker.cpp). Cross-compiling curl (or discovering it via
-        # find_package) for iOS with the Xcode generator is unreliable, so
-        # we skip curl entirely for iOS builds.
-        find_package(CURL QUIET)
-        if(NOT CURL_FOUND)
-            include(FetchContent)
-            set(BUILD_CURL_EXE OFF CACHE BOOL "" FORCE)
-            set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-            set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
-            set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-            if(WIN32)
-                set(CURL_USE_SCHANNEL ON CACHE BOOL "" FORCE)
-            endif()
-            set(CURL_USE_LIBPSL OFF CACHE BOOL "" FORCE)
-            set(CURL_USE_LIBSSH2 OFF CACHE BOOL "" FORCE)
-            set(CURL_ZLIB OFF CACHE STRING "" FORCE)
-            set(CURL_DISABLE_LDAP ON CACHE BOOL "" FORCE)
-            set(CURL_DISABLE_LDAPS ON CACHE BOOL "" FORCE)
-            FetchContent_Declare(curl
-                GIT_REPOSITORY https://github.com/curl/curl.git
-                GIT_TAG curl-8_11_1
-                GIT_SHALLOW TRUE
-            )
-            FetchContent_MakeAvailable(curl)
+    find_package(CURL QUIET)
+    if(NOT CURL_FOUND)
+        include(FetchContent)
+        set(BUILD_CURL_EXE OFF CACHE BOOL "" FORCE)
+        set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+        set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+        set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+        if(WIN32)
+            set(CURL_USE_SCHANNEL ON CACHE BOOL "" FORCE)
         endif()
-        target_link_libraries(${TARGET_NAME} PRIVATE CURL::libcurl)
+        set(CURL_USE_LIBPSL OFF CACHE BOOL "" FORCE)
+        set(CURL_USE_LIBSSH2 OFF CACHE BOOL "" FORCE)
+        set(CURL_ZLIB OFF CACHE STRING "" FORCE)
+        set(CURL_DISABLE_LDAP ON CACHE BOOL "" FORCE)
+        set(CURL_DISABLE_LDAPS ON CACHE BOOL "" FORCE)
+        FetchContent_Declare(curl
+            GIT_REPOSITORY https://github.com/curl/curl.git
+            GIT_TAG curl-8_11_1
+            GIT_SHALLOW TRUE
+        )
+        FetchContent_MakeAvailable(curl)
     endif()
+    target_link_libraries(${TARGET_NAME} PRIVATE CURL::libcurl)
     if(WIN32)
         target_link_libraries(${TARGET_NAME} PRIVATE
             SDL2::SDL2main
