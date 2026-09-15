@@ -269,6 +269,11 @@ file(GLOB MAIN_SOURCES_PLUGIN "${SOURCE_DIR}/Plugin/*.cpp")
 file(GLOB MAIN_SOURCES_STARTUP CONFIGURE_DEPENDS "${SOURCE_DIR}/StartupUi/*.cpp")
 file(GLOB MAIN_SOURCES_WEB "${SOURCE_DIR}/Web/*.cpp")
 file(GLOB MAIN_SOURCES_EXT_MM "${SOURCE_DIR}/Ext/*.mm")
+# SysDialog.mm is stale: SysDialog.cpp already implements the same
+# SystemDialogs:: functions under #ifdef __APPLE__ (compiled as
+# Objective-C++ via COMPILE_FLAGS "-x objective-c++"). Keeping both caused
+# "duplicate symbol" errors at macOS link time.
+list(FILTER MAIN_SOURCES_EXT_MM EXCLUDE REGEX "SysDialog\\.mm$")
 
 if(CASIOEMU_WEB)
     list(FILTER MAIN_SOURCES_ROOT EXCLUDE REGEX "casioemu\\.cpp$")
