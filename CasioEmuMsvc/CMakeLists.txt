@@ -501,6 +501,14 @@ else()
     add_library(${TARGET_NAME} SHARED ${MAIN_SOURCES})
 endif()
 
+if(IOS)
+    find_library(SECURITY_FRAMEWORK Security REQUIRED)
+
+    target_link_libraries(${TARGET_NAME} PRIVATE
+        ${SECURITY_FRAMEWORK}
+    )
+endif()
+
 if(APPLE AND NOT IOS)
     set_target_properties(${TARGET_NAME} PROPERTIES
         MACOSX_BUNDLE_INFO_PLIST
