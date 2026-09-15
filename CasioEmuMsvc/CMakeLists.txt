@@ -502,10 +502,17 @@ else()
 endif()
 
 if(IOS)
-    find_library(SECURITY_FRAMEWORK Security REQUIRED)
-
     target_link_libraries(${TARGET_NAME} PRIVATE
-        ${SECURITY_FRAMEWORK}
+        "-framework Foundation"
+        "-framework UIKit"
+        "-framework CoreGraphics"
+        "-framework QuartzCore"
+        "-framework Metal"
+        "-framework ImageIO"
+        "-framework MobileCoreServices"
+        "-framework UniformTypeIdentifiers"
+        "-framework SafariServices"
+        "-framework Security"
     )
 endif()
 
