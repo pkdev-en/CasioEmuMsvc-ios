@@ -329,6 +329,14 @@ else()
         # iOS, where it's compiled as Objective-C++ for the native picker.
         list(FILTER MAIN_SOURCES_EXT EXCLUDE REGEX "SysDialog\\.cpp$")
     endif()
+    if(IOS)
+        # SysDialog.mm hard-codes #import <AppKit/AppKit.h>, which doesn't
+        # exist on the iOS SDK. It's the macOS implementation only -- on
+        # iOS, SysDialog.cpp's TARGET_OS_IPHONE branch (UIDocumentPicker-
+        # based) is the real implementation, so drop the .mm from the
+        # iOS source list to avoid the missing-header build failure.
+        list(FILTER APPLE_MM_SOURCES EXCLUDE REGEX "SysDialog\\.mm$")
+    endif()
     set(MAIN_SOURCES
         ${MAIN_SOURCES_ROOT}
         ${MAIN_SOURCES_MINIZ}
