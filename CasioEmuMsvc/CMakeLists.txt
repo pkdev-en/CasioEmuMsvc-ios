@@ -712,8 +712,16 @@ elseif(BUILD_EXECUTABLE)
             "-framework SafariServices"
         )
 
-        # Compile SysDialog.cpp as Objective-C++ for iOS native file picker
-        set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/src/Ext/SysDialog.cpp PROPERTIES COMPILE_FLAGS "-x objective-c++")
+        # Compile SysDialog.cpp as Objective-C++ for iOS native file picker.
+        # NOTE: under the Xcode generator, COMPILE_FLAGS "-x objective-c++" is
+        # not honored — Xcode picks the compiler invocation from the file
+        # extension (.cpp -> -x c++) before CMake's extra flags are applied,
+        # so the override silently loses and Foundation/UIKit headers get
+        # parsed as plain C++, breaking on @class/@protocol syntax.
+        # XCODE_EXPLICIT_FILE_TYPE is the property Xcode itself checks.
+        set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/src/Ext/SysDialog.cpp PROPERTIES
+            XCODE_EXPLICIT_FILE_TYPE "sourcecode.cpp.objcpp"
+        )
 
         set_target_properties(${TARGET_NAME} PROPERTIES
             XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
