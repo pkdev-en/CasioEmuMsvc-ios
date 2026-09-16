@@ -213,59 +213,9 @@ static void RenderDebuggerGuiWindows() {
 	}
 }
 
-// ===================== TOOLBAR STATE (iOS) =====================
-static float g_toolbar_posY      = -1.0f;   
-static float g_toolbar_targetY   = -1.0f;
-static float g_toolbar_anim      = 0.0f;    
-static bool  g_toolbar_intro_done = false;  
-
-static bool  g_toolbar_dragging    = false;
-static float g_toolbar_drag_startY = 0.0f;
-static float g_toolbar_drag_origY  = 0.0f;
-
-static const float TOOLBAR_ANIM_SPEED       = 15.0f; 
-static const float TOOLBAR_INTRO_SPEED      = 5.0f;
-static const float STATUS_BAR_HEIGHT        = 50.0f;
-
-// ---- Collapse state ----
-static bool  g_toolbar_collapsed      = false;
-static float g_toolbar_collapse_anim  = 0.0f;   // 0 = expanded, 1 = collapsed
-static const float TOOLBAR_COLLAPSE_SPEED = 10.0f;
-static const float TOOLBAR_TAB_W          = 28.0f; // width of the toggle tab when collapsed
-
-// FIX: Persist across test_gui() re-calls (orientation change, etc.)
-// so the intro animation never replays after the first launch.
-static bool  g_toolbar_ever_shown     = false;
-
-static void SaveToolbarPos(float y) {
-    std::ofstream f("toolbar_pos.txt");
-    if (f.is_open()) f << y;
-}
-static void LoadToolbarPos(float& y) {
-    std::ifstream f("toolbar_pos.txt");
-    y = -1.0f;
-    if (f.is_open()) f >> y;
-}
-// ==============================================================
-
-#ifdef __IOS__
-static float getSafeAreaTop() {
-    float safeTop = getSafeTop();
-    if (safeTop <= 0.0f) {
-        safeTop = 50.0f; // iPhone notch/dynamic island fallback
-    }
-    return safeTop;
-}
-#endif
-
-// Helper: ease-out cubic
-static float EaseOut3(float t) {
-    float inv = 1.0f - t;
-    return 1.0f - inv * inv * inv;
-}
-
-// Renders the toolbar content (tabs + buttons).
-// Called only when toolbar is not fully collapsed.
+// Renders the desktop menu bar content (Debugger Windows list + action buttons).
+// Mobile (iOS/Android) no longer uses this — see the static Open/Close all
+// overlay in RenderDebuggerToolbar below.
 static void RenderToolbarContent(ImGuiViewport* viewport) {
     bool isPaused = m_emu->GetPaused();
 
@@ -302,12 +252,6 @@ static void RenderToolbarContent(ImGuiViewport* viewport) {
                 for (auto* w : windows) if (w) w->open = false;
         }
 
-#if defined(__ANDROID__) || defined(__IOS__)
-        if (ImGui::TabItemButton("[v] Hide KB")) {
-            SDL_StopTextInput();
-            ImGui::SetWindowFocus(nullptr);
-        }
-#endif
         if (ImGui::TabItemButton(isPaused ? "[>] Resume" : "[||] Pause"))
             m_emu->SetPaused(!isPaused);
 
@@ -377,195 +321,92 @@ static void RenderToolbarContent(ImGuiViewport* viewport) {
 #endif
 }
 
+#ifdef __IOS__
+static float getSafeAreaTop() {
+    float safeTop = getSafeTop();
+    if (safeTop <= 0.0f) {
+        safeTop = 50.0f; // iPhone notch/dynamic island fallback
+    }
+    return safeTop;
+}
+#endif
+
 void RenderDebuggerToolbar() {
     bool isCustom = false;
 #if defined(__IOS__) || defined(__ANDROID__)
     isCustom = true;
 #endif
 
-    ImGuiViewport* viewport = ImGui::GetMainViewport();
-    float          dt       = ImGui::GetIO().DeltaTime;
-    if (dt > 0.1f) dt = 0.1f;
-
-    // ── Animate collapse (0 = expanded, 1 = collapsed) ─────────────────────
-    float collapseTarget = g_toolbar_collapsed ? 1.0f : 0.0f;
-    g_toolbar_collapse_anim += (collapseTarget - g_toolbar_collapse_anim) * std::min(TOOLBAR_COLLAPSE_SPEED * dt, 1.0f);
-
-    // ease the progress
-    float colT = EaseOut3(std::clamp(g_toolbar_collapse_anim, 0.0f, 1.0f));
-
     if (isCustom) {
-        // ── iOS / Android: floating draggable toolbar ───────────────────────
+        // ── iOS / Android: static overlay (combo + Open + Close all) ───────
+        // Same layout as stock Android: no drag, no collapse, no animation.
 #if defined(__IOS__) || defined(__ANDROID__)
-        float toolbarH   = ImGui::GetFrameHeight() + 8.0f;
-        float fullWidth  = viewport->WorkSize.x;
-        // Width animates from fullWidth → TOOLBAR_TAB_W when collapsing
-        float renderW    = fullWidth + colT * (TOOLBAR_TAB_W - fullWidth);
+        ImGui::SetNextWindowBgAlpha(0.0f);
+        ImGui::Begin("Overlay", nullptr,
+            ImGuiWindowFlags_NoDecoration |
+            ImGuiWindowFlags_NoDocking |
+            ImGuiWindowFlags_AlwaysAutoResize |
+            ImGuiWindowFlags_NoBackground |
+            ImGuiWindowFlags_NoTitleBar |
+            ImGuiWindowFlags_NoMove);
 
-        float raw_dt_frame = ImGui::GetIO().DeltaTime;
-        static bool first_frame = true;
-        if (!first_frame && raw_dt_frame > 1.0f)
-            g_toolbar_posY = -1.0f;
-        first_frame = false;
-
-#if defined(__IOS__)
+        auto& tm = ThemeManager::Instance();
+        float safeAreaPadding = tm.padding * 1.5f;
+#ifdef __IOS__
         float safeAreaTop = getSafeAreaTop();
 #else
         float safeAreaTop = 0.0f;
 #endif
-        float minY = viewport->WorkPos.y + safeAreaTop;
-        float maxY = viewport->WorkPos.y + viewport->WorkSize.y - toolbarH;
+        ImGui::SetWindowPos(ImVec2(safeAreaPadding, safeAreaPadding + safeAreaTop));
 
-        if (g_toolbar_posY < 0.0f) {
-            float savedY = -1.0f;
-            LoadToolbarPos(savedY);
-            g_toolbar_targetY = (savedY >= 0.0f) ? std::clamp(savedY, minY, maxY) : minY;
+        float displayWidth = ImGui::GetIO().DisplaySize.x;
+        float totalWidth = displayWidth - (safeAreaPadding * 2);
+        float spacingBetweenElements = tm.padding * 1.2f;
+        float buttonWidth = (totalWidth - spacingBetweenElements * 2) * 0.25f;
+        float comboWidth = totalWidth - (buttonWidth * 2) - (spacingBetweenElements * 2);
 
-            float centerY = (minY + maxY) / 2.0f;
-            g_toolbar_posY = (g_toolbar_targetY < centerY)
-                ? (g_toolbar_targetY - toolbarH - 20.0f)
-                : (g_toolbar_targetY + toolbarH + 20.0f);
-            // FIX: If toolbar was already shown before (e.g. after orientation
-            // change), snap directly to target — no intro animation replay.
-            if (g_toolbar_ever_shown) {
-                g_toolbar_posY       = g_toolbar_targetY;
-                g_toolbar_anim       = 1.0f;
-                g_toolbar_intro_done = true;
-            } else {
-                g_toolbar_anim       = 0.0f;
-                g_toolbar_intro_done = false;
+        static UIWindow* current_filter = nullptr;
+        ImGui::SetNextItemWidth(comboWidth);
+        if (ImGui::BeginCombo("##cb", current_filter ? current_filter->name : nullptr)) {
+            for (auto* w : windows) {
+                if (!w) continue;
+                bool is_selected = (current_filter == w);
+                if (ImGui::Selectable(w->name, is_selected))
+                    current_filter = w;
+                if (is_selected)
+                    ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+
+        ImGui::SameLine(0, spacingBetweenElements);
+        ImVec2 buttonSize(buttonWidth, tm.buttonHeight * 1.2f);
+        if (ImGui::Button("Open", buttonSize)) {
+            if (current_filter != nullptr) {
+                current_filter->open = true;
+                SaveUIState();
             }
         }
 
-        g_toolbar_targetY = std::clamp(g_toolbar_targetY, minY, maxY);
-
-        float animSpeed = g_toolbar_intro_done ? TOOLBAR_ANIM_SPEED : TOOLBAR_INTRO_SPEED;
-        g_toolbar_anim  = std::min(g_toolbar_anim + animSpeed * dt, 1.0f);
-        if (g_toolbar_anim >= 1.0f) { g_toolbar_intro_done = true; g_toolbar_ever_shown = true; }
-
-        float introT = EaseOut3(g_toolbar_anim);
-
-        if (!g_toolbar_dragging) {
-            float lerpSpeed = TOOLBAR_ANIM_SPEED * dt;
-            g_toolbar_posY += (g_toolbar_targetY - g_toolbar_posY) * std::min(lerpSpeed, 1.0f);
+        ImGui::SameLine(0, spacingBetweenElements);
+        if (ImGui::Button("Close all", buttonSize)) {
+            for (auto* w : windows) {
+                if (w) w->open = false;
+            }
+            SaveUIState();
         }
 
-        float introStartY = (g_toolbar_targetY < (minY + maxY) / 2.0f)
-            ? (g_toolbar_targetY - toolbarH - 20.0f)
-            : (g_toolbar_targetY + toolbarH + 20.0f);
-        float renderY = introStartY + introT * (g_toolbar_posY - introStartY);
-
-        // Collapsed tab sits at the LEFT edge; expanded fills full width
-        float renderX = viewport->WorkPos.x;
-
-        ImGui::SetNextWindowPos(ImVec2(renderX, renderY), ImGuiCond_Always);
-        ImGui::SetNextWindowSize(ImVec2(renderW, toolbarH));
-        ImGui::SetNextWindowBgAlpha(introT);
-
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize,  ImVec2(0, 0));
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,  ImVec2(0, 0));
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,    ImVec2(0, 0));
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
-            ImVec2(ImGui::GetStyle().FramePadding.x,
-                   ImGui::GetStyle().FramePadding.y + 4.0f));
-
-        bool opened = ImGui::Begin("##DebuggerToolbar", nullptr,
-            ImGuiWindowFlags_NoTitleBar       | ImGuiWindowFlags_NoResize       |
-            ImGuiWindowFlags_NoMove           | ImGuiWindowFlags_NoScrollbar    |
-            ImGuiWindowFlags_NoSavedSettings  | ImGuiWindowFlags_MenuBar        |
-            ImGuiWindowFlags_NoDocking        | ImGuiWindowFlags_NavFlattened   |
-            ImGuiWindowFlags_AlwaysAutoResize);
-
-        ImGuiWindow* toolbar_win = ImGui::FindWindowByName("##DebuggerToolbar");
+        top_bar_size = (int)ImGui::GetCursorPosY();
+        ImGuiWindow* toolbar_win = ImGui::FindWindowByName("Overlay");
         if (toolbar_win) ImGui::BringWindowToDisplayFront(toolbar_win);
-
-        if (opened) {
-            // ── Collapse toggle button (always visible, left-anchored) ──────
-            bool showMenu = ImGui::BeginMenuBar();
-            if (showMenu) {
-                // Toggle button: "<" when expanded (will collapse), ">" when collapsed (will expand)
-                const char* toggleLabel = g_toolbar_collapsed ? ">" : "<";
-                ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.20f, 0.20f, 0.30f, 0.90f));
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f, 0.35f, 0.50f, 1.00f));
-                ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.15f, 0.50f, 0.80f, 1.00f));
-                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
-                if (ImGui::Button(toggleLabel, ImVec2(TOOLBAR_TAB_W - 4.0f, 0)))
-                    g_toolbar_collapsed = !g_toolbar_collapsed;
-                ImGui::PopStyleVar(1);
-                ImGui::PopStyleColor(3);
-
-                // Only render the rest when sufficiently expanded (colT < 0.9)
-                if (colT < 0.9f) {
-                    // Clip so content doesn't bleed outside the shrinking window
-                    ImGui::PushClipRect(
-                        ImVec2(ImGui::GetWindowPos().x + TOOLBAR_TAB_W,
-                               ImGui::GetWindowPos().y),
-                        ImVec2(ImGui::GetWindowPos().x + renderW,
-                               ImGui::GetWindowPos().y + toolbarH),
-                        true);
-                    RenderToolbarContent(viewport);
-                    ImGui::PopClipRect();
-                }
-
-                ImGui::EndMenuBar();
-            }
-
-            // ── Drag handle (only when expanded) ────────────────────────────
-            if (!g_toolbar_collapsed) {
-                float dragHandleW = renderW - TOOLBAR_TAB_W;
-                if (dragHandleW > 0.0f) {
-                    ImGui::SetCursorPos(ImVec2(TOOLBAR_TAB_W, 0));
-                    ImGui::InvisibleButton("##toolbar_drag_handle", ImVec2(dragHandleW, toolbarH));
-                    ImGuiIO& io = ImGui::GetIO();
-                    if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 4.0f)) {
-                        if (!g_toolbar_dragging) {
-                            g_toolbar_dragging    = true;
-                            g_toolbar_drag_startY = io.MousePos.y;
-                            g_toolbar_drag_origY  = g_toolbar_targetY;
-                        }
-                        float delta = io.MousePos.y - g_toolbar_drag_startY;
-                        g_toolbar_targetY = std::clamp(g_toolbar_drag_origY + delta, minY, maxY);
-                    } else {
-                        if (g_toolbar_dragging) {
-                            g_toolbar_dragging = false;
-                            float centerY      = (minY + maxY) / 2.0f;
-                            g_toolbar_targetY  = (g_toolbar_targetY < centerY) ? minY : maxY;
-                            g_toolbar_posY     = g_toolbar_targetY;
-                            SaveToolbarPos(g_toolbar_targetY);
-                        }
-                    }
-                }
-            }
-        }
-
         ImGui::End();
-        ImGui::PopStyleVar(4);
 #endif
 
     } else {
         // ── Desktop: BeginMainMenuBar ───────────────────────────────────────
         bool opened = ImGui::BeginMainMenuBar();
         if (opened) {
-            // Toggle button at the very left
-            const char* toggleLabel = g_toolbar_collapsed ? ">" : "<";
-            ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.20f, 0.20f, 0.30f, 0.00f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f, 0.35f, 0.50f, 0.80f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.15f, 0.50f, 0.80f, 1.00f));
-            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 3.0f);
-            if (ImGui::Button(toggleLabel, ImVec2(TOOLBAR_TAB_W, 0)))
-                g_toolbar_collapsed = !g_toolbar_collapsed;
-            ImGui::PopStyleVar(1);
-            ImGui::PopStyleColor(3);
-
-            // Content fades/clips during animation
-            if (colT < 0.99f) {
-                // Push alpha to fade out while collapsing
-                ImGui::PushStyleVar(ImGuiStyleVar_Alpha,
-                    ImGui::GetStyle().Alpha * (1.0f - colT));
-                RenderToolbarContent(viewport);
-                ImGui::PopStyleVar();
-            }
-
+            RenderToolbarContent(ImGui::GetMainViewport());
             ImGui::EndMainMenuBar();
         }
     }
@@ -847,21 +688,6 @@ CodeViewer* test_gui(bool* guiCreated, SDL_Window* wnd, SDL_Renderer* rnd) {
     ImGui_ImplSDLRenderer2_Init(renderer);
 #endif
     if (guiCreated) *guiCreated = true;
-
-    g_toolbar_posY          = -1.0f;
-    g_toolbar_targetY       = -1.0f;
-    g_toolbar_anim          = 0.0f;
-    // FIX: Only reset intro_done on very first launch; if the toolbar was
-    // already shown (e.g. orientation change re-calls test_gui), skip the
-    // intro animation entirely by restoring the completed state.
-    if (!g_toolbar_ever_shown) {
-        g_toolbar_intro_done = false;
-    } else {
-        g_toolbar_intro_done = true;
-        g_toolbar_anim       = 1.0f;
-    }
-    g_toolbar_collapsed     = false;
-    g_toolbar_collapse_anim = 0.0f;
 
     for (int i = 0; i < 5000 && !me_mmu; i++)
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
