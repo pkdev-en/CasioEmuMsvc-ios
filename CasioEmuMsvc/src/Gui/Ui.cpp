@@ -367,7 +367,14 @@ void RenderDebuggerToolbar() {
 
         static UIWindow* current_filter = nullptr;
         ImGui::SetNextItemWidth(comboWidth);
-        if (ImGui::BeginCombo("##cb", current_filter ? current_filter->name : nullptr)) {
+        // Cap the popup height to what actually fits between the combo and
+        // the bottom of the screen, so ImGui never needs to flip it upward
+        // past the top safe area (where touches can't land — see comment
+        // above on safeAreaTop).
+        float comboScreenY = ImGui::GetCursorScreenPos().y;
+        float maxPopupHeight = ImGui::GetIO().DisplaySize.y - comboScreenY - safeAreaPadding * 2.0f;
+        ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(FLT_MAX, std::max(maxPopupHeight, tm.buttonHeight * 3.0f)));
+        if (ImGui::BeginCombo("##cb", current_filter ? current_filter->name : nullptr, ImGuiComboFlags_HeightSmall)) {
             for (auto* w : windows) {
                 if (!w) continue;
                 bool is_selected = (current_filter == w);
