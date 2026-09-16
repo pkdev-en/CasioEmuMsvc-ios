@@ -1974,7 +1974,9 @@ namespace casioemu {
 #endif
 					if (ImGui::MenuItem("StartupUI.Edit"_lc)) {
 						try {
-							windows2->push_back(new ModelEditor(model.path));
+							auto* editor = new ModelEditor(model.path);
+							editor->open = true;
+							windows2->push_back(editor);
 						}
 						catch (const std::exception& e) {
 							SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Error", "Failed to open model editor.", nullptr);
