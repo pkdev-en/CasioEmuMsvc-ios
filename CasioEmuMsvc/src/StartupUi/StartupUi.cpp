@@ -1531,7 +1531,12 @@ namespace casioemu {
 			float searchBarWidth = contentWidth * 0.45f;
 			float filterWidth = contentWidth * 0.25f;
 			float tableHeight = scaledHeight * 0.38f; // A bit more room so rows aren't cramped
-			float buttonWidth = contentWidth * 0.45f; // Was 0.3f — too narrow to read/tap comfortably
+			// Three buttons (Import.../Refresh/Online Models) render on one row via
+			// SameLine(), so their combined width — 3*buttonWidth plus the two gaps
+			// between them — must fit inside contentWidth. A flat 0.45x multiplier
+			// (3 * 0.45 = 1.35x) always overflowed off-screen regardless of fontScale.
+			float buttonRowGap = padding * 4.0f; // matches the SameLine() spacing below
+			float buttonWidth = (contentWidth - buttonRowGap * 2.0f) / 3.0f;
 #else
 			float scaledWidth = io.DisplaySize.x;
 			float scaledHeight = io.DisplaySize.y;
@@ -1676,7 +1681,7 @@ namespace casioemu {
 			}
 
 			if (ImGui::BeginTable("Recently", 4, pretty_table | ImGuiTableFlags_ScrollY, ImVec2(0, tableHeight))) {
-				RenderHeaders();
+				RenderHeaders(fontScale);
 				auto i = 114;
 				auto ru = recently_used;
 				for (auto& s : ru) {
@@ -1718,7 +1723,7 @@ namespace casioemu {
 				ImGui::Checkbox("StartupUI.DontShowEmuRom"_lc, &not_show_emu);
 
 				if (ImGui::BeginTable("All", 4, pretty_table | ImGuiTableFlags_ScrollY, ImVec2(0, tableHeight))) {
-					RenderHeaders();
+					RenderHeaders(fontScale);
 					auto i = 114;
 					for (auto& model : models) {
 						bool matches_filter = (strcmp(current_filter, "##") == 0) || (current_filter == model.type);
@@ -1786,11 +1791,11 @@ namespace casioemu {
 #endif
 			ImGui::End();
 		}
-		void RenderHeaders() {
-			ImGui::TableSetupColumn("StartupUI.RomName"_lc, ImGuiTableColumnFlags_WidthStretch, 200);
-			ImGui::TableSetupColumn("StartupUI.RomVer"_lc, ImGuiTableColumnFlags_WidthFixed, 120);
-			ImGui::TableSetupColumn("StartupUI.RomSum"_lc, ImGuiTableColumnFlags_WidthFixed, 130);
-			ImGui::TableSetupColumn("StartupUI.RomType"_lc, ImGuiTableColumnFlags_WidthFixed, 70);
+		void RenderHeaders(float scale = 1.0f) {
+			ImGui::TableSetupColumn("StartupUI.RomName"_lc, ImGuiTableColumnFlags_WidthStretch, 200 * scale);
+			ImGui::TableSetupColumn("StartupUI.RomVer"_lc, ImGuiTableColumnFlags_WidthFixed, 120 * scale);
+			ImGui::TableSetupColumn("StartupUI.RomSum"_lc, ImGuiTableColumnFlags_WidthFixed, 130 * scale);
+			ImGui::TableSetupColumn("StartupUI.RomType"_lc, ImGuiTableColumnFlags_WidthFixed, 70 * scale);
 			// ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 80);
 			ImGui::TableHeadersRow();
 		}
