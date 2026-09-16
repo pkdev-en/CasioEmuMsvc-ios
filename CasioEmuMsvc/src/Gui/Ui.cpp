@@ -505,7 +505,7 @@ void gui_loop() {
     ImGuiWindow* hovered_win = ImGui::GetCurrentContext()->HoveredWindow;
     bool hovering_other_ui = (hovered_win != nullptr) &&
         (!hovered_win->Name || strstr(hovered_win->Name, "Calculator") == nullptr) &&
-        (!hovered_win->Name || strstr(hovered_win->Name, "##DebuggerToolbar") == nullptr) &&
+        (!hovered_win->Name || strstr(hovered_win->Name, "Overlay") == nullptr) &&
         (!hovered_win->Name || strstr(hovered_win->Name, "##StatusBar") == nullptr) &&
         (!hovered_win->Name || strstr(hovered_win->Name, "DebuggerMenuPopup") == nullptr);
 
@@ -545,6 +545,19 @@ void gui_loop() {
     }
 
     top_bar_size = ImGui::GetCursorPosY();
+#if defined(__IOS__) || defined(__ANDROID__)
+    // Re-assert the toolbar overlay's stacking order now that every other
+    // debugger window (Variables, Ram, CodeViewer, ...) has had its Begin()
+    // called for this frame. ImGui stacks later-begun windows above earlier
+    // ones, so doing this only once right after the toolbar's own End() (as
+    // before) got silently overridden by any window opened afterward,
+    // making the combo/Open/Close-all buttons unclickable whenever an
+    // overlapping debugger window was open.
+    {
+        ImGuiWindow* toolbar_win = ImGui::FindWindowByName("Overlay");
+        if (toolbar_win) ImGui::BringWindowToDisplayFront(toolbar_win);
+    }
+#endif
 #if !defined(__ANDROID__) && !defined(__IOS__)
     RenderStatusBar();
 #endif
