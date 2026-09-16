@@ -710,7 +710,13 @@ elseif(BUILD_EXECUTABLE)
 
         set(CURL_USE_LIBPSL OFF CACHE BOOL "" FORCE)
         set(CURL_USE_LIBSSH2 OFF CACHE BOOL "" FORCE)
-        set(CURL_USE_LIBIDN2 OFF CACHE BOOL "" FORCE)
+        # NOTE: the correct CMake option curl itself defines is "USE_LIBIDN2"
+        # (see curl's docs/INSTALL-CMAKE.md), NOT "CURL_USE_LIBIDN2" -- that
+        # name doesn't exist in curl's build system, so setting it silently
+        # does nothing and curl keeps auto-detecting/linking against the
+        # system libidn2 (present via Homebrew on the macOS runner), which
+        # then fails to link on iOS since no libidn2 exists for that target.
+        set(USE_LIBIDN2 OFF CACHE BOOL "" FORCE)
         set(CURL_ZLIB OFF CACHE STRING "" FORCE)
         set(CURL_DISABLE_LDAP ON CACHE BOOL "" FORCE)
         set(CURL_DISABLE_LDAPS ON CACHE BOOL "" FORCE)
