@@ -129,13 +129,19 @@ void RenderStatusBar() {
 	ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x, posY));
 	ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, barHeight));
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 2.0f));
-#ifdef CASIOEMU_CORE_WEB
+	// Derive from the current theme's WindowBg so this tracks Light/Dark
+	// mode (ThemeManager::SetLightMode/SetDarkMode change WindowBg) instead
+	// of being pinned to one hardcoded color regardless of theme.
 	ImVec4 statusBg = ImGui::GetStyle().Colors[ImGuiCol_WindowBg];
+#ifdef CASIOEMU_CORE_WEB
 	statusBg.w = std::max(statusBg.w, 0.82f);
-	ImGui::PushStyleColor(ImGuiCol_WindowBg, statusBg);
 #else
-	ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.08f, 0.08f, 0.12f, 1.0f));
+	statusBg.x *= 0.85f;
+	statusBg.y *= 0.85f;
+	statusBg.z *= 0.85f;
+	statusBg.w = 1.0f;
 #endif
+	ImGui::PushStyleColor(ImGuiCol_WindowBg, statusBg);
 	
 	if (ImGui::Begin("##StatusBar", nullptr, 
 		ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | 
@@ -374,7 +380,7 @@ void RenderDebuggerToolbar() {
         float comboScreenY = ImGui::GetCursorScreenPos().y;
         float maxPopupHeight = ImGui::GetIO().DisplaySize.y - comboScreenY - safeAreaPadding * 2.0f;
         ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(FLT_MAX, std::max(maxPopupHeight, tm.buttonHeight * 3.0f)));
-        if (ImGui::BeginCombo("##cb", current_filter ? current_filter->name : nullptr, ImGuiComboFlags_HeightSmall)) {
+        if (ImGui::BeginCombo("##cb", current_filter ? current_filter->name : nullptr)) {
             for (auto* w : windows) {
                 if (!w) continue;
                 bool is_selected = (current_filter == w);
