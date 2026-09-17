@@ -444,16 +444,21 @@ int main(int argc, char* argv[]) {
 			if (!busy)
 				SDL_PushEvent(&se);
 #if defined(__ANDROID__) || defined(__IOS__)
-			// [Perf fix — 2026-09-03 13:44 GMT+7] Was SDL_Delay(40) — hard-capped every device at ~25fps
-			// regardless of what the screen can actually do. Now this
-			// thread just offers a new frame far faster than any real
-			// display refreshes; SDL_RENDERER_PRESENTVSYNC (set in
-			// Emulator.cpp) is what actually blocks SDL_RenderPresent()
-			// until the next vblank, so the real ceiling becomes each
-			// device's own panel rate — 60Hz on older iPhones, up to
-			// 120Hz on ProMotion — instead of one fixed number forced
-			// on every device alike.
-			SDL_Delay(4);
+			// [Perf fix — 2026-09-03] tried relying solely on
+			// SDL_RENDERER_PRESENTVSYNC (set in Emulator.cpp) to throttle via
+			// SDL_RenderPresent() blocking until vblank, with only a 4ms
+			// delay here as a floor. That assumption breaks under
+			// LiveContainer: the app is embedded inside LiveContainer's own
+			// process rather than owning its own display link, so vsync
+			// blocking isn't guaranteed to reach this thread. The result was
+			// this thread pushing frame-ready events at ~250Hz regardless of
+			// what the screen could show, sustaining ~84% CPU until iOS
+			// killed the process on the CPU watchdog (confirmed via
+			// LiveContainer_cpu_resource_fatal crash report).
+			// 16ms (~60fps) restores a real ceiling that holds no matter
+			// whether vsync blocking reaches this thread or not, while still
+			// being far above the old fixed 25fps (40ms) cap this replaced.
+			SDL_Delay(16);
 #else
 			if (ThemeManager::Instance().Settings().lowPerformanceMode || low_perf_ext)
 				SDL_Delay(24);
