@@ -456,6 +456,18 @@ int main(int argc, char* argv[]) {
 	auto frame_event = SDL_RegisterEvents(1);
 	bool busy = false;
 	bool running = true;
+#if !defined(__ANDROID__) && !defined(__IOS__)
+	// See the SDL_Delay branch below: SDL_RENDERER_PRESENTVSYNC is only
+	// requested on the first tier of Emulator.cpp's renderer fallback
+	// chain. If that attempt fails (GPU driver issue, virtualized/RDP
+	// session, older integrated GPU) and a later tier without vsync gets
+	// used instead, nothing blocks SDL_RenderPresent() and this loop would
+	// otherwise spin at ~1000Hz (SDL_Delay(1)), pegging a CPU core. Check
+	// once up front instead of assuming vsync always worked.
+	SDL_RendererInfo rendererInfo{};
+	bool hasRealVsync = (SDL_GetRendererInfo(emulator.renderer, &rendererInfo) == 0) &&
+		(rendererInfo.flags & SDL_RENDERER_PRESENTVSYNC) != 0;
+#endif
 	std::thread t3([&]() {
 		SDL_Event se{};
 		se.type = frame_event;
@@ -482,8 +494,10 @@ int main(int argc, char* argv[]) {
 #else
 			if (ThemeManager::Instance().Settings().lowPerformanceMode || low_perf_ext)
 				SDL_Delay(24);
-			else
+			else if (hasRealVsync)
 				SDL_Delay(1);
+			else
+				SDL_Delay(16);
 #endif
 		}
 	});
