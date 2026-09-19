@@ -222,7 +222,7 @@ static void RenderDebuggerGuiWindows() {
 // Renders the desktop menu bar content (Debugger Windows list + action buttons).
 // Mobile (iOS/Android) no longer uses this — see the static Open/Close all
 // overlay in RenderDebuggerToolbar below.
-static void RenderToolbarContent(ImGuiViewport* viewport) {
+[[maybe_unused]] static void RenderToolbarContent(ImGuiViewport* viewport) {
     bool isPaused = m_emu->GetPaused();
 
     if (ImGui::BeginTabBar("ToolbarTabs", ImGuiTabBarFlags_FittingPolicyScroll | ImGuiTabBarFlags_NoTooltip)) {
@@ -416,12 +416,8 @@ void RenderDebuggerToolbar() {
 #endif
 
     } else {
-        // ── Desktop: BeginMainMenuBar ───────────────────────────────────────
-        bool opened = ImGui::BeginMainMenuBar();
-        if (opened) {
-            RenderToolbarContent(ImGui::GetMainViewport());
-            ImGui::EndMainMenuBar();
-        }
+        // ── Desktop: toolbar intentionally removed ──────────────────────────
+        // No menu bar rendered here anymore.
     }
 }
 
