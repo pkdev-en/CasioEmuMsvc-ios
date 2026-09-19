@@ -263,6 +263,26 @@ int main(int argc, char* argv[]) {
 	}
 #endif
 #ifndef __IOS__
+#ifdef __ANDROID__
+	{
+		// Game.java's extractAssets() copies locales/*.lc into this same
+		// directory from a separate Java-side onCreate() path; give it a
+		// moment to finish before loading translations, since an empty
+		// locales/ here means every "..."_lc lookup silently falls back to
+		// printing the raw key instead of translated text.
+		for (int attempt = 0; attempt < 40; ++attempt) {
+			std::error_code ec;
+			bool hasLocaleFiles = false;
+			if (std::filesystem::exists("./locales", ec)) {
+				for (auto& entry : std::filesystem::directory_iterator("./locales", ec)) {
+					if (entry.path().extension() == ".lc") { hasLocaleFiles = true; break; }
+				}
+			}
+			if (hasLocaleFiles) break;
+			std::this_thread::sleep_for(std::chrono::milliseconds(50));
+		}
+	}
+#endif
 	g_local.Load();
 	ThemeManager::Instance().LoadSettings();
 #endif
