@@ -372,43 +372,63 @@ void RenderDebuggerToolbar() {
         float comboWidth = totalWidth - (buttonWidth * 2) - (spacingBetweenElements * 2);
 
         static UIWindow* current_filter = nullptr;
-        ImGui::SetNextItemWidth(comboWidth);
-        // Cap the popup height to what actually fits between the combo and
-        // the bottom of the screen, so ImGui never needs to flip it upward
-        // past the top safe area (where touches can't land — see comment
-        // above on safeAreaTop).
-        float comboScreenY = ImGui::GetCursorScreenPos().y;
-        float maxPopupHeight = ImGui::GetIO().DisplaySize.y - comboScreenY - safeAreaPadding * 2.0f;
-        ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(FLT_MAX, std::max(maxPopupHeight, tm.buttonHeight * 3.0f)));
-#ifdef __IOS__
-        // Wider per-item touch target — Android's default row height works
-        // fine there, but the same rows are hard to hit reliably on iOS.
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(tm.padding, tm.padding * 1.2f));
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(tm.padding, tm.padding * 0.9f));
-#endif
-        bool comboOpened = ImGui::BeginCombo("##cb", current_filter ? current_filter->name : nullptr);
-        if (comboOpened) {
-            for (auto* w : windows) {
-                if (!w) continue;
-                bool is_selected = (current_filter == w);
-                if (ImGui::Selectable(w->name, is_selected))
-                    current_filter = w;
-                if (is_selected)
-                    ImGui::SetItemDefaultFocus();
-            }
-            // Re-assert the popup itself as front-most every frame it's
-            // open — Overlay's own BringWindowToDisplayFront at the end of
-            // the frame doesn't carry this along since the popup is a
-            // separate ImGui window, and without this it could end up
-            // visually on top but not topmost for touch hit-testing if
-            // another debugger window Begin()'d after it this frame.
-            ImGuiWindow* combo_popup = ImGui::GetCurrentWindow();
-            if (combo_popup) ImGui::BringWindowToDisplayFront(combo_popup);
-            ImGui::EndCombo();
+        static bool comboPopupOpen = false;
+        static bool comboJustOpened = false;
+        char comboPreview[64];
+        std::snprintf(comboPreview, sizeof(comboPreview), "%s", current_filter ? current_filter->name : "");
+        ImVec2 comboScreenPos = ImGui::GetCursorScreenPos();
+        ImVec2 comboSize(comboWidth, tm.buttonHeight * 1.2f);
+        if (ImGui::Button(comboPreview[0] ? comboPreview : "##cb_empty", comboSize)) {
+            comboPopupOpen = !comboPopupOpen;
+            comboJustOpened = comboPopupOpen;
         }
+        ImGui::SameLine(0, 0);
+        ImGui::TextUnformatted("v");
+        if (comboPopupOpen) {
+            // Force the dropdown to always open downward from the combo
+            // box, never upward. BeginCombo's built-in auto-flip logic
+            // (used when there isn't "enough room" below by ImGui's own
+            // calculation) is what put the top row past the unsafe area on
+            // iOS — a plain window with an explicit position below the
+            // combo box removes that guesswork entirely.
+            float dropdownY = comboScreenPos.y + comboSize.y;
+            float maxPopupHeight = ImGui::GetIO().DisplaySize.y - dropdownY - safeAreaPadding * 2.0f;
+            ImGui::SetNextWindowPos(ImVec2(comboScreenPos.x, dropdownY));
+            ImGui::SetNextWindowSize(ImVec2(comboWidth, 0));
+            ImGui::SetNextWindowSizeConstraints(ImVec2(comboWidth, 0), ImVec2(comboWidth, std::max(maxPopupHeight, tm.buttonHeight * 3.0f)));
 #ifdef __IOS__
-        ImGui::PopStyleVar(2);
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(tm.padding, tm.padding * 1.2f));
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(tm.padding, tm.padding * 0.9f));
 #endif
+            if (ImGui::Begin("##cb_dropdown", nullptr,
+                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDocking |
+                ImGuiWindowFlags_NoSavedSettings)) {
+                ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
+                // A left-click while NOT hovering this window means the
+                // click landed outside the dropdown — close it. Skip this
+                // check on the frame the popup just opened, since that same
+                // click (on the combo button) would otherwise immediately
+                // close what it just opened.
+                bool clickedOutside = !comboJustOpened &&
+                    !ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup) &&
+                    ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+                for (auto* w : windows) {
+                    if (!w) continue;
+                    bool is_selected = (current_filter == w);
+                    if (ImGui::Selectable(w->name, is_selected)) {
+                        current_filter = w;
+                        comboPopupOpen = false;
+                    }
+                }
+                if (clickedOutside) comboPopupOpen = false;
+                comboJustOpened = false;
+            }
+            ImGui::End();
+#ifdef __IOS__
+            ImGui::PopStyleVar(2);
+#endif
+        }
 
         ImGui::SameLine(0, spacingBetweenElements);
         ImVec2 buttonSize(buttonWidth, tm.buttonHeight * 1.2f);
