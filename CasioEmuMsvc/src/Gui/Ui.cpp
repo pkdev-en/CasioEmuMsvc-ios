@@ -399,11 +399,13 @@ void RenderDebuggerToolbar() {
 #ifdef __IOS__
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(tm.padding, tm.padding * 1.2f));
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(tm.padding, tm.padding * 0.9f));
+            ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize, tm.padding * 2.2f);
 #endif
             if (ImGui::Begin("##cb_dropdown", nullptr,
                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDocking |
-                ImGuiWindowFlags_NoSavedSettings)) {
+                ImGuiWindowFlags_NoSavedSettings |
+                ImGuiWindowFlags_AlwaysVerticalScrollbar)) {
                 ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
                 // A left-click while NOT hovering this window means the
                 // click landed outside the dropdown — close it. Skip this
@@ -426,7 +428,7 @@ void RenderDebuggerToolbar() {
             }
             ImGui::End();
 #ifdef __IOS__
-            ImGui::PopStyleVar(2);
+            ImGui::PopStyleVar(3);
 #endif
         }
 
