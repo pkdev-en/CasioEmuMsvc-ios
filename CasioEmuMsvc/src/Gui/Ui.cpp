@@ -386,7 +386,8 @@ void RenderDebuggerToolbar() {
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(tm.padding, tm.padding * 1.2f));
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(tm.padding, tm.padding * 0.9f));
 #endif
-        if (ImGui::BeginCombo("##cb", current_filter ? current_filter->name : nullptr)) {
+        bool comboOpened = ImGui::BeginCombo("##cb", current_filter ? current_filter->name : nullptr);
+        if (comboOpened) {
             for (auto* w : windows) {
                 if (!w) continue;
                 bool is_selected = (current_filter == w);
@@ -395,6 +396,14 @@ void RenderDebuggerToolbar() {
                 if (is_selected)
                     ImGui::SetItemDefaultFocus();
             }
+            // Re-assert the popup itself as front-most every frame it's
+            // open — Overlay's own BringWindowToDisplayFront at the end of
+            // the frame doesn't carry this along since the popup is a
+            // separate ImGui window, and without this it could end up
+            // visually on top but not topmost for touch hit-testing if
+            // another debugger window Begin()'d after it this frame.
+            ImGuiWindow* combo_popup = ImGui::GetCurrentWindow();
+            if (combo_popup) ImGui::BringWindowToDisplayFront(combo_popup);
             ImGui::EndCombo();
         }
 #ifdef __IOS__
