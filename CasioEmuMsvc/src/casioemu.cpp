@@ -107,7 +107,8 @@ static void TouchCrashLock() {
 }
 
 static void RemoveCrashLock() {
-	std::filesystem::remove(kCrashLockFile);
+	std::error_code ec;
+	std::filesystem::remove(kCrashLockFile, ec);
 }
 
 static bool IsPointInImGuiWindow(float x, float y) {
@@ -216,7 +217,8 @@ int main(int argc, char* argv[]) {
 		const char* home = getenv("HOME");
 		if (home) {
 			std::string path = std::string(home) + "/CasioEmuMsvc";
-			std::filesystem::create_directories(path);
+			std::error_code ec;
+			std::filesystem::create_directories(path, ec);
 			chdir(path.c_str());
     
             std::filesystem::path src =
@@ -358,8 +360,8 @@ int main(int argc, char* argv[]) {
 		const char* home = getenv("HOME");
 		if (home && !basePath.empty()) {
 			std::string path = std::string(home) + "/Documents/CasioEmuMsvc";
-			std::filesystem::create_directories(path);
 			std::error_code ec;
+			std::filesystem::create_directories(path, ec);
 			std::filesystem::copy(basePath + "models", path + "/models", std::filesystem::copy_options::recursive | std::filesystem::copy_options::skip_existing, ec);
 			std::filesystem::copy(basePath + "locales", path + "/locales", std::filesystem::copy_options::recursive | std::filesystem::copy_options::skip_existing, ec);
 			std::filesystem::copy(basePath + "fonts", path + "/fonts", std::filesystem::copy_options::recursive | std::filesystem::copy_options::skip_existing, ec);
@@ -767,7 +769,9 @@ extern "C" void onFileSelected(const char* path, const unsigned char* data, int 
     if (SystemDialogs::fileOpenCallback) {
         // Write the received data to a temp file, then pass the path to the callback
         std::filesystem::path tempDir = std::filesystem::temp_directory_path() / "casioemu_ios_tmp";
-        std::filesystem::create_directories(tempDir);
+        std::error_code ec;
+        std::filesystem::create_directories(tempDir, ec);
+        if (ec) return;
         std::filesystem::path fileName = std::filesystem::path(path).filename();
         std::filesystem::path tempPath = tempDir / fileName;
         {
