@@ -375,15 +375,14 @@ void RenderDebuggerToolbar() {
         static bool comboPopupOpen = false;
         static bool comboJustOpened = false;
         char comboPreview[64];
-        std::snprintf(comboPreview, sizeof(comboPreview), "%s", current_filter ? current_filter->name : "");
+        std::snprintf(comboPreview, sizeof(comboPreview), "%s %s",
+            current_filter ? current_filter->name : "", comboPopupOpen ? "\xe2\x96\xb2" : "\xe2\x96\xbc"); // ▲ / ▼
         ImVec2 comboScreenPos = ImGui::GetCursorScreenPos();
         ImVec2 comboSize(comboWidth, tm.buttonHeight * 1.2f);
-        if (ImGui::Button(comboPreview[0] ? comboPreview : "##cb_empty", comboSize)) {
+        if (ImGui::Button(comboPreview, comboSize)) {
             comboPopupOpen = !comboPopupOpen;
             comboJustOpened = comboPopupOpen;
         }
-        ImGui::SameLine(0, 0);
-        ImGui::TextUnformatted("v");
         if (comboPopupOpen) {
             // Force the dropdown to always open downward from the combo
             // box, never upward. BeginCombo's built-in auto-flip logic
