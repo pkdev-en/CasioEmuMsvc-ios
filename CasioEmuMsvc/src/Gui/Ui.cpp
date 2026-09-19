@@ -380,6 +380,12 @@ void RenderDebuggerToolbar() {
         float comboScreenY = ImGui::GetCursorScreenPos().y;
         float maxPopupHeight = ImGui::GetIO().DisplaySize.y - comboScreenY - safeAreaPadding * 2.0f;
         ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(FLT_MAX, std::max(maxPopupHeight, tm.buttonHeight * 3.0f)));
+#ifdef __IOS__
+        // Wider per-item touch target — Android's default row height works
+        // fine there, but the same rows are hard to hit reliably on iOS.
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(tm.padding, tm.padding * 1.2f));
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(tm.padding, tm.padding * 0.9f));
+#endif
         if (ImGui::BeginCombo("##cb", current_filter ? current_filter->name : nullptr)) {
             for (auto* w : windows) {
                 if (!w) continue;
@@ -391,6 +397,9 @@ void RenderDebuggerToolbar() {
             }
             ImGui::EndCombo();
         }
+#ifdef __IOS__
+        ImGui::PopStyleVar(2);
+#endif
 
         ImGui::SameLine(0, spacingBetweenElements);
         ImVec2 buttonSize(buttonWidth, tm.buttonHeight * 1.2f);
