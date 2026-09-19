@@ -95,7 +95,18 @@ void SaveUIState() {
         f << w->name << "=" << (w->open ? 1 : 0) << "\n";
     }
     f.close();
-    std::filesystem::rename(tmp, ui_state_fn);
+    // rename() throws on failure (locked file, permissions, antivirus
+    // holding a handle, etc.) — this runs from UIWindow::Render() every
+    // time a window opens/closes, with nothing up the call stack catching
+    // it, so a transient rename failure used to crash the whole process.
+    // The error_code overload never throws; just leave the old
+    // ui_state.txt in place if the rename didn't go through.
+    std::error_code ec;
+    std::filesystem::rename(tmp, ui_state_fn, ec);
+    if (ec) {
+        std::error_code ec2;
+        std::filesystem::remove(tmp, ec2);
+    }
 }
 
 #ifdef __IOS__
