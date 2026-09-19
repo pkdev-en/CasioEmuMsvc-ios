@@ -65,8 +65,22 @@ public:
 					outFile << it->second;
 				}
 				else {
-					//LoadTranslationsFromString(DefaultLocales::en_US);
-					m_currentLocale = "C";
+					// No embedded default for this locale (DefaultLocales is
+					// currently empty — see lang.h) and no file on disk for
+					// it either. Falling straight through to "C" here used
+					// to leave m_translations completely empty, so every
+					// "..."_lc lookup returned the raw key instead of any
+					// readable text. Try en_US.lc (shipped for every
+					// platform) as a real fallback before giving up.
+					std::filesystem::path fallbackPath =
+						std::filesystem::path(m_basePath) / "en_US.lc";
+					if (localeName != "en_US" && std::filesystem::exists(fallbackPath)) {
+						LoadTranslationsFromFile(fallbackPath);
+						m_currentLocale = "en_US";
+					}
+					else {
+						m_currentLocale = "C";
+					}
 				}
 			}
 			if (savesetting) {
