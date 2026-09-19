@@ -192,7 +192,18 @@ static bool IsGpuDriverInvolved(EXCEPTION_POINTERS* pExceptionPointers) {
 class GlobalCrashHandler {
 public:
 	GlobalCrashHandler() {
-		AddVectoredExceptionHandler(1, CustomUnhandledExceptionFilter);
+		// AddVectoredExceptionHandler intentionally NOT used here: it fires
+		// the instant any exception is raised, before C++ has even started
+		// looking for a matching try/catch up the stack. That made every
+		// thrown exception in the app — including ones with a perfectly
+		// good catch(...) waiting for them (e.g. StartupUi's
+		// OnlineModelClient construction) — get treated as a fatal crash
+		// and terminate the process, since a plain C++ throw shows up here
+		// as exception code 0xe06d7363 and nothing at raise-time can tell
+		// "will be caught" apart from "truly unhandled".
+		// SetUnhandledExceptionFilter is the correct API: Windows only
+		// invokes it after confirming no SEH frame (which is what every
+		// C++ try/catch compiles down to) claimed the exception.
 		SetUnhandledExceptionFilter(CustomUnhandledExceptionFilter);
 	}
 } g_crashhandler;
