@@ -724,7 +724,12 @@ static bool CreateDesktopShortcut(const std::filesystem::path& model_path, const
 	}
 
 	if (!std::filesystem::exists(desktop_dir)) {
-		std::filesystem::create_directories(desktop_dir);
+		std::error_code ec;
+		std::filesystem::create_directories(desktop_dir, ec);
+		if (ec) {
+			std::cerr << "[Shortcut] Failed to create Desktop directory: " << ec.message() << "\n";
+			return false;
+		}
 	}
 
 	// Get executable path
@@ -939,7 +944,13 @@ namespace casioemu {
 		}
 		void Reload() {
 			loading = true;
-			std::filesystem::create_directory("models");
+			{
+				std::error_code ec;
+				std::filesystem::create_directory("models", ec);
+				// Non-fatal if this fails — the directory_iterator inside the
+				// scan thread below has its own try/catch and will just find
+				// nothing to enumerate.
+			}
 			std::thread thd([&]() {
 				models.clear();
 				try {
