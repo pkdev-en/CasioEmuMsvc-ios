@@ -932,107 +932,115 @@ namespace casioemu {
 			std::filesystem::create_directory("models");
 			std::thread thd([&]() {
 				models.clear();
-				for (auto& dir : std::filesystem::directory_iterator("models")) {
-					if (dir.path().filename() == ".online") continue;
-					if (dir.is_directory()) {
-						try {
-							printf("[StartupUI][Info] Checking %s\n", dir.path().string().c_str());
-							std::error_code ec;
-							std::string load_error;
-							ModelInfo mi{};
-							if (!LoadModelInfoFromFolder(dir.path(), mi, nullptr, &load_error)) {
-								printf("[StartupUI][Info] Unable to load model configuration for %s: %s\n", dir.path().string().c_str(), load_error.c_str());
+				try {
+					for (auto& dir : std::filesystem::directory_iterator("models")) {
+						if (dir.path().filename() == ".online") continue;
+						if (dir.is_directory()) {
+							try {
+								printf("[StartupUI][Info] Checking %s\n", dir.path().string().c_str());
+								std::error_code ec;
+								std::string load_error;
+								ModelInfo mi{};
+								if (!LoadModelInfoFromFolder(dir.path(), mi, nullptr, &load_error)) {
+									printf("[StartupUI][Info] Unable to load model configuration for %s: %s\n", dir.path().string().c_str(), load_error.c_str());
+									continue;
+								}
+								Model mod{};
+								mod.path = dir;
+								mod.name = mi.model_name;
+								mod.realhw = mi.real_hardware;
+								mod.type = HardwareStartupFilter(mi.hardware_id);
+								{
+									std::filesystem::path romPath = dir.path() / mi.rom_path;
+									if (mi.rom_path.empty() || !std::filesystem::exists(romPath) || !std::filesystem::is_regular_file(romPath, ec))
+										continue;
+									std::ifstream ifs2(romPath, std::ios::in | std::ios::binary);
+									if (!ifs2)
+										continue;
+									std::vector<byte> rom{std::istreambuf_iterator<char>{ifs2.rdbuf()}, std::istreambuf_iterator<char>{}};
+									ifs2.close();
+									std::vector<byte> flash{};
+
+									if (!mi.flash_path.empty()) {
+										std::filesystem::path flashPath = dir.path() / mi.flash_path;
+										if (std::filesystem::exists(flashPath) && std::filesystem::is_regular_file(flashPath, ec)) {
+											std::ifstream ifs3(flashPath, std::ios::in | std::ios::binary);
+											if (ifs3)
+												flash = {std::istreambuf_iterator<char>{ifs3.rdbuf()}, std::istreambuf_iterator<char>{}};
+										}
+									}
+									else if (mi.hardware_id == HW_FX_5800P && rom.size() > 0x20000) {
+										flash.assign(rom.begin() + 0x20000, rom.end());
+										rom.resize(0x20000);
+									}
+									auto ri = rom_info(rom, flash, mi.real_hardware);
+									if (ri.type != 0) {
+										switch (ri.type) {
+										case RomInfo::ES:
+											mod.type = "ES";
+											break;
+										case RomInfo::ESP:
+											mod.type = "ESP";
+											break;
+										case RomInfo::ESP2nd:
+											mod.type = "ESP2nd";
+											break;
+										case RomInfo::CWX:
+											mod.type = "CWX";
+											break;
+										case RomInfo::CWII:
+											mod.type = "CWII";
+											break;
+										case RomInfo::Fx5800p:
+											mod.type = "Fx5800p";
+											break;
+										default:
+											mod.type = "???";
+											break;
+										}
+									}
+									if (ri.ok) {
+										mod.version = ri.ver;
+										std::array<char, 8> key{};
+										memcpy(key.data(), mod.version.data(), 6);
+										auto iter = RomNames.find(key);
+										if (iter != RomNames.end())
+											mod.name = iter->second;
+										mod.checksum = tohex(ri.real_sum, 4);
+										mod.checksum2 = tohex(ri.desired_sum, 4);
+										mod.sum_good = ri.real_sum == ri.desired_sum ? "OK" : "NG";
+										// Safely form version key and id
+										std::array<char, 8> key2{};
+										std::memset(key2.data(), 0, key2.size());
+										std::memcpy(key2.data(), mod.version.data(), std::min<std::size_t>(6, mod.version.size()));
+										mod.id = tohex(*(unsigned long long*)ri.cid, 8);
+										if (ri.type == RomInfo::ES) {
+											auto a = get_pd(mi.pd_value);
+											mod.version += std::string(" (P") + a + ")";
+										}
+									}
+									else {
+										mod.show_sum = false;
+									}
+									printf("[StartupUI][Debug] Model Summary\n"
+										   "[StartupUI][Debug] Name: %s\n"
+										   "[StartupUI][Debug] Type: %s\n",
+										mod.name.c_str(), mod.type.c_str());
+								}
+								models.push_back(mod);
+							}
+							catch (...) {
+								std::cerr << "[StartupUI][Error] Failed to load model from " << dir.path().string() << std::endl;
 								continue;
 							}
-							Model mod{};
-							mod.path = dir;
-							mod.name = mi.model_name;
-							mod.realhw = mi.real_hardware;
-							mod.type = HardwareStartupFilter(mi.hardware_id);
-							{
-								std::filesystem::path romPath = dir.path() / mi.rom_path;
-								if (mi.rom_path.empty() || !std::filesystem::exists(romPath) || !std::filesystem::is_regular_file(romPath, ec))
-									continue;
-								std::ifstream ifs2(romPath, std::ios::in | std::ios::binary);
-								if (!ifs2)
-									continue;
-								std::vector<byte> rom{std::istreambuf_iterator<char>{ifs2.rdbuf()}, std::istreambuf_iterator<char>{}};
-								ifs2.close();
-								std::vector<byte> flash{};
-
-								if (!mi.flash_path.empty()) {
-									std::filesystem::path flashPath = dir.path() / mi.flash_path;
-									if (std::filesystem::exists(flashPath) && std::filesystem::is_regular_file(flashPath, ec)) {
-										std::ifstream ifs3(flashPath, std::ios::in | std::ios::binary);
-										if (ifs3)
-											flash = {std::istreambuf_iterator<char>{ifs3.rdbuf()}, std::istreambuf_iterator<char>{}};
-									}
-								}
-								else if (mi.hardware_id == HW_FX_5800P && rom.size() > 0x20000) {
-									flash.assign(rom.begin() + 0x20000, rom.end());
-									rom.resize(0x20000);
-								}
-								auto ri = rom_info(rom, flash, mi.real_hardware);
-								if (ri.type != 0) {
-									switch (ri.type) {
-									case RomInfo::ES:
-										mod.type = "ES";
-										break;
-									case RomInfo::ESP:
-										mod.type = "ESP";
-										break;
-									case RomInfo::ESP2nd:
-										mod.type = "ESP2nd";
-										break;
-									case RomInfo::CWX:
-										mod.type = "CWX";
-										break;
-									case RomInfo::CWII:
-										mod.type = "CWII";
-										break;
-									case RomInfo::Fx5800p:
-										mod.type = "Fx5800p";
-										break;
-									default:
-										mod.type = "???";
-										break;
-									}
-								}
-								if (ri.ok) {
-									mod.version = ri.ver;
-									std::array<char, 8> key{};
-									memcpy(key.data(), mod.version.data(), 6);
-									auto iter = RomNames.find(key);
-									if (iter != RomNames.end())
-										mod.name = iter->second;
-									mod.checksum = tohex(ri.real_sum, 4);
-									mod.checksum2 = tohex(ri.desired_sum, 4);
-									mod.sum_good = ri.real_sum == ri.desired_sum ? "OK" : "NG";
-									// Safely form version key and id
-									std::array<char, 8> key2{};
-									std::memset(key2.data(), 0, key2.size());
-									std::memcpy(key2.data(), mod.version.data(), std::min<std::size_t>(6, mod.version.size()));
-									mod.id = tohex(*(unsigned long long*)ri.cid, 8);
-									if (ri.type == RomInfo::ES) {
-										auto a = get_pd(mi.pd_value);
-										mod.version += std::string(" (P") + a + ")";
-									}
-								}
-								else {
-									mod.show_sum = false;
-								}
-								printf("[StartupUI][Debug] Model Summary\n"
-									   "[StartupUI][Debug] Name: %s\n"
-									   "[StartupUI][Debug] Type: %s\n",
-									mod.name.c_str(), mod.type.c_str());
-							}
-							models.push_back(mod);
-						}
-						catch (const std::exception& e) {
-							std::cerr << "[StartupUI][Error] Failed to load model from " << dir.path().string() << ": " << e.what() << std::endl;
-							continue;
 						}
 					}
+				}
+				catch (const std::exception& e) {
+					std::cerr << "[StartupUI][Error] Failed to enumerate \"models\" directory: " << e.what() << std::endl;
+				}
+				catch (...) {
+					std::cerr << "[StartupUI][Error] Failed to enumerate \"models\" directory (unknown exception)" << std::endl;
 				}
 				loading = false;
 			});
