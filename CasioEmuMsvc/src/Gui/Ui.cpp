@@ -374,14 +374,33 @@ void RenderDebuggerToolbar() {
         static UIWindow* current_filter = nullptr;
         static bool comboPopupOpen = false;
         static bool comboJustOpened = false;
-        char comboPreview[64];
-        std::snprintf(comboPreview, sizeof(comboPreview), "%s %s",
-            current_filter ? current_filter->name : "", comboPopupOpen ? "\xe2\x96\xb2" : "\xe2\x96\xbc"); // ▲ / ▼
         ImVec2 comboScreenPos = ImGui::GetCursorScreenPos();
         ImVec2 comboSize(comboWidth, tm.buttonHeight * 1.2f);
-        if (ImGui::Button(comboPreview, comboSize)) {
+        if (ImGui::Button(current_filter ? current_filter->name : "##cb_empty", comboSize)) {
             comboPopupOpen = !comboPopupOpen;
             comboJustOpened = comboPopupOpen;
+        }
+        {
+            // Draw the dropdown arrow ourselves — U+25BC/U+25B2 aren't in the
+            // font atlas and rendered as a missing-glyph box. Drawing it into
+            // the button's own rect also keeps the button exactly comboWidth
+            // wide, which the Open/Close-all layout math depends on.
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            float arrowH = ImGui::GetFontSize() * 0.32f;
+            float arrowW = arrowH * 1.6f;
+            float cx = comboScreenPos.x + comboSize.x - arrowW - tm.padding * 1.5f;
+            float cy = comboScreenPos.y + comboSize.y * 0.5f;
+            ImU32 col = ImGui::GetColorU32(ImGuiCol_Text);
+            if (comboPopupOpen) {
+                dl->AddTriangleFilled(ImVec2(cx, cy + arrowH * 0.5f),
+                    ImVec2(cx + arrowW, cy + arrowH * 0.5f),
+                    ImVec2(cx + arrowW * 0.5f, cy - arrowH * 0.5f), col);
+            }
+            else {
+                dl->AddTriangleFilled(ImVec2(cx, cy - arrowH * 0.5f),
+                    ImVec2(cx + arrowW, cy - arrowH * 0.5f),
+                    ImVec2(cx + arrowW * 0.5f, cy + arrowH * 0.5f), col);
+            }
         }
         if (comboPopupOpen) {
             // Force the dropdown to always open downward from the combo
@@ -485,36 +504,23 @@ void gui_loop() {
     ThemeManager::Instance().UpdateUIScale();
 #endif
 
-    SDL_Event event;
-    while (SDL_PollEvent(&event)) {
-#ifndef CASIOEMU_CORE_WEB
-        ImGui_ImplSDL2_ProcessEvent(&event);
-#endif
-
-        if (event.type == SDL_MOUSEBUTTONDOWN || event.type == SDL_FINGERDOWN) {
-            int x, y;
-            if (event.type == SDL_MOUSEBUTTONDOWN) {
-                x = event.button.x;
-                y = event.button.y;
-            } else {
-                x = (int)(event.tfinger.x * io.DisplaySize.x);
-                y = (int)(event.tfinger.y * io.DisplaySize.y);
-            }
-
-            if (SDL_IsTextInputActive()) {
-                ImGuiWindow* calc_win = ImGui::FindWindowByName("Calculator");
-                bool insideKeyboard = false;
-                if (calc_win) {
-                    insideKeyboard = (x >= calc_win->Pos.x && x <= calc_win->Pos.x + calc_win->Size.x &&
-                                      y >= calc_win->Pos.y && y <= calc_win->Pos.y + calc_win->Size.y);
-                }
-                bool insideToolbar = (y < 60);
-
-                if (!insideKeyboard && !insideToolbar) {
-                    SDL_StopTextInput();
-                    ImGui::SetWindowFocus(nullptr);
-                }
-            }
+    // NOTE: no SDL_PollEvent pump here. The main loop in casioemu.cpp owns
+    // the event queue and already forwards everything to ImGui via
+    // ProcessImGuiEvent(). Draining the queue here as well used to swallow
+    // calculator keypresses and window events before they could reach
+    // emulator.UIEvent(), which is what made input feel laggy/dropped.
+    if (SDL_IsTextInputActive() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        const ImVec2 clickPos = io.MousePos;
+        ImGuiWindow* calc_win = ImGui::FindWindowByName("Calculator");
+        bool insideKeyboard = false;
+        if (calc_win) {
+            insideKeyboard = (clickPos.x >= calc_win->Pos.x && clickPos.x <= calc_win->Pos.x + calc_win->Size.x &&
+                              clickPos.y >= calc_win->Pos.y && clickPos.y <= calc_win->Pos.y + calc_win->Size.y);
+        }
+        const bool insideToolbar = (clickPos.y < 60.0f);
+        if (!insideKeyboard && !insideToolbar) {
+            SDL_StopTextInput();
+            ImGui::SetWindowFocus(nullptr);
         }
     }
 
