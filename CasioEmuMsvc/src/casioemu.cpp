@@ -659,18 +659,8 @@ int main(int argc, char* argv[]) {
 				}
 				extern SDL_Window* window; // This is the debugger window
 				if (event.window.windowID == SDL_GetWindowID(emulator.window)) {
-#if !defined(__ANDROID__) && !defined(__IOS__)
-					if (!no_dbg) {
-						emulator.calculator_as_tab.store(true);
-						SDL_HideWindow(emulator.window);
-					} else {
-						emulator.Shutdown();
-						std::exit(0);
-					}
-#else
 					emulator.Shutdown();
 					std::exit(0);
-#endif
 				} else if (window && event.window.windowID == SDL_GetWindowID(window)) {
 					std::exit(0);
 				}
