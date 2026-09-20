@@ -825,27 +825,40 @@ static bool CreateDesktopShortcut(const std::filesystem::path& model_path, const
 }
 #elif defined(IOS)
 static bool CreateDesktopShortcut(const std::filesystem::path& model_path, const std::string& shortcut_name, const std::string& icon_path_str) {
-	// iOS has no public API to place a separate icon on the Home Screen, and
-	// the only way to fake one (a WebClip configuration profile, the
-	// LiveContainer-style approach an earlier version of this function
-	// used) needs a local HTTP server, an ATS exception, Safari, and the
-	// user manually walking through Settings' "Install Profile" flow --
-	// too many independently-failing pieces, and unreliable in practice
-	// (e.g. an active VPN can interfere with local loopback networking).
-	// This instead adds a Home Screen Quick Action (long-press the app's
-	// own icon to see it) via UIApplication.shortcutItems -- a fully
-	// native, synchronous, offline call. See IOSNativeBridge.mm
-	// (presentCreateHomeScreenShortcut) for the native side,
-	// CasioEmuAppDelegate.mm for how a tap is read back out of iOS, and
-	// HandlePotentialShortcutLaunch() further down in this file plus the
-	// unified check in casioemu.cpp's emulator loop for how that then
-	// routes into a direct model launch.
+	// Home Screen Quick Action (long-press the app's own icon to see it)
+	// via UIApplication.shortcutItems -- a fully native, synchronous,
+	// offline call. See IOSNativeBridge.mm (presentCreateHomeScreenShortcut)
+	// for the native side, CasioEmuAppDelegate.mm for how a tap is read
+	// back out of iOS, and HandlePotentialShortcutLaunch() further down in
+	// this file plus the unified check in casioemu.cpp's emulator loop for
+	// how that then routes into a direct model launch.
+	//
+	// See CreateDesktopShortcutWebClip() below for the alternative that
+	// produces a genuinely separate Home Screen icon instead.
 	std::string modelId = model_path.filename().string();
 	if (modelId.empty()) {
 		std::cerr << "[Shortcut] Cannot create a shortcut for an unnamed model path: " << model_path << "\n";
 		return false;
 	}
 	return presentCreateHomeScreenShortcut(modelId.c_str(), shortcut_name.c_str(), icon_path_str.c_str());
+}
+
+// A genuinely separate Home Screen icon (as opposed to the Quick Action
+// above, which requires a long-press on the app's *existing* icon). iOS has
+// no public API for a sideloaded app to place that icon itself -- a Web
+// Clip Configuration Profile (.mobileconfig), installed once through
+// Settings after this opens the native "Install Profile" flow, is the only
+// supported mechanism. See IOSNativeBridge.mm
+// (presentCreateHomeScreenWebClip) for the native side; it targets
+// casioemu://launch?model=<id>, exactly what ShortcutLaunch.h already knows
+// how to decode, so nothing on the launch-handling side needed to change.
+static bool CreateDesktopShortcutWebClip(const std::filesystem::path& model_path, const std::string& shortcut_name) {
+	std::string modelId = model_path.filename().string();
+	if (modelId.empty()) {
+		std::cerr << "[Shortcut] Cannot create a shortcut for an unnamed model path: " << model_path << "\n";
+		return false;
+	}
+	return presentCreateHomeScreenWebClip(modelId.c_str(), shortcut_name.c_str());
 }
 #endif
 
@@ -1795,7 +1808,11 @@ namespace casioemu {
 				ImGui::Separator();
 				ImGui::Spacing();
 
+#if defined(IOS)
+				if (ImGui::Button("StartupUI.CreateQuickAction"_lc, ImVec2(160, 0))) {
+#else
 				if (ImGui::Button("Button.Positive"_lc, ImVec2(120, 0))) {
+#endif
 					std::string name_str = shortcut_name;
 					std::string icon_str; // icon path field removed; always use the default icon
 					if (!name_str.empty()) {
@@ -1821,6 +1838,37 @@ namespace casioemu {
 						ImGui::CloseCurrentPopup();
 					}
 				}
+#if defined(IOS)
+				ImGui::SameLine();
+				if (ImGui::Button("StartupUI.CreateHomeScreenIcon"_lc, ImVec2(200, 0))) {
+					std::string name_str = shortcut_name;
+					if (!name_str.empty()) {
+						try {
+							bool ok = CreateDesktopShortcutWebClip(shortcut_model_path, name_str);
+							if (!ok) {
+								SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
+									"StartupUI.CreateShortcutTitle"_lc,
+									"StartupUI.ShortcutFailed"_lc, nullptr);
+							}
+							// On success there's no "created" message box here
+							// (unlike the Quick Action button above): iOS's own
+							// "Install Profile" sheet is about to take over the
+							// screen, so a message box would just be another
+							// dialog stacked underneath it.
+						}
+						catch (const std::exception& e) {
+							std::cerr << "[Shortcut] Error: " << e.what() << std::endl;
+							SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
+								"StartupUI.CreateShortcutTitle"_lc,
+								"StartupUI.ShortcutFailed"_lc, nullptr);
+						}
+						ImGui::CloseCurrentPopup();
+					}
+				}
+				if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) {
+					ImGui::SetTooltip("%s", "StartupUI.CreateHomeScreenIconHint"_lc);
+				}
+#endif
 				ImGui::SameLine();
 				if (ImGui::Button("Button.Negative"_lc, ImVec2(120, 0))) {
 					ImGui::CloseCurrentPopup();
