@@ -13,39 +13,28 @@
 #include "LabelFile.h"
 #include "LabelViewer.h"
 #include "MemBreakPoint.hpp"
-#include "ModelInfo.h"
 #include "Random.hpp"
-#include "RendererBackend.h"
 #include "Theme.h"
 #include "VariableWindow.h"
 #include "WatchWindow.hpp"
-#ifndef CASIOEMU_CORE_WEB
-#include "QrCodeWindow.h"
-#endif
-#ifndef TEST_BUILD
 #include "Rop/RopCompilerUI.h"
 #include "PluginLogWindow.hpp"
 #include "SnapshotWindow.h"
 #include "CalculatorWindow.h"
 #include "imgui/imgui.h"
 #include "imgui/imgui_internal.h"
-#ifdef CASIOEMU_CORE_WEB
-#include "WebDebuggerGui.h"
-#else
 #include "imgui/imgui_impl_sdl2.h"
 #include "imgui/imgui_impl_sdlrenderer2.h"
-#endif
 #include <Gui.h>
 #include <SDL.h>
 #include <algorithm>
-#include <chrono>
-#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
 #include <unordered_map>
 #include <vector>
 #include <sstream>
+
 #ifdef ENABLE_SENTRY
 #include <sentry.h>
 #endif
@@ -78,7 +67,6 @@ CodeViewer* code_viewer = 0;
 Injector* injector = 0;
 int top_bar_size = 0;
 Breakpoints* membp = 0;
-SnapshotWindow* snapshot_window = 0;
 
 std::vector<UIWindow*> windows{};
 
@@ -95,162 +83,69 @@ void SaveUIState() {
         f << w->name << "=" << (w->open ? 1 : 0) << "\n";
     }
     f.close();
-    // rename() throws on failure (locked file, permissions, antivirus
-    // holding a handle, etc.) — this runs from UIWindow::Render() every
-    // time a window opens/closes, with nothing up the call stack catching
-    // it, so a transient rename failure used to crash the whole process.
-    // The error_code overload never throws; just leave the old
-    // ui_state.txt in place if the rename didn't go through.
-    std::error_code ec;
-    std::filesystem::rename(tmp, ui_state_fn, ec);
-    if (ec) {
-        std::error_code ec2;
-        std::filesystem::remove(tmp, ec2);
-    }
+    std::filesystem::rename(tmp, ui_state_fn);
 }
 
 #ifdef __IOS__
-#include "IOSNativeBridge.h"
+#include "iOSNativeBridge.h"
 #endif
 
 static float screenshot_toast_timer = 0.0f;
 
-#ifdef CASIOEMU_CORE_WEB
-SDL_Surface* background = nullptr;
-SDL_Texture* bg_txt = nullptr;
-#endif
+// ===================== TOOLBAR STATE (iOS) =====================
+static float g_toolbar_posY      = -1.0f;   
+static float g_toolbar_targetY   = -1.0f;
+static float g_toolbar_anim      = 0.0f;    
+static bool  g_toolbar_intro_done = false;  
 
-static float GetStatusBarHeight() {
-	return ImGui::GetFrameHeight() + 4.0f;
+static bool  g_toolbar_dragging    = false;
+static float g_toolbar_drag_startY = 0.0f;
+static float g_toolbar_drag_origY  = 0.0f;
+
+static const float TOOLBAR_ANIM_SPEED       = 15.0f; 
+static const float TOOLBAR_INTRO_SPEED      = 5.0f;
+static const float STATUS_BAR_HEIGHT        = 50.0f;
+
+// ---- Collapse state ----
+static bool  g_toolbar_collapsed      = false;
+static float g_toolbar_collapse_anim  = 0.0f;   // 0 = expanded, 1 = collapsed
+static const float TOOLBAR_COLLAPSE_SPEED = 10.0f;
+static const float TOOLBAR_TAB_W          = 28.0f; // width of the toggle tab when collapsed
+
+// FIX: Persist across test_gui() re-calls (orientation change, etc.)
+// so the intro animation never replays after the first launch.
+static bool  g_toolbar_ever_shown     = false;
+
+static void SaveToolbarPos(float y) {
+    std::ofstream f("toolbar_pos.txt");
+    if (f.is_open()) f << y;
 }
-
-void RenderStatusBar() {
-	ImGuiViewport* viewport = ImGui::GetMainViewport();
-	float barHeight = GetStatusBarHeight();
+static void LoadToolbarPos(float& y) {
+    std::ifstream f("toolbar_pos.txt");
+    y = -1.0f;
+    if (f.is_open()) f >> y;
+}
+// ==============================================================
 
 #ifdef __IOS__
-	// Thêm safe area bottom (home indicator iPhone)
-	float safeBottom = getSafeBottom();
-	if (safeBottom < 0.0f) safeBottom = 0.0f;
-	float posY = viewport->Pos.y + viewport->Size.y - barHeight - safeBottom;
-#else
-	float posY = viewport->Pos.y + viewport->Size.y - barHeight;
+static float getSafeAreaTop() {
+    float safeTop = getSafeTop();
+    if (safeTop <= 0.0f) {
+        safeTop = 50.0f; // iPhone notch/dynamic island fallback
+    }
+    return safeTop;
+}
 #endif
 
-	ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x, posY));
-	ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, barHeight));
-	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 2.0f));
-	// Derive from the current theme's WindowBg so this tracks Light/Dark
-	// mode (ThemeManager::SetLightMode/SetDarkMode change WindowBg) instead
-	// of being pinned to one hardcoded color regardless of theme.
-	ImVec4 statusBg = ImGui::GetStyle().Colors[ImGuiCol_WindowBg];
-#ifdef CASIOEMU_CORE_WEB
-	statusBg.w = std::max(statusBg.w, 0.82f);
-#else
-	statusBg.x *= 0.85f;
-	statusBg.y *= 0.85f;
-	statusBg.z *= 0.85f;
-	statusBg.w = 1.0f;
-#endif
-	ImGui::PushStyleColor(ImGuiCol_WindowBg, statusBg);
-	
-	if (ImGui::Begin("##StatusBar", nullptr, 
-		ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | 
-		ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
-		ImGuiWindowFlags_NoDocking)) {
-		
-		// Run/Pause state status indicator — drawn manually rather than via
-		// Unicode glyphs (⏸ U+23F8, ▶ U+25B6), which aren't in the font
-		// atlas and rendered as missing-glyph boxes.
-		{
-			float iconSize = ImGui::GetTextLineHeight() * 0.7f;
-			ImVec2 iconPos = ImGui::GetCursorScreenPos();
-			ImGui::Dummy(ImVec2(iconSize, iconSize));
-			ImDrawList* dl = ImGui::GetWindowDrawList();
-			bool paused = m_emu->GetPaused();
-			ImU32 col = ImGui::GetColorU32(paused ? UIHelpers::kColorWarning : UIHelpers::kColorSuccess);
-			float cy = iconPos.y + iconSize * 0.5f;
-			if (paused) {
-				// Two vertical bars (⏸)
-				float barW = iconSize * 0.28f;
-				dl->AddRectFilled(ImVec2(iconPos.x, iconPos.y), ImVec2(iconPos.x + barW, iconPos.y + iconSize), col);
-				dl->AddRectFilled(ImVec2(iconPos.x + iconSize - barW, iconPos.y), ImVec2(iconPos.x + iconSize, iconPos.y + iconSize), col);
-			}
-			else {
-				// Right-pointing triangle (▶)
-				dl->AddTriangleFilled(
-					ImVec2(iconPos.x, iconPos.y),
-					ImVec2(iconPos.x, iconPos.y + iconSize),
-					ImVec2(iconPos.x + iconSize, cy), col);
-			}
-			ImGui::SameLine(0.0f, 6.0f);
-			ImGui::TextColored(paused ? UIHelpers::kColorWarning : UIHelpers::kColorSuccess, "%s",
-				paused ? "StatusBar.Paused"_lc : "StatusBar.Running"_lc);
-		}
-		
-		ImGui::SameLine(0.0f, 20.0f);
-		ImGui::TextDisabled("|");
-		ImGui::SameLine(0.0f, 20.0f);
-		
-		// Current PC
-		ImGui::Text("PC: %05X", pc_cache);
-		
-		ImGui::SameLine(0.0f, 20.0f);
-		ImGui::TextDisabled("|");
-		ImGui::SameLine(0.0f, 20.0f);
-		
-		// Breakpoints count
-		int bpCount = code_viewer ? (int)code_viewer->GetBreakpointCount() : 0;
-		ImGui::Text("BP: %d", bpCount);
-	}
-	ImGui::End();
-	ImGui::PopStyleColor();
-	ImGui::PopStyleVar();
+// Helper: ease-out cubic
+static float EaseOut3(float t) {
+    float inv = 1.0f - t;
+    return 1.0f - inv * inv * inv;
 }
 
-static ImGuiID RenderDockSpace(float reservedBottom) {
-	ImGuiViewport* viewport = ImGui::GetMainViewport();
-	float dockHeight = viewport->Size.y - reservedBottom;
-	if (dockHeight < 1.0f) dockHeight = 1.0f;
-
-	ImGui::SetNextWindowPos(viewport->Pos);
-	ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, dockHeight));
-	ImGui::SetNextWindowViewport(viewport->ID);
-	ImGui::SetNextWindowBgAlpha(0.0f);
-	ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-	ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-	ImGuiWindowFlags flags =
-		ImGuiWindowFlags_NoDocking |
-		ImGuiWindowFlags_NoTitleBar |
-		ImGuiWindowFlags_NoCollapse |
-		ImGuiWindowFlags_NoResize |
-		ImGuiWindowFlags_NoMove |
-		ImGuiWindowFlags_NoBringToFrontOnFocus |
-		ImGuiWindowFlags_NoNavFocus |
-		ImGuiWindowFlags_NoBackground;
-
-	ImGui::Begin("##DebuggerDockSpaceHost", nullptr, flags);
-	ImGuiID dockspace_id = ImGui::GetID("DebuggerDockSpace");
-	ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_PassthruCentralNode);
-	ImGui::End();
-	ImGui::PopStyleVar(3);
-	return dockspace_id;
-}
-
-static void RenderDebuggerGuiWindows() {
-#if !defined(__ANDROID__) && !defined(__IOS__)
-	RenderDockSpace(GetStatusBarHeight());
-#endif
-	for (auto win : windows) {
-		win->Render();
-	}
-}
-
-// Renders the desktop menu bar content (Debugger Windows list + action buttons).
-// Mobile (iOS/Android) no longer uses this — see the static Open/Close all
-// overlay in RenderDebuggerToolbar below.
-[[maybe_unused]] static void RenderToolbarContent(ImGuiViewport* viewport) {
+// Renders the toolbar content (tabs + buttons).
+// Called only when toolbar is not fully collapsed.
+static void RenderToolbarContent(ImGuiViewport* viewport) {
     bool isPaused = m_emu->GetPaused();
 
     if (ImGui::BeginTabBar("ToolbarTabs", ImGuiTabBarFlags_FittingPolicyScroll | ImGuiTabBarFlags_NoTooltip)) {
@@ -286,10 +181,16 @@ static void RenderDebuggerGuiWindows() {
                 for (auto* w : windows) if (w) w->open = false;
         }
 
+#if defined(__ANDROID__) || defined(__IOS__)
+        if (ImGui::TabItemButton("[v] Hide KB")) {
+            SDL_StopTextInput();
+            ImGui::SetWindowFocus(nullptr);
+        }
+#endif
+
         if (ImGui::TabItemButton(isPaused ? "[>] Resume" : "[||] Pause"))
             m_emu->SetPaused(!isPaused);
 
-#ifndef CASIOEMU_CORE_WEB
         if (ImGui::TabItemButton("[C] Screenshot"))
             ImGui::OpenPopup("ScreenshotMenuPopup");
         ImGui::SetNextWindowPos(ImVec2(ImGui::GetItemRectMin().x, ImGui::GetItemRectMax().y + 4.0f));
@@ -326,7 +227,6 @@ static void RenderDebuggerGuiWindows() {
                 ImGui::EndPopup();
             }
         }
-#endif
 
         if (ImGui::TabItemButton(ThemeManager::Instance().Settings().isDarkMode ? "Light Theme" : "Dark Theme")) {
             if (ThemeManager::Instance().Settings().isDarkMode)
@@ -338,7 +238,6 @@ static void RenderDebuggerGuiWindows() {
         ImGui::EndTabBar();
     }
 
-#ifndef CASIOEMU_CORE_WEB
     if (m_emu->screenshot_taken.exchange(false))
         screenshot_toast_timer = 3.0f;
 
@@ -352,18 +251,7 @@ static void RenderDebuggerGuiWindows() {
         ImGui::SameLine(ImGui::GetWindowWidth() - (screenshot_toast_timer > 0.0f ? 450.0f : 200.0f));
         ImGui::TextColored(ImVec4(1.0f,0.2f,0.2f,1.0f), "[O] Recording: %u frames", m_emu->recording_frame_count.load());
     }
-#endif
 }
-
-#ifdef __IOS__
-static float getSafeAreaTop() {
-    float safeTop = getSafeTop();
-    if (safeTop <= 0.0f) {
-        safeTop = 50.0f; // iPhone notch/dynamic island fallback
-    }
-    return safeTop;
-}
-#endif
 
 void RenderDebuggerToolbar() {
     bool isCustom = false;
@@ -371,168 +259,191 @@ void RenderDebuggerToolbar() {
     isCustom = true;
 #endif
 
-    if (isCustom) {
-        // ── iOS / Android: static overlay (combo + Open + Close all) ───────
-        // Same layout as stock Android: no drag, no collapse, no animation.
-#if defined(__IOS__) || defined(__ANDROID__)
-        ImGui::SetNextWindowBgAlpha(0.0f);
-        ImGui::Begin("Overlay", nullptr,
-            ImGuiWindowFlags_NoDecoration |
-            ImGuiWindowFlags_NoDocking |
-            ImGuiWindowFlags_AlwaysAutoResize |
-            ImGuiWindowFlags_NoBackground |
-            ImGuiWindowFlags_NoTitleBar |
-            ImGuiWindowFlags_NoMove);
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+    float          dt       = ImGui::GetIO().DeltaTime;
+    if (dt > 0.1f) dt = 0.1f;
 
-        auto& tm = ThemeManager::Instance();
-        float safeAreaPadding = tm.padding * 1.5f;
-#ifdef __IOS__
+    // ── Animate collapse (0 = expanded, 1 = collapsed) ─────────────────────
+    float collapseTarget = g_toolbar_collapsed ? 1.0f : 0.0f;
+    g_toolbar_collapse_anim += (collapseTarget - g_toolbar_collapse_anim) * std::min(TOOLBAR_COLLAPSE_SPEED * dt, 1.0f);
+
+    // ease the progress
+    float colT = EaseOut3(std::clamp(g_toolbar_collapse_anim, 0.0f, 1.0f));
+
+    if (isCustom) {
+        // ── iOS / Android: floating draggable toolbar ───────────────────────
+#if defined(__IOS__) || defined(__ANDROID__)
+        float toolbarH   = ImGui::GetFrameHeight() + 8.0f;
+        float fullWidth  = viewport->WorkSize.x;
+        // Width animates from fullWidth → TOOLBAR_TAB_W when collapsing
+        float renderW    = fullWidth + colT * (TOOLBAR_TAB_W - fullWidth);
+
+        float raw_dt_frame = ImGui::GetIO().DeltaTime;
+        static bool first_frame = true;
+        if (!first_frame && raw_dt_frame > 1.0f)
+            g_toolbar_posY = -1.0f;
+        first_frame = false;
+
+#if defined(__IOS__)
         float safeAreaTop = getSafeAreaTop();
 #else
         float safeAreaTop = 0.0f;
 #endif
-        ImGui::SetWindowPos(ImVec2(safeAreaPadding, safeAreaPadding + safeAreaTop));
+        float minY = viewport->WorkPos.y + safeAreaTop;
+        float maxY = viewport->WorkPos.y + viewport->WorkSize.y - toolbarH;
 
-        float displayWidth = ImGui::GetIO().DisplaySize.x;
-        float totalWidth = displayWidth - (safeAreaPadding * 2);
-        float spacingBetweenElements = tm.padding * 1.2f;
-        float buttonWidth = (totalWidth - spacingBetweenElements * 2) * 0.25f;
-        float comboWidth = totalWidth - (buttonWidth * 2) - (spacingBetweenElements * 2);
+        if (g_toolbar_posY < 0.0f) {
+            float savedY = -1.0f;
+            LoadToolbarPos(savedY);
+            g_toolbar_targetY = (savedY >= 0.0f) ? std::clamp(savedY, minY, maxY) : minY;
 
-        static UIWindow* current_filter = nullptr;
-        static bool comboPopupOpen = false;
-        static bool comboJustOpened = false;
-        ImVec2 comboScreenPos = ImGui::GetCursorScreenPos();
-        ImVec2 comboSize(comboWidth, tm.buttonHeight * 1.2f);
-        if (ImGui::Button(current_filter ? current_filter->name : "##cb_empty", comboSize)) {
-            comboPopupOpen = !comboPopupOpen;
-            comboJustOpened = comboPopupOpen;
-        }
-        {
-            // Draw the dropdown arrow ourselves — U+25BC/U+25B2 aren't in the
-            // font atlas and rendered as a missing-glyph box. Drawing it into
-            // the button's own rect also keeps the button exactly comboWidth
-            // wide, which the Open/Close-all layout math depends on.
-            ImDrawList* dl = ImGui::GetWindowDrawList();
-            float arrowH = ImGui::GetFontSize() * 0.32f;
-            float arrowW = arrowH * 1.6f;
-            float cx = comboScreenPos.x + comboSize.x - arrowW - tm.padding * 1.5f;
-            float cy = comboScreenPos.y + comboSize.y * 0.5f;
-            ImU32 col = ImGui::GetColorU32(ImGuiCol_Text);
-            if (comboPopupOpen) {
-                dl->AddTriangleFilled(ImVec2(cx, cy + arrowH * 0.5f),
-                    ImVec2(cx + arrowW, cy + arrowH * 0.5f),
-                    ImVec2(cx + arrowW * 0.5f, cy - arrowH * 0.5f), col);
-            }
-            else {
-                dl->AddTriangleFilled(ImVec2(cx, cy - arrowH * 0.5f),
-                    ImVec2(cx + arrowW, cy - arrowH * 0.5f),
-                    ImVec2(cx + arrowW * 0.5f, cy + arrowH * 0.5f), col);
-            }
-        }
-        if (comboPopupOpen) {
-            // Force the dropdown to always open downward from the combo
-            // box, never upward. BeginCombo's built-in auto-flip logic
-            // (used when there isn't "enough room" below by ImGui's own
-            // calculation) is what put the top row past the unsafe area on
-            // iOS — a plain window with an explicit position below the
-            // combo box removes that guesswork entirely.
-            float dropdownY = comboScreenPos.y + comboSize.y;
-            float maxPopupHeight = ImGui::GetIO().DisplaySize.y - dropdownY - safeAreaPadding * 2.0f;
-            ImGui::SetNextWindowPos(ImVec2(comboScreenPos.x, dropdownY));
-            ImGui::SetNextWindowSize(ImVec2(comboWidth, 0));
-            ImGui::SetNextWindowSizeConstraints(ImVec2(comboWidth, 0), ImVec2(comboWidth, std::max(maxPopupHeight, tm.buttonHeight * 3.0f)));
-#ifdef __IOS__
-            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(tm.padding, tm.padding * 1.2f));
-            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(tm.padding, tm.padding * 0.9f));
-            ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize, tm.padding * 2.2f);
-#endif
-            if (ImGui::Begin("##cb_dropdown", nullptr,
-                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-                ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDocking |
-                ImGuiWindowFlags_NoSavedSettings |
-                ImGuiWindowFlags_AlwaysVerticalScrollbar)) {
-                ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
-                // A left-click while NOT hovering this window means the
-                // click landed outside the dropdown — close it. Skip this
-                // check on the frame the popup just opened, since that same
-                // click (on the combo button) would otherwise immediately
-                // close what it just opened.
-                // A tap that starts AND ends outside the dropdown means the
-                // click landed outside it -- close it. Checking on
-                // IsMouseClicked (press) instead of release would also fire
-                // the instant a finger touches down to start scrolling a
-                // different window, since starting a drag/scroll gesture on
-                // touch still begins with a normal mouse-down event; that
-                // false-positive was closing the dropdown before the drag
-                // even had a chance to register as a scroll. Waiting for
-                // release, and requiring the mouse not to have moved far
-                // from where it went down, distinguishes an actual tap
-                // outside the dropdown from a scroll gesture starting
-                // elsewhere. Skip this check on the frame the popup just
-                // opened, since that same click (on the combo button) would
-                // otherwise immediately close what it just opened.
-                static ImVec2 outsideClickStartPos;
-                if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
-                    !ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup)) {
-                    outsideClickStartPos = ImGui::GetMousePos();
-                }
-                bool clickedOutside = false;
-                if (!comboJustOpened &&
-                    !ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup) &&
-                    ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
-                    ImVec2 delta = ImVec2(
-                        ImGui::GetMousePos().x - outsideClickStartPos.x,
-                        ImGui::GetMousePos().y - outsideClickStartPos.y);
-                    float distSq = delta.x * delta.x + delta.y * delta.y;
-                    constexpr float kTapMoveThreshold = 10.0f;
-                    if (distSq <= kTapMoveThreshold * kTapMoveThreshold) {
-                        clickedOutside = true;
-                    }
-                }
-                for (auto* w : windows) {
-                    if (!w) continue;
-                    bool is_selected = (current_filter == w);
-                    if (ImGui::Selectable(w->name, is_selected)) {
-                        current_filter = w;
-                        comboPopupOpen = false;
-                    }
-                }
-                if (clickedOutside) comboPopupOpen = false;
-                comboJustOpened = false;
-            }
-            ImGui::End();
-#ifdef __IOS__
-            ImGui::PopStyleVar(3);
-#endif
-        }
-
-        ImGui::SameLine(0, spacingBetweenElements);
-        ImVec2 buttonSize(buttonWidth, tm.buttonHeight * 1.2f);
-        if (ImGui::Button("Open", buttonSize)) {
-            if (current_filter != nullptr) {
-                current_filter->open = true;
-                SaveUIState();
+            float centerY = (minY + maxY) / 2.0f;
+            g_toolbar_posY = (g_toolbar_targetY < centerY)
+                ? (g_toolbar_targetY - toolbarH - 20.0f)
+                : (g_toolbar_targetY + toolbarH + 20.0f);
+            // FIX: If toolbar was already shown before (e.g. after orientation
+            // change), snap directly to target — no intro animation replay.
+            if (g_toolbar_ever_shown) {
+                g_toolbar_posY       = g_toolbar_targetY;
+                g_toolbar_anim       = 1.0f;
+                g_toolbar_intro_done = true;
+            } else {
+                g_toolbar_anim       = 0.0f;
+                g_toolbar_intro_done = false;
             }
         }
 
-        ImGui::SameLine(0, spacingBetweenElements);
-        if (ImGui::Button("Close all", buttonSize)) {
-            for (auto* w : windows) {
-                if (w) w->open = false;
-            }
-            SaveUIState();
+        g_toolbar_targetY = std::clamp(g_toolbar_targetY, minY, maxY);
+
+        float animSpeed = g_toolbar_intro_done ? TOOLBAR_ANIM_SPEED : TOOLBAR_INTRO_SPEED;
+        g_toolbar_anim  = std::min(g_toolbar_anim + animSpeed * dt, 1.0f);
+        if (g_toolbar_anim >= 1.0f) { g_toolbar_intro_done = true; g_toolbar_ever_shown = true; }
+
+        float introT = EaseOut3(g_toolbar_anim);
+
+        if (!g_toolbar_dragging) {
+            float lerpSpeed = TOOLBAR_ANIM_SPEED * dt;
+            g_toolbar_posY += (g_toolbar_targetY - g_toolbar_posY) * std::min(lerpSpeed, 1.0f);
         }
 
-        top_bar_size = (int)ImGui::GetCursorPosY();
-        ImGuiWindow* toolbar_win = ImGui::FindWindowByName("Overlay");
+        float introStartY = (g_toolbar_targetY < (minY + maxY) / 2.0f)
+            ? (g_toolbar_targetY - toolbarH - 20.0f)
+            : (g_toolbar_targetY + toolbarH + 20.0f);
+        float renderY = introStartY + introT * (g_toolbar_posY - introStartY);
+
+        // Collapsed tab sits at the LEFT edge; expanded fills full width
+        float renderX = viewport->WorkPos.x;
+
+        ImGui::SetNextWindowPos(ImVec2(renderX, renderY), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(renderW, toolbarH));
+        ImGui::SetNextWindowBgAlpha(introT);
+
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize,  ImVec2(0, 0));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,  ImVec2(0, 0));
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,    ImVec2(0, 0));
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+            ImVec2(ImGui::GetStyle().FramePadding.x,
+                   ImGui::GetStyle().FramePadding.y + 4.0f));
+
+        bool opened = ImGui::Begin("##DebuggerToolbar", nullptr,
+            ImGuiWindowFlags_NoTitleBar       | ImGuiWindowFlags_NoResize       |
+            ImGuiWindowFlags_NoMove           | ImGuiWindowFlags_NoScrollbar    |
+            ImGuiWindowFlags_NoSavedSettings  | ImGuiWindowFlags_MenuBar        |
+            ImGuiWindowFlags_NoDocking        | ImGuiWindowFlags_NavFlattened   |
+            ImGuiWindowFlags_AlwaysAutoResize);
+
+        ImGuiWindow* toolbar_win = ImGui::FindWindowByName("##DebuggerToolbar");
         if (toolbar_win) ImGui::BringWindowToDisplayFront(toolbar_win);
+
+        if (opened) {
+            // ── Collapse toggle button (always visible, left-anchored) ──────
+            bool showMenu = ImGui::BeginMenuBar();
+            if (showMenu) {
+                // Toggle button: "<" when expanded (will collapse), ">" when collapsed (will expand)
+                const char* toggleLabel = g_toolbar_collapsed ? ">" : "<";
+                ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.20f, 0.20f, 0.30f, 0.90f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f, 0.35f, 0.50f, 1.00f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.15f, 0.50f, 0.80f, 1.00f));
+                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
+                if (ImGui::Button(toggleLabel, ImVec2(TOOLBAR_TAB_W - 4.0f, 0)))
+                    g_toolbar_collapsed = !g_toolbar_collapsed;
+                ImGui::PopStyleVar(1);
+                ImGui::PopStyleColor(3);
+
+                // Only render the rest when sufficiently expanded (colT < 0.9)
+                if (colT < 0.9f) {
+                    // Clip so content doesn't bleed outside the shrinking window
+                    ImGui::PushClipRect(
+                        ImVec2(ImGui::GetWindowPos().x + TOOLBAR_TAB_W,
+                               ImGui::GetWindowPos().y),
+                        ImVec2(ImGui::GetWindowPos().x + renderW,
+                               ImGui::GetWindowPos().y + toolbarH),
+                        true);
+                    RenderToolbarContent(viewport);
+                    ImGui::PopClipRect();
+                }
+
+                ImGui::EndMenuBar();
+            }
+
+            // ── Drag handle (only when expanded) ────────────────────────────
+            if (!g_toolbar_collapsed) {
+                float dragHandleW = renderW - TOOLBAR_TAB_W;
+                if (dragHandleW > 0.0f) {
+                    ImGui::SetCursorPos(ImVec2(TOOLBAR_TAB_W, 0));
+                    ImGui::InvisibleButton("##toolbar_drag_handle", ImVec2(dragHandleW, toolbarH));
+                    ImGuiIO& io = ImGui::GetIO();
+                    if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 4.0f)) {
+                        if (!g_toolbar_dragging) {
+                            g_toolbar_dragging    = true;
+                            g_toolbar_drag_startY = io.MousePos.y;
+                            g_toolbar_drag_origY  = g_toolbar_targetY;
+                        }
+                        float delta = io.MousePos.y - g_toolbar_drag_startY;
+                        g_toolbar_targetY = std::clamp(g_toolbar_drag_origY + delta, minY, maxY);
+                    } else {
+                        if (g_toolbar_dragging) {
+                            g_toolbar_dragging = false;
+                            float centerY      = (minY + maxY) / 2.0f;
+                            g_toolbar_targetY  = (g_toolbar_targetY < centerY) ? minY : maxY;
+                            g_toolbar_posY     = g_toolbar_targetY;
+                            SaveToolbarPos(g_toolbar_targetY);
+                        }
+                    }
+                }
+            }
+        }
+
         ImGui::End();
+        ImGui::PopStyleVar(4);
 #endif
 
     } else {
-        // ── Desktop: toolbar intentionally removed ──────────────────────────
-        // No menu bar rendered here anymore.
+        // ── Desktop: BeginMainMenuBar ───────────────────────────────────────
+        bool opened = ImGui::BeginMainMenuBar();
+        if (opened) {
+            // Toggle button at the very left
+            const char* toggleLabel = g_toolbar_collapsed ? ">" : "<";
+            ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.20f, 0.20f, 0.30f, 0.00f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f, 0.35f, 0.50f, 0.80f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.15f, 0.50f, 0.80f, 1.00f));
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 3.0f);
+            if (ImGui::Button(toggleLabel, ImVec2(TOOLBAR_TAB_W, 0)))
+                g_toolbar_collapsed = !g_toolbar_collapsed;
+            ImGui::PopStyleVar(1);
+            ImGui::PopStyleColor(3);
+
+            // Content fades/clips during animation
+            if (colT < 0.99f) {
+                // Push alpha to fade out while collapsing
+                ImGui::PushStyleVar(ImGuiStyleVar_Alpha,
+                    ImGui::GetStyle().Alpha * (1.0f - colT));
+                RenderToolbarContent(viewport);
+                ImGui::PopStyleVar();
+            }
+
+            ImGui::EndMainMenuBar();
+        }
     }
 }
 
@@ -552,6 +463,47 @@ void LoadUIState() {
     }
 }
 
+void RenderStatusBar() {
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+    float barHeight = ImGui::GetFrameHeight() + 4.0f;
+
+#ifdef __IOS__
+    // Thêm safe area bottom (home indicator iPhone)
+#if defined(__cplusplus)
+    extern float getSafeBottom(); 
+#endif
+    float safeBottom = getSafeBottom();
+    if (safeBottom < 0.0f) safeBottom = 0.0f;
+    float posY = viewport->Pos.y + viewport->Size.y - barHeight - safeBottom;
+#else
+    float posY = viewport->Pos.y + viewport->Size.y - barHeight;
+#endif
+
+    ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x, posY));
+    ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, barHeight));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 2.0f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.08f, 0.08f, 0.12f, 1.0f));
+    if (ImGui::Begin("##StatusBar", nullptr,
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoScrollbar |
+        ImGuiWindowFlags_NoDocking))
+    {
+        if (m_emu->GetPaused())
+            ImGui::TextColored(UIHelpers::kColorWarning, "[||] %s", "StatusBar.Paused"_lc);
+        else
+            ImGui::TextColored(UIHelpers::kColorSuccess, "[>] %s",  "StatusBar.Running"_lc);
+        ImGui::SameLine(0.0f, 20.0f); ImGui::TextDisabled("|");
+        ImGui::SameLine(0.0f, 20.0f); ImGui::Text("PC: %05X", pc_cache);
+        ImGui::SameLine(0.0f, 20.0f); ImGui::TextDisabled("|");
+        ImGui::SameLine(0.0f, 20.0f);
+        int bpCount = code_viewer ? (int)code_viewer->GetBreakpointCount() : 0;
+        ImGui::Text("BP: %d", bpCount);
+    }
+    ImGui::End();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar();
+}
+
 // ======================== gui_loop ========================
 void gui_loop() {
     if (!m_emu->Running()) return;
@@ -561,30 +513,39 @@ void gui_loop() {
     ThemeManager::Instance().UpdateUIScale();
 #endif
 
-    // NOTE: no SDL_PollEvent pump here. The main loop in casioemu.cpp owns
-    // the event queue and already forwards everything to ImGui via
-    // ProcessImGuiEvent(). Draining the queue here as well used to swallow
-    // calculator keypresses and window events before they could reach
-    // emulator.UIEvent(), which is what made input feel laggy/dropped.
-    if (SDL_IsTextInputActive() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-        const ImVec2 clickPos = io.MousePos;
-        ImGuiWindow* calc_win = ImGui::FindWindowByName("Calculator");
-        bool insideKeyboard = false;
-        if (calc_win) {
-            insideKeyboard = (clickPos.x >= calc_win->Pos.x && clickPos.x <= calc_win->Pos.x + calc_win->Size.x &&
-                              clickPos.y >= calc_win->Pos.y && clickPos.y <= calc_win->Pos.y + calc_win->Size.y);
-        }
-        const bool insideToolbar = (clickPos.y < 60.0f);
-        if (!insideKeyboard && !insideToolbar) {
-            SDL_StopTextInput();
-            ImGui::SetWindowFocus(nullptr);
+    SDL_Event event;
+    while (SDL_PollEvent(&event)) {
+        ImGui_ImplSDL2_ProcessEvent(&event);
+
+        if (event.type == SDL_MOUSEBUTTONDOWN || event.type == SDL_FINGERDOWN) {
+            int x, y;
+            if (event.type == SDL_MOUSEBUTTONDOWN) {
+                x = event.button.x;
+                y = event.button.y;
+            } else {
+                x = (int)(event.tfinger.x * io.DisplaySize.x);
+                y = (int)(event.tfinger.y * io.DisplaySize.y);
+            }
+
+            if (SDL_IsTextInputActive()) {
+                ImGuiWindow* calc_win = ImGui::FindWindowByName("Calculator");
+                bool insideKeyboard = false;
+                if (calc_win) {
+                    insideKeyboard = (x >= calc_win->Pos.x && x <= calc_win->Pos.x + calc_win->Size.x &&
+                                      y >= calc_win->Pos.y && y <= calc_win->Pos.y + calc_win->Size.y);
+                }
+                bool insideToolbar = (y < 60);
+
+                if (!insideKeyboard && !insideToolbar) {
+                    SDL_StopTextInput();
+                    ImGui::SetWindowFocus(nullptr);
+                }
+            }
         }
     }
 
-#ifndef CASIOEMU_CORE_WEB
     ImGui_ImplSDLRenderer2_NewFrame();
     ImGui_ImplSDL2_NewFrame();
-#endif
     ImGui::NewFrame();
 
 #if !defined(__ANDROID__) && !defined(__IOS__)
@@ -616,7 +577,7 @@ void gui_loop() {
     ImGuiWindow* hovered_win = ImGui::GetCurrentContext()->HoveredWindow;
     bool hovering_other_ui = (hovered_win != nullptr) &&
         (!hovered_win->Name || strstr(hovered_win->Name, "Calculator") == nullptr) &&
-        (!hovered_win->Name || strstr(hovered_win->Name, "Overlay") == nullptr) &&
+        (!hovered_win->Name || strstr(hovered_win->Name, "##DebuggerToolbar") == nullptr) &&
         (!hovered_win->Name || strstr(hovered_win->Name, "##StatusBar") == nullptr) &&
         (!hovered_win->Name || strstr(hovered_win->Name, "DebuggerMenuPopup") == nullptr);
 
@@ -656,94 +617,45 @@ void gui_loop() {
     }
 
     top_bar_size = ImGui::GetCursorPosY();
-#if defined(__IOS__) || defined(__ANDROID__)
-    // Re-assert the toolbar overlay's stacking order now that every other
-    // debugger window (Variables, Ram, CodeViewer, ...) has had its Begin()
-    // called for this frame. ImGui stacks later-begun windows above earlier
-    // ones, so doing this only once right after the toolbar's own End() (as
-    // before) got silently overridden by any window opened afterward,
-    // making the combo/Open/Close-all buttons unclickable whenever an
-    // overlapping debugger window was open.
-    {
-        ImGuiWindow* toolbar_win = ImGui::FindWindowByName("Overlay");
-        if (toolbar_win) ImGui::BringWindowToDisplayFront(toolbar_win);
-    }
-#endif
-#if !defined(__ANDROID__) && !defined(__IOS__)
+#if !defined(__ANDROID__)
     RenderStatusBar();
 #endif
     ImGui::Render();
-#ifndef CASIOEMU_CORE_WEB
     ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData());
-#endif
 #ifndef SINGLE_WINDOW
     SDL_RenderPresent(renderer);
 #endif
-#endif
 }
-static CodeViewer* CreateDebuggerGuiWindows() {
-	while (!me_mmu)
-		std::this_thread::sleep_for(std::chrono::microseconds(1));
-	std::filesystem::path label_file = m_emu->GetModelFilePath("labels.txt");
-	if (!label_file.empty() && std::filesystem::exists(label_file))
-		g_labels = parseFile(label_file.string());
-	else if (!m_emu->IsMemoryModel())
-		std::cout << "[Warning] " << label_file.string() << " doesn't exist. You can consider create one for better debugging experiences. Format: address(0x1234),func name(can be quoted)\n";
+// =====================================================================================
 
-	if (m_emu->hardware_id == casioemu::HW_FX_5800P) {
-		windows.push_back(CreateFx5800FileSystem());
-	}
-
-	if (m_emu->hardware_id != casioemu::HW_SOLARII && !casioemu::IsEpsFamily(m_emu->hardware_id)) {
-		windows.push_back(new VariableWindow());
-	}
-
-	windows.push_back(new HwController());
-	windows.push_back(new LabelViewer());
-	auto* watch_window = new WatchWindow();
-	windows.push_back(watch_window);
-	windows.push_back(CreateCallAnalysisWindow());
-	windows.push_back(code_viewer = new CodeViewer());
-	if (!casioemu::IsEpsFamily(m_emu->hardware_id))
-		windows.push_back(injector = new Injector());
-	membp = new Breakpoints();
-	windows.push_back(membp);
-	windows.push_back(CreateAddressWindow());
-	if (!casioemu::IsEpsFamily(m_emu->hardware_id)) {
-#if !defined(TEST_BUILD)
-		windows.push_back(CreateRopCompilerWindow());
-#endif
-	}
-#if !defined(TEST_BUILD) && !defined(CASIOEMU_CORE_WEB)
-	windows.push_back(new PluginLogWindow());
-#endif
-#if !defined(TEST_BUILD)
-	windows.push_back(snapshot_window = static_cast<SnapshotWindow*>(CreateSnapshotWindow()));
-#endif
-#ifndef CASIOEMU_CORE_WEB
-	if (!casioemu::IsEpsFamily(m_emu->hardware_id))
-		windows.push_back(new QrCodeWindow());
-#endif
-	windows.push_back(MakeThemeWindow());
-	auto* bitmap_window = CreateBitmapViewer();
-	windows.push_back(bitmap_window);
-	for (auto item : GetEditors()) {
-		windows.push_back(item);
-	}
-
-#if defined(__IOS__) || defined(__ANDROID__)
-	// Mobile: chỉ hiện màn hình máy tính theo mặc định (giống bản gốc),
-	// các cửa sổ debugger phải được mở thủ công qua "Debugger Windows".
-	for (auto* item : windows) {
-		if (!item) continue;
-		bool is_calculator = (item->name && strcmp(item->name, "Calculator") == 0);
-		item->open = is_calculator;
-		item->bring_to_front_requested = false;
-	}
-#endif
-
-	return 0;
-}
+class ErrorLogWindow : public UIWindow {
+public:
+    ErrorLogWindow() : UIWindow("Error Log") {}
+    virtual void RenderCore() override {
+        if (ImGui::Button("Copy All")) {
+            std::string full_log;
+            for (const auto& line : g_error_logs) full_log += line + "\n";
+            ImGui::SetClipboardText(full_log.c_str());
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Clear")) g_error_logs.clear();
+        ImGui::SameLine();
+        ImGui::TextDisabled("(max %zu lines)", MAX_ERROR_LOGS);
+        ImGui::Separator();
+        ImGui::BeginChild("ErrorLogScrolling", ImVec2(0,0), false, ImGuiWindowFlags_HorizontalScrollbar);
+        for (const auto& line : g_error_logs) {
+            if (line.find("Function:") == 0)
+                ImGui::TextColored(ImVec4(0.2f,0.8f,0.2f,1.0f), "%s", line.c_str());
+            else if (line.find("0x") != std::string::npos)
+                ImGui::TextColored(ImVec4(0.3f,0.6f,1.0f,1.0f), "%s", line.c_str());
+            else
+                ImGui::TextWrapped("%s", line.c_str());
+        }
+        if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
+            ImGui::SetScrollHereY(1.0f);
+        ImGui::EndChild();
+    }
+};
 
 CodeViewer* test_gui(bool* guiCreated, SDL_Window* wnd, SDL_Renderer* rnd) {
     SDL_SetHint(SDL_HINT_IME_SHOW_UI, "1");
@@ -786,9 +698,8 @@ CodeViewer* test_gui(bool* guiCreated, SDL_Window* wnd, SDL_Renderer* rnd) {
 #ifdef _WIN32
     EnableDarkTitleBar(GetSDLWindowHandle(window));
 #endif
-	casioemu::SetPreferredRendererDriverHint();
-	renderer = SDL_CreateRenderer(window, -1,
-		SDL_RENDERER_PRESENTVSYNC | SDL_RENDERER_ACCELERATED);
+    renderer = SDL_CreateRenderer(window, -1,
+        SDL_RENDERER_PRESENTVSYNC | SDL_RENDERER_ACCELERATED);
 #endif
     if (!renderer) {
         SDL_Log("Error creating SDL_Renderer!");
@@ -807,162 +718,123 @@ CodeViewer* test_gui(bool* guiCreated, SDL_Window* wnd, SDL_Renderer* rnd) {
     io.WantCaptureKeyboard = true;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-#ifndef CASIOEMU_CORE_WEB
     ImGui_ImplSDL2_InitForSDLRenderer(window, renderer);
     ImGui_ImplSDLRenderer2_Init(renderer);
-#endif
     if (guiCreated) *guiCreated = true;
+
+    g_toolbar_posY          = -1.0f;
+    g_toolbar_targetY       = -1.0f;
+    g_toolbar_anim          = 0.0f;
+    // FIX: Only reset intro_done on very first launch; if the toolbar was
+    // already shown (e.g. orientation change re-calls test_gui), skip the
+    // intro animation entirely by restoring the completed state.
+    if (!g_toolbar_ever_shown) {
+        g_toolbar_intro_done = false;
+    } else {
+        g_toolbar_intro_done = true;
+        g_toolbar_anim       = 1.0f;
+    }
+    g_toolbar_collapsed     = false;
+    g_toolbar_collapse_anim = 0.0f;
 
     for (int i = 0; i < 5000 && !me_mmu; i++)
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     if (!me_mmu) { SDL_Log("MMU not ready!"); return nullptr; }
 
-	ThemeManager::Instance().RequestFontRebuild();
-	ThemeManager::Instance().ProcessFontRebuild();
+    auto label_file = m_emu->GetModelFilePath("labels.txt");
+    if (std::filesystem::exists(label_file))
+        g_labels = parseFile(label_file);
+    else
+        std::cout << "[Warning] labels.txt doesn't exist.\n";
 
-	if (guiCreated)
-		*guiCreated = true;
+    if (m_emu->hardware_id == casioemu::HW_FX_5800P)
+        windows.push_back(CreateFx5800FileSystem());
 
-	auto* result = CreateDebuggerGuiWindows();
+    for (auto item : std::initializer_list<UIWindow*>{
+             new CalculatorWindow(),
+             new VariableWindow(),
+             new HwController(),
+             new LabelViewer(),
+             new WatchWindow(),
+             CreateCallAnalysisWindow(),
+             code_viewer = new CodeViewer(),
+             injector    = new Injector(),
+             membp       = new Breakpoints(),
+             CreateAddressWindow(),
+             CreateRopCompilerWindow(),
+             new PluginLogWindow(),
+             CreateSnapshotWindow(),
+             MakeThemeWindow(),
+             CreateBitmapViewer(),
+             new ErrorLogWindow()
+         })
+        windows.push_back(item);
+
+    for (auto item : GetEditors())
+        windows.push_back(item);
 
     if (!std::filesystem::exists(ui_state_fn)) {
-#if defined(__IOS__) || defined(__ANDROID__)
-        // Mobile: chỉ hiện màn hình máy tính theo mặc định (giống bản gốc),
-        // các cửa sổ debugger phải được mở thủ công qua "Debugger Windows".
-        for (auto* w : windows) {
-            if (!w) continue;
-            bool is_calculator = (w->name && strcmp(w->name, "Calculator") == 0);
-            w->open = is_calculator;
-            w->bring_to_front_requested = false;
-        }
-#else
         for (auto* w : windows)
             if (w) { w->open = true; w->bring_to_front_requested = false; }
-#endif
     }
     LoadUIState();
     ui_ready = true;
-    return result;
+    return nullptr;
 }
-
-#ifdef CASIOEMU_CORE_WEB
-void InitWebDebuggerGuiWindows() {
-	if (windows.empty()) {
-		CreateDebuggerGuiWindows();
-	}
-}
-
-void RenderWebDebuggerGuiWindows() {
-	RenderDebuggerGuiWindows();
-}
-
-void CleanupWebDebuggerGuiWindows() {
-	for (auto* win : windows) {
-		delete win;
-	}
-	windows.clear();
-	code_viewer = nullptr;
-	injector = nullptr;
-	membp = nullptr;
-	g_labels.clear();
-}
-#endif
 
 namespace UIHelpers {
-	void JumpToMemory(uint32_t addr) {
-		// Prefer the "Ram" window; fall back to any window that overrides GotoMemoryAddress.
-		UIWindow* fallback = nullptr;
-		for (auto* win : windows) {
-			const char* n = win->name;
-			if (n && strcmp(n, "Ram") == 0) {
-				win->GotoMemoryAddress(addr);
-				win->BringToFront();
-				return;
-			}
-			// Track first editor-like window as fallback
-			if (!fallback && n && (strcmp(n, "Rom") == 0 || strcmp(n, "All") == 0
-				|| strcmp(n, "PRam") == 0 || strcmp(n, "Flash") == 0)) {
-				fallback = win;
-			}
-		}
-		if (fallback) {
-			fallback->GotoMemoryAddress(addr);
-			fallback->BringToFront();
-		}
-	}
+    void JumpToMemory(uint32_t addr) {
+        for (auto* win : windows)
+            if (win->name && strcmp(win->name, "Ram") == 0 && win->GotoMemoryAddress(addr)) return;
+        for (auto* win : windows)
+            if (win->name && strcmp(win->name, "PRam") == 0 && win->GotoMemoryAddress(addr)) return;
+        for (auto* win : windows)
+            if (win->GotoMemoryAddress(addr)) return;
+    }
 
-	void ClickableAddress(uint32_t addr, JumpTarget defaultTarget) {
-		char addrLabel[16];
-		snprintf(addrLabel, sizeof(addrLabel), "%05X", addr);
-		ImGui::PushID(addrLabel);
-		const ImVec2 textSize = ImGui::CalcTextSize(addrLabel);
-		const ImVec2 textPos = ImGui::GetCursorScreenPos();
-		ImGui::InvisibleButton("##clickable_address", textSize);
-		const bool hovered = ImGui::IsItemHovered();
-		const bool leftClicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
-		const bool rightClicked = ImGui::IsItemClicked(ImGuiMouseButton_Right);
-		ImDrawList* drawList = ImGui::GetWindowDrawList();
-		const ImU32 textColor = ImGui::GetColorU32(hovered ? ImVec4(0.55f, 0.72f, 1.0f, 1.0f) : kColorInfo);
-		drawList->AddText(textPos, textColor, addrLabel);
-		if (hovered) {
-			const float underlineY = textPos.y + textSize.y;
-			drawList->AddLine(ImVec2(textPos.x, underlineY), ImVec2(textPos.x + textSize.x, underlineY), textColor);
-		}
-
-		if (hovered) {
-			ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-			ImGui::BeginTooltip();
-			if (defaultTarget == JumpTarget::Code) {
-				ImGui::Text("ClickableAddress.CodeJumpTooltip"_lc, addr);
-				ImGui::TextDisabled("%s", "ClickableAddress.RightClickHint"_lc);
-			} else if (defaultTarget == JumpTarget::Memory) {
-				ImGui::Text("ClickableAddress.MemJumpTooltip"_lc, addr);
-				ImGui::TextDisabled("%s", "ClickableAddress.RightClickHint"_lc);
-			} else {
-				ImGui::Text("ClickableAddress.BothTooltip"_lc, addr);
-			}
-			ImGui::EndTooltip();
-		}
-
-		// Left-click: default action
-		if (leftClicked) {
-			if (defaultTarget == JumpTarget::Code || defaultTarget == JumpTarget::Both) {
-				if (code_viewer) {
-					code_viewer->JumpTo(addr);
-					code_viewer->BringToFront();
-				}
-			} else {
-				JumpToMemory(addr);
-			}
-		}
-
-		// Right-click: context menu with both options
-		char popupId[32];
-		snprintf(popupId, sizeof(popupId), "##ca_popup_%05X", addr);
-		if (rightClicked) {
-			ImGui::OpenPopup(popupId);
-		}
-		if (ImGui::BeginPopup(popupId)) {
-			ImGui::TextDisabled("0x%05X", addr);
-			ImGui::Separator();
-			if (ImGui::MenuItem("ClickableAddress.CodeJump"_lc)) {
-				if (code_viewer) {
-					code_viewer->JumpTo(addr);
-					code_viewer->BringToFront();
-				}
-			}
-			if (ImGui::MenuItem("ClickableAddress.MemJump"_lc)) {
-				JumpToMemory(addr);
-			}
-			ImGui::EndPopup();
-		}
-		ImGui::PopID();
-	}
+    void ClickableAddress(uint32_t addr, JumpTarget defaultTarget) {
+        ImGui::PushStyleColor(ImGuiCol_Text, kColorInfo);
+        char addrLabel[16];
+        snprintf(addrLabel, sizeof(addrLabel), "%05X", addr);
+        ImGui::TextUnformatted(addrLabel);
+        ImGui::PopStyleColor();
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            ImGui::BeginTooltip();
+            if (defaultTarget == JumpTarget::Code) {
+                ImGui::Text("ClickableAddress.CodeJumpTooltip"_lc, addr);
+                ImGui::TextDisabled("%s", "ClickableAddress.RightClickHint"_lc);
+            } else if (defaultTarget == JumpTarget::Memory) {
+                ImGui::Text("ClickableAddress.MemJumpTooltip"_lc, addr);
+                ImGui::TextDisabled("%s", "ClickableAddress.RightClickHint"_lc);
+            } else {
+                ImGui::Text("ClickableAddress.BothTooltip"_lc, addr);
+            }
+            ImGui::EndTooltip();
+        }
+        if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
+            if (defaultTarget == JumpTarget::Code || defaultTarget == JumpTarget::Both) {
+                if (code_viewer) { code_viewer->JumpTo(addr); code_viewer->BringToFront(); }
+            } else { JumpToMemory(addr); }
+        }
+        char popupId[32];
+        snprintf(popupId, sizeof(popupId), "##ca_popup_%05X", addr);
+        if (ImGui::IsItemClicked(ImGuiMouseButton_Right))
+            ImGui::OpenPopup(popupId);
+        if (ImGui::BeginPopup(popupId)) {
+            ImGui::TextDisabled("0x%05X", addr);
+            ImGui::Separator();
+            if (ImGui::MenuItem("ClickableAddress.CodeJump"_lc))
+                if (code_viewer) { code_viewer->JumpTo(addr); code_viewer->BringToFront(); }
+            if (ImGui::MenuItem("ClickableAddress.MemJump"_lc))
+                JumpToMemory(addr);
+            ImGui::EndPopup();
+        }
+    }
 }
 
 void gui_cleanup() {
-#ifndef CASIOEMU_CORE_WEB
-#if !defined(__ANDROID__) && !defined(__IOS__)
+#ifndef __ANDROID__
 #ifndef SINGLE_WINDOW
     if (window) {
         int x, y, w, h;
@@ -975,18 +847,13 @@ void gui_cleanup() {
         ThemeManager::Instance().SaveSettings();
     }
 #endif
-#ifndef CASIOEMU_CORE_WEB
+#endif
     ImGui_ImplSDLRenderer2_Shutdown();
     ImGui_ImplSDL2_Shutdown();
-#endif
     ImGui::DestroyContext();
     SaveUIState();
     windows.clear();
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();
-#endif
-#else
-	CleanupWebDebuggerGuiWindows();
-#endif
 }
