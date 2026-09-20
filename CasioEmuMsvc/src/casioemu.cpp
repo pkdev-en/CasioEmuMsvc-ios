@@ -362,11 +362,22 @@ int main(int argc, char* argv[]) {
 			std::string path = std::string(home) + "/Documents/CasioEmuMsvc";
 			std::error_code ec;
 			std::filesystem::create_directories(path, ec);
-			std::filesystem::copy(basePath + "models", path + "/models", std::filesystem::copy_options::recursive | std::filesystem::copy_options::skip_existing, ec);
-			std::filesystem::copy(basePath + "locales", path + "/locales", std::filesystem::copy_options::recursive | std::filesystem::copy_options::skip_existing, ec);
-			std::filesystem::copy(basePath + "fonts", path + "/fonts", std::filesystem::copy_options::recursive | std::filesystem::copy_options::skip_existing, ec);
-			std::filesystem::copy(basePath + "fonts_cjk", path + "/fonts_cjk", std::filesystem::copy_options::recursive | std::filesystem::copy_options::skip_existing, ec);
-			std::filesystem::copy(basePath + "License.md", path + "/License.md", std::filesystem::copy_options::skip_existing, ec);
+			// NOTE: overwrite_existing, not skip_existing. These are
+			// read-only assets shipped with THIS build of the app, not user
+			// data -- they must always match the binary. skip_existing was
+			// a one-way trap: if an earlier install had ever left this
+			// directory partially populated (an interrupted copy, or an
+			// older build whose bundle was missing some locale files), the
+			// destination directory would already "exist" from that point
+			// on, and no future update would ever be allowed to add the
+			// missing files -- e.g. locales/*.lc staying incomplete forever
+			// once bad, silently breaking every "..."_lc lookup into
+			// printing the raw key instead of translated text.
+			std::filesystem::copy(basePath + "models", path + "/models", std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing, ec);
+			std::filesystem::copy(basePath + "locales", path + "/locales", std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing, ec);
+			std::filesystem::copy(basePath + "fonts", path + "/fonts", std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing, ec);
+			std::filesystem::copy(basePath + "fonts_cjk", path + "/fonts_cjk", std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing, ec);
+			std::filesystem::copy(basePath + "License.md", path + "/License.md", std::filesystem::copy_options::overwrite_existing, ec);
 			chdir(path.c_str());
 		}
 		else if (!basePath.empty()) {
