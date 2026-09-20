@@ -240,14 +240,9 @@ static ImGuiID RenderDockSpace(float reservedBottom) {
 
 static void RenderDebuggerGuiWindows() {
 #if !defined(__ANDROID__) && !defined(__IOS__)
-	ImGuiID dockspace_id = RenderDockSpace(GetStatusBarHeight());
+	RenderDockSpace(GetStatusBarHeight());
 #endif
 	for (auto win : windows) {
-#if !defined(__ANDROID__) && !defined(__IOS__)
-		if (dockspace_id != 0) {
-			ImGui::SetNextWindowDockID(dockspace_id, ImGuiCond_FirstUseEver);
-		}
-#endif
 		win->Render();
 	}
 }
