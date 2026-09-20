@@ -159,11 +159,33 @@ void RenderStatusBar() {
 		ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
 		ImGuiWindowFlags_NoDocking)) {
 		
-		// Run/Pause state status indicator
-		if (m_emu->GetPaused()) {
-			ImGui::TextColored(UIHelpers::kColorWarning, "\xe2\x8f\xb8 %s", "StatusBar.Paused"_lc);  // ⏸
-		} else {
-			ImGui::TextColored(UIHelpers::kColorSuccess, "\xe2\x96\xb6 %s", "StatusBar.Running"_lc); // ▶
+		// Run/Pause state status indicator — drawn manually rather than via
+		// Unicode glyphs (⏸ U+23F8, ▶ U+25B6), which aren't in the font
+		// atlas and rendered as missing-glyph boxes.
+		{
+			float iconSize = ImGui::GetTextLineHeight() * 0.7f;
+			ImVec2 iconPos = ImGui::GetCursorScreenPos();
+			ImGui::Dummy(ImVec2(iconSize, iconSize));
+			ImDrawList* dl = ImGui::GetWindowDrawList();
+			bool paused = m_emu->GetPaused();
+			ImU32 col = ImGui::GetColorU32(paused ? UIHelpers::kColorWarning : UIHelpers::kColorSuccess);
+			float cy = iconPos.y + iconSize * 0.5f;
+			if (paused) {
+				// Two vertical bars (⏸)
+				float barW = iconSize * 0.28f;
+				dl->AddRectFilled(ImVec2(iconPos.x, iconPos.y), ImVec2(iconPos.x + barW, iconPos.y + iconSize), col);
+				dl->AddRectFilled(ImVec2(iconPos.x + iconSize - barW, iconPos.y), ImVec2(iconPos.x + iconSize, iconPos.y + iconSize), col);
+			}
+			else {
+				// Right-pointing triangle (▶)
+				dl->AddTriangleFilled(
+					ImVec2(iconPos.x, iconPos.y),
+					ImVec2(iconPos.x, iconPos.y + iconSize),
+					ImVec2(iconPos.x + iconSize, cy), col);
+			}
+			ImGui::SameLine(0.0f, 6.0f);
+			ImGui::TextColored(paused ? UIHelpers::kColorWarning : UIHelpers::kColorSuccess, "%s",
+				paused ? "StatusBar.Paused"_lc : "StatusBar.Running"_lc);
 		}
 		
 		ImGui::SameLine(0.0f, 20.0f);
