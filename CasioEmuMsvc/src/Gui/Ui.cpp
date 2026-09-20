@@ -566,16 +566,23 @@ void gui_loop() {
     // ProcessImGuiEvent(). Draining the queue here as well used to swallow
     // calculator keypresses and window events before they could reach
     // emulator.UIEvent(), which is what made input feel laggy/dropped.
+    //
+    // FIX: this used to special-case "inside the Calculator window" as the
+    // only place a tap was allowed to keep the keyboard open, and close it
+    // for everything else. That meant tapping any OTHER input field (a
+    // Watch/RopCompiler/debugger text box, etc.) immediately called
+    // SDL_StopTextInput() in the very same frame ImGui had just asked for
+    // it via WantTextInput -- the keyboard would flash open and instantly
+    // close. io.WantTextInput is the actual, widget-agnostic signal for
+    // "some ImGui text field currently has focus and wants the on-screen
+    // keyboard"; deferring to it here (checked *after* NewFrame() below
+    // would process this tap's click-to-focus) is what the toolbar-area
+    // exception still needs to guard against, since a tap on the toolbar
+    // itself isn't a text field but also shouldn't immediately dismiss.
     if (SDL_IsTextInputActive() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         const ImVec2 clickPos = io.MousePos;
-        ImGuiWindow* calc_win = ImGui::FindWindowByName("Calculator");
-        bool insideKeyboard = false;
-        if (calc_win) {
-            insideKeyboard = (clickPos.x >= calc_win->Pos.x && clickPos.x <= calc_win->Pos.x + calc_win->Size.x &&
-                              clickPos.y >= calc_win->Pos.y && clickPos.y <= calc_win->Pos.y + calc_win->Size.y);
-        }
         const bool insideToolbar = (clickPos.y < 60.0f);
-        if (!insideKeyboard && !insideToolbar) {
+        if (!io.WantTextInput && !insideToolbar) {
             SDL_StopTextInput();
             ImGui::SetWindowFocus(nullptr);
         }
