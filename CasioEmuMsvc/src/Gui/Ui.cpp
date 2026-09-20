@@ -458,9 +458,38 @@ void RenderDebuggerToolbar() {
                 // check on the frame the popup just opened, since that same
                 // click (on the combo button) would otherwise immediately
                 // close what it just opened.
-                bool clickedOutside = !comboJustOpened &&
+                // A tap that starts AND ends outside the dropdown means the
+                // click landed outside it -- close it. Checking on
+                // IsMouseClicked (press) instead of release would also fire
+                // the instant a finger touches down to start scrolling a
+                // different window, since starting a drag/scroll gesture on
+                // touch still begins with a normal mouse-down event; that
+                // false-positive was closing the dropdown before the drag
+                // even had a chance to register as a scroll. Waiting for
+                // release, and requiring the mouse not to have moved far
+                // from where it went down, distinguishes an actual tap
+                // outside the dropdown from a scroll gesture starting
+                // elsewhere. Skip this check on the frame the popup just
+                // opened, since that same click (on the combo button) would
+                // otherwise immediately close what it just opened.
+                static ImVec2 outsideClickStartPos;
+                if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+                    !ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup)) {
+                    outsideClickStartPos = ImGui::GetMousePos();
+                }
+                bool clickedOutside = false;
+                if (!comboJustOpened &&
                     !ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup) &&
-                    ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+                    ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+                    ImVec2 delta = ImVec2(
+                        ImGui::GetMousePos().x - outsideClickStartPos.x,
+                        ImGui::GetMousePos().y - outsideClickStartPos.y);
+                    float distSq = delta.x * delta.x + delta.y * delta.y;
+                    constexpr float kTapMoveThreshold = 10.0f;
+                    if (distSq <= kTapMoveThreshold * kTapMoveThreshold) {
+                        clickedOutside = true;
+                    }
+                }
                 for (auto* w : windows) {
                     if (!w) continue;
                     bool is_selected = (current_filter == w);
