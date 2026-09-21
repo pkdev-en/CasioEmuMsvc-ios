@@ -17,6 +17,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -347,6 +348,29 @@ int main(int argc, char* argv[]) {
 
 #ifdef __IOS__
 	{
+		// Diagnostic logging for a bug report: locale.txt (the saved
+		// language choice) appears to sometimes not survive a kill-and-
+		// relaunch even without reinstalling the app, and SDL_Log alone
+		// isn't visible without Xcode/Console.app (which the reporter
+		// doesn't have access to — no Mac). Writing the same diagnostics to
+		// a plain text file works around that: UIFileSharingEnabled is
+		// already set in Info.plist, so ~/Documents/CasioEmuMsvc is
+		// directly browsable through the iOS Files app (On My iPad/iPhone >
+		// CasioEmuMsvc) without any cable or Mac. Appends across launches
+		// (separated by a timestamp) so "right after picking a language"
+		// can be compared against "next launch" in one file. This is
+		// intentionally temporary — strip it once the actual failure point
+		// is identified from a real log.
+		auto diagLog = [](std::ofstream& f, const char* fmt, ...) {
+			char buf[512];
+			va_list args;
+			va_start(args, fmt);
+			vsnprintf(buf, sizeof(buf), fmt, args);
+			va_end(args);
+			SDL_Log("%s", buf);
+			if (f.is_open()) f << buf << "\n";
+		};
+
 		// SDL_GetBasePath() is the reliable way to find the app bundle's
 		// Resources directory on iOS/macOS — it does NOT depend on the
 		// process's working directory at launch (which SDL leaves
@@ -356,16 +380,33 @@ int main(int argc, char* argv[]) {
 		char* basePathRaw = SDL_GetBasePath();
 		std::string basePath = basePathRaw ? basePathRaw : "";
 		if (basePathRaw) SDL_free(basePathRaw);
-		SDL_Log("[LocaleDiag] SDL_GetBasePath() = '%s'", basePath.c_str());
 
 		const char* home = getenv("HOME");
-		SDL_Log("[LocaleDiag] getenv(HOME) = '%s'", home ? home : "(null)");
+		std::string diagLogPath = home ? (std::string(home) + "/Documents/CasioEmuMsvc/locale_diag.log") : "";
+		std::ofstream diagFile;
+		if (!diagLogPath.empty()) {
+			std::error_code mkEc;
+			std::filesystem::create_directories(std::string(home) + "/Documents/CasioEmuMsvc", mkEc);
+			diagFile.open(diagLogPath, std::ios::app);
+		}
+
+		{
+			auto now = std::chrono::system_clock::now();
+			auto t = std::chrono::system_clock::to_time_t(now);
+			char timebuf[64];
+			std::strftime(timebuf, sizeof(timebuf), "%Y-%m-%d %H:%M:%S", std::localtime(&t));
+			diagLog(diagFile, "\n===== [LocaleDiag] launch at %s =====", timebuf);
+		}
+
+		diagLog(diagFile, "[LocaleDiag] SDL_GetBasePath() = '%s'", basePath.c_str());
+		diagLog(diagFile, "[LocaleDiag] getenv(HOME) = '%s'", home ? home : "(null)");
+
 		if (home && !basePath.empty()) {
 			std::string path = std::string(home) + "/Documents/CasioEmuMsvc";
-			SDL_Log("[LocaleDiag] target path = '%s'", path.c_str());
+			diagLog(diagFile, "[LocaleDiag] target path = '%s'", path.c_str());
 			std::error_code ec;
 			std::filesystem::create_directories(path, ec);
-			if (ec) SDL_Log("[LocaleDiag] create_directories FAILED: %s", ec.message().c_str());
+			if (ec) diagLog(diagFile, "[LocaleDiag] create_directories FAILED: %s", ec.message().c_str());
 
 			// NOTE: overwrite_existing, not skip_existing. These are
 			// read-only assets shipped with THIS build of the app, not user
@@ -381,14 +422,12 @@ int main(int argc, char* argv[]) {
 			//
 			// Each copy now checks/logs its own error_code (previously all
 			// five shared one unchecked `ec`, so a failure on any single
-			// call besides the last was invisible) -- this is temporary
-			// diagnostic logging to find where the raw-key-after-relaunch
-			// bug is actually coming from; strip it back down once found.
-			auto copyAndLog = [](const std::string& what, const std::string& src, const std::string& dst) {
+			// call besides the last was invisible).
+			auto copyAndLog = [&](const std::string& what, const std::string& src, const std::string& dst) {
 				std::error_code copyEc;
 				bool srcExists = std::filesystem::exists(src);
 				std::filesystem::copy(src, dst, std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing, copyEc);
-				SDL_Log("[LocaleDiag] copy %s: src_exists=%d src='%s' dst='%s' -> %s",
+				diagLog(diagFile, "[LocaleDiag] copy %s: src_exists=%d src='%s' dst='%s' -> %s",
 					what.c_str(), srcExists ? 1 : 0, src.c_str(), dst.c_str(),
 					copyEc ? copyEc.message().c_str() : "ok");
 			};
@@ -400,10 +439,10 @@ int main(int argc, char* argv[]) {
 				std::error_code copyEc;
 				bool srcExists = std::filesystem::exists(basePath + "License.md");
 				std::filesystem::copy(basePath + "License.md", path + "/License.md", std::filesystem::copy_options::overwrite_existing, copyEc);
-				SDL_Log("[LocaleDiag] copy License.md: src_exists=%d -> %s", srcExists ? 1 : 0, copyEc ? copyEc.message().c_str() : "ok");
+				diagLog(diagFile, "[LocaleDiag] copy License.md: src_exists=%d -> %s", srcExists ? 1 : 0, copyEc ? copyEc.message().c_str() : "ok");
 			}
 			chdir(path.c_str());
-			SDL_Log("[LocaleDiag] chdir'd to '%s'", path.c_str());
+			diagLog(diagFile, "[LocaleDiag] chdir'd to '%s'", path.c_str());
 		}
 		else if (!basePath.empty()) {
 			// No writable HOME dir available — fall back to running
@@ -411,20 +450,20 @@ int main(int argc, char* argv[]) {
 			// can still find its resources, even though it won't be able
 			// to persist settings/recordings/etc.
 			chdir(basePath.c_str());
-			SDL_Log("[LocaleDiag] no writable HOME; chdir'd to bundle basePath '%s' instead", basePath.c_str());
+			diagLog(diagFile, "[LocaleDiag] no writable HOME; chdir'd to bundle basePath '%s' instead", basePath.c_str());
 		}
 		else {
-			SDL_Log("[LocaleDiag] WARNING: basePath is empty and no fallback chdir happened at all.");
+			diagLog(diagFile, "[LocaleDiag] WARNING: basePath is empty and no fallback chdir happened at all.");
 		}
 
 		{
 			bool localeTxtExists = std::filesystem::exists("locale.txt");
-			SDL_Log("[LocaleDiag] locale.txt exists (post-chdir, pre-Load) = %d", localeTxtExists ? 1 : 0);
+			diagLog(diagFile, "[LocaleDiag] locale.txt exists (post-chdir, pre-Load) = %d", localeTxtExists ? 1 : 0);
 			if (localeTxtExists) {
 				std::ifstream f("locale.txt");
 				std::string content;
 				std::getline(f, content);
-				SDL_Log("[LocaleDiag] locale.txt content = '%s'", content.c_str());
+				diagLog(diagFile, "[LocaleDiag] locale.txt content = '%s'", content.c_str());
 			}
 			bool localesDirExists = std::filesystem::exists("./locales");
 			int localeFileCount = 0;
@@ -434,11 +473,13 @@ int main(int argc, char* argv[]) {
 					if (entry.path().extension() == ".lc") localeFileCount++;
 				}
 			}
-			SDL_Log("[LocaleDiag] ./locales exists=%d, .lc file count=%d", localesDirExists ? 1 : 0, localeFileCount);
+			diagLog(diagFile, "[LocaleDiag] ./locales exists=%d, .lc file count=%d", localesDirExists ? 1 : 0, localeFileCount);
 		}
+
+		g_local.Load();
+		diagLog(diagFile, "[LocaleDiag] after Load(): current locale = '%s'", g_local.GetCurrentLanguage().c_str());
+		diagFile.close();
 	}
-	g_local.Load();
-	SDL_Log("[LocaleDiag] after Load(): current locale = '%s'", g_local.GetCurrentLanguage().c_str());
 	ThemeManager::Instance().LoadSettings();
 #endif
 
