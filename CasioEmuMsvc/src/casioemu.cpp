@@ -356,12 +356,17 @@ int main(int argc, char* argv[]) {
 		char* basePathRaw = SDL_GetBasePath();
 		std::string basePath = basePathRaw ? basePathRaw : "";
 		if (basePathRaw) SDL_free(basePathRaw);
+		SDL_Log("[LocaleDiag] SDL_GetBasePath() = '%s'", basePath.c_str());
 
 		const char* home = getenv("HOME");
+		SDL_Log("[LocaleDiag] getenv(HOME) = '%s'", home ? home : "(null)");
 		if (home && !basePath.empty()) {
 			std::string path = std::string(home) + "/Documents/CasioEmuMsvc";
+			SDL_Log("[LocaleDiag] target path = '%s'", path.c_str());
 			std::error_code ec;
 			std::filesystem::create_directories(path, ec);
+			if (ec) SDL_Log("[LocaleDiag] create_directories FAILED: %s", ec.message().c_str());
+
 			// NOTE: overwrite_existing, not skip_existing. These are
 			// read-only assets shipped with THIS build of the app, not user
 			// data -- they must always match the binary. skip_existing was
@@ -373,12 +378,32 @@ int main(int argc, char* argv[]) {
 			// missing files -- e.g. locales/*.lc staying incomplete forever
 			// once bad, silently breaking every "..."_lc lookup into
 			// printing the raw key instead of translated text.
-			std::filesystem::copy(basePath + "models", path + "/models", std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing, ec);
-			std::filesystem::copy(basePath + "locales", path + "/locales", std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing, ec);
-			std::filesystem::copy(basePath + "fonts", path + "/fonts", std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing, ec);
-			std::filesystem::copy(basePath + "fonts_cjk", path + "/fonts_cjk", std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing, ec);
-			std::filesystem::copy(basePath + "License.md", path + "/License.md", std::filesystem::copy_options::overwrite_existing, ec);
+			//
+			// Each copy now checks/logs its own error_code (previously all
+			// five shared one unchecked `ec`, so a failure on any single
+			// call besides the last was invisible) -- this is temporary
+			// diagnostic logging to find where the raw-key-after-relaunch
+			// bug is actually coming from; strip it back down once found.
+			auto copyAndLog = [](const std::string& what, const std::string& src, const std::string& dst) {
+				std::error_code copyEc;
+				bool srcExists = std::filesystem::exists(src);
+				std::filesystem::copy(src, dst, std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing, copyEc);
+				SDL_Log("[LocaleDiag] copy %s: src_exists=%d src='%s' dst='%s' -> %s",
+					what.c_str(), srcExists ? 1 : 0, src.c_str(), dst.c_str(),
+					copyEc ? copyEc.message().c_str() : "ok");
+			};
+			copyAndLog("models", basePath + "models", path + "/models");
+			copyAndLog("locales", basePath + "locales", path + "/locales");
+			copyAndLog("fonts", basePath + "fonts", path + "/fonts");
+			copyAndLog("fonts_cjk", basePath + "fonts_cjk", path + "/fonts_cjk");
+			{
+				std::error_code copyEc;
+				bool srcExists = std::filesystem::exists(basePath + "License.md");
+				std::filesystem::copy(basePath + "License.md", path + "/License.md", std::filesystem::copy_options::overwrite_existing, copyEc);
+				SDL_Log("[LocaleDiag] copy License.md: src_exists=%d -> %s", srcExists ? 1 : 0, copyEc ? copyEc.message().c_str() : "ok");
+			}
 			chdir(path.c_str());
+			SDL_Log("[LocaleDiag] chdir'd to '%s'", path.c_str());
 		}
 		else if (!basePath.empty()) {
 			// No writable HOME dir available — fall back to running
@@ -386,9 +411,34 @@ int main(int argc, char* argv[]) {
 			// can still find its resources, even though it won't be able
 			// to persist settings/recordings/etc.
 			chdir(basePath.c_str());
+			SDL_Log("[LocaleDiag] no writable HOME; chdir'd to bundle basePath '%s' instead", basePath.c_str());
+		}
+		else {
+			SDL_Log("[LocaleDiag] WARNING: basePath is empty and no fallback chdir happened at all.");
+		}
+
+		{
+			bool localeTxtExists = std::filesystem::exists("locale.txt");
+			SDL_Log("[LocaleDiag] locale.txt exists (post-chdir, pre-Load) = %d", localeTxtExists ? 1 : 0);
+			if (localeTxtExists) {
+				std::ifstream f("locale.txt");
+				std::string content;
+				std::getline(f, content);
+				SDL_Log("[LocaleDiag] locale.txt content = '%s'", content.c_str());
+			}
+			bool localesDirExists = std::filesystem::exists("./locales");
+			int localeFileCount = 0;
+			if (localesDirExists) {
+				std::error_code diagEc;
+				for (auto& entry : std::filesystem::directory_iterator("./locales", diagEc)) {
+					if (entry.path().extension() == ".lc") localeFileCount++;
+				}
+			}
+			SDL_Log("[LocaleDiag] ./locales exists=%d, .lc file count=%d", localesDirExists ? 1 : 0, localeFileCount);
 		}
 	}
 	g_local.Load();
+	SDL_Log("[LocaleDiag] after Load(): current locale = '%s'", g_local.GetCurrentLanguage().c_str());
 	ThemeManager::Instance().LoadSettings();
 #endif
 
