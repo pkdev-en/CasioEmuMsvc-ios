@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include "../locales/lang.h"
 #include <codecvt>
 #include <filesystem>
@@ -42,6 +42,10 @@ public:
 		try {
 			m_translations.clear();
 			m_pluralRules.clear();
+			{
+				std::lock_guard<std::mutex> lock(m_missingMutex);
+				m_missingKeys.clear();
+			}
 			m_currentLocale = localeName;
 			std::filesystem::path filePath =
 				std::filesystem::path(m_basePath) / (localeName + ".lc");
@@ -61,8 +65,22 @@ public:
 					outFile << it->second;
 				}
 				else {
-					//LoadTranslationsFromString(DefaultLocales::en_US);
-					m_currentLocale = "C";
+					// No embedded default for this locale (DefaultLocales is
+					// currently empty — see lang.h) and no file on disk for
+					// it either. Falling straight through to "C" here used
+					// to leave m_translations completely empty, so every
+					// "..."_lc lookup returned the raw key instead of any
+					// readable text. Try en_US.lc (shipped for every
+					// platform) as a real fallback before giving up.
+					std::filesystem::path fallbackPath =
+						std::filesystem::path(m_basePath) / "en_US.lc";
+					if (localeName != "en_US" && std::filesystem::exists(fallbackPath)) {
+						LoadTranslationsFromFile(fallbackPath);
+						m_currentLocale = "en_US";
+					}
+					else {
+						m_currentLocale = "C";
+					}
 				}
 			}
 			if (savesetting) {
@@ -81,6 +99,21 @@ public:
 
 	std::string GetCurrentLanguage() const {
 		return m_currentLocale;
+	}
+
+	std::string CollectFontGlyphText() const {
+		std::string text;
+		for (const auto& translation : m_translations) {
+			text.append(translation.second);
+			text.push_back('\n');
+		}
+		for (const auto& plural : m_pluralRules) {
+			for (const auto& rule : plural.second) {
+				text.append(rule.form);
+				text.push_back('\n');
+			}
+		}
+		return text;
 	}
 
 	std::string Get(std::string_view key) const {
@@ -184,11 +217,12 @@ private:
 		int lineNumber = 0;
 		while (std::getline(file, line)) {
 			lineNumber++;
-			if (line.empty() || line[0] == '#')
+			std::string trimmed = Trim(line);
+			if (trimmed.empty() || trimmed[0] == '#')
 				continue;
 
 			try {
-				ProcessLine(line);
+				ProcessLine(trimmed);
 			}
 			catch (const std::exception& e) {
 				char buffer[512];
@@ -205,11 +239,12 @@ private:
 		int lineNumber = 0;
 		while (std::getline(stream, line)) {
 			lineNumber++;
-			if (line.empty() || line[0] == '#')
+			std::string trimmed = Trim(line);
+			if (trimmed.empty() || trimmed[0] == '#')
 				continue;
 
 			try {
-				ProcessLine(line);
+				ProcessLine(trimmed);
 			}
 			catch (const std::exception& e) {
 				char buffer[512];

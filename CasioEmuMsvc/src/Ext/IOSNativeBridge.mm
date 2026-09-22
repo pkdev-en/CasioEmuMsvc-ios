@@ -13,9 +13,12 @@
 // Singleton to act as the UIDocumentPickerDelegate
 // _isOpenMode tracks whether the last-presented picker was an Open (YES) or Export/Save (NO) picker,
 // replacing the deprecated UIDocumentPickerMode / controller.documentPickerMode property removed in iOS 16+.
-@interface iOSNativeBridge : NSObject <UIDocumentPickerDelegate>
+@interface iOSNativeBridge : NSObject <UIDocumentPickerDelegate, UIDocumentInteractionControllerDelegate>
 + (instancetype)sharedInstance;
 @property (nonatomic, assign) BOOL isOpenMode;
+// Must be strongly retained: UIDocumentInteractionController does not keep
+// itself alive while its "Open In"/install menu is on screen.
+@property (nonatomic, strong) UIDocumentInteractionController *webClipInteractionController;
 @end
 
 @implementation iOSNativeBridge
@@ -81,6 +84,12 @@
     }
     
     return scene.windows.firstObject.rootViewController;
+}
+
+// UIDocumentInteractionControllerDelegate: needed so the "Install Profile"
+// menu has a view controller to anchor its popover to on iPad.
+- (UIViewController *)documentInteractionControllerViewControllerForPreview:(UIDocumentInteractionController *)controller {
+    return [self rootViewController];
 }
 
 // Helper: lấy key window theo cách tương thích iOS 13+
@@ -169,6 +178,36 @@ float getSafeRight() {
             initForExportingURLs:@[fileURL] asCopy:YES];
         picker.delegate = self;
         [[self rootViewController] presentViewController:picker animated:YES completion:nil];
+    });
+}
+
+// .mobileconfig needs iOS to recognize it as an installable profile and
+// offer "Install Profile" -- exporting it as a plain file copy via
+// UIDocumentPickerViewController (like saveFileDialog above) wouldn't
+// trigger that; it would just save an inert copy with no install prompt.
+// UIDocumentInteractionController's presentOpenInMenuFromRect: is what
+// actually surfaces "Install Profile" once iOS reads the file's UTI.
+// Strongly retained as an ivar (not a local/property) because
+// UIDocumentInteractionController does NOT retain itself while its menu is
+// showing, and the delegate reference alone isn't enough -- if this were a
+// stack-local or weak reference it could be deallocated mid-presentation.
+- (void)presentWebClipInstall:(NSString*)filePath {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (filePath.length == 0 || ![[NSFileManager defaultManager] fileExistsAtPath:filePath]) {
+            NSLog(@"[iOSNativeBridge] presentWebClipInstall: no such file: %@", filePath);
+            return;
+        }
+        NSURL *fileURL = [NSURL fileURLWithPath:filePath];
+        self.webClipInteractionController = [UIDocumentInteractionController interactionControllerWithURL:fileURL];
+        self.webClipInteractionController.delegate = self;
+        UIViewController *root = [self rootViewController];
+        CGRect anchor = CGRectMake(root.view.bounds.size.width / 2.0, root.view.bounds.size.height / 2.0, 1.0, 1.0);
+        BOOL opened = [self.webClipInteractionController presentOpenInMenuFromRect:anchor
+                                                                              inView:root.view
+                                                                            animated:YES];
+        if (!opened) {
+            NSLog(@"[iOSNativeBridge] presentWebClipInstall: presentOpenInMenuFromRect returned NO (no app -- including Settings' own handler -- registered to open .mobileconfig).");
+        }
     });
 }
 
@@ -441,5 +480,147 @@ bool presentCreateHomeScreenShortcut(const char* modelIdentifier, const char* sh
     }
 
     return succeeded == YES;
+}
+
+#pragma mark - Home Screen Shortcut Creation (Web Clip / separate icon)
+//
+// presentCreateHomeScreenShortcut above uses Quick Actions, which need a
+// long-press on the app's own existing icon. This produces something
+// different: a genuinely separate icon that sits directly on the Home
+// Screen. iOS has no public API for a sideloaded app to place that icon
+// itself -- a Web Clip Configuration Profile (.mobileconfig), installed
+// once through Settings, is the only supported mechanism. The profile's
+// URL points at casioemu://launch?model=<id>, the exact scheme
+// ShortcutLaunch.h's ResolveShortcutLaunchEvent() already decodes, so no
+// changes were needed on the launch-handling side.
+
+// RFC 3986 unreserved characters are left alone; everything else
+// (including '&', '=', '?', which would otherwise break the query string
+// this gets embedded in) is percent-encoded. NSString's built-in
+// URL-encoding methods were deprecated/removed across iOS versions for
+// this exact use case, so this is done by hand rather than depending on
+// whichever one happens to still exist on a given OS version.
+static NSString *WebClipPercentEncode(NSString *raw) {
+    NSMutableCharacterSet *allowed = [[NSCharacterSet alphanumericCharacterSet] mutableCopy];
+    [allowed addCharactersInString:@"-._~"];
+    NSString *encoded = [raw stringByAddingPercentEncodingWithAllowedCharacters:allowed];
+    return encoded ?: @"";
+}
+
+bool presentCreateHomeScreenWebClip(const char* modelIdentifier, const char* shortcutName) {
+    if (!modelIdentifier || modelIdentifier[0] == '\0') {
+        NSLog(@"[WebClip] Missing model identifier.");
+        return false;
+    }
+
+    NSString *modelId = [NSString stringWithUTF8String:modelIdentifier];
+    if (!modelId) {
+        NSLog(@"[WebClip] modelIdentifier was not valid UTF-8.");
+        return false;
+    }
+    NSString *label = modelId;
+    if (shortcutName && shortcutName[0] != '\0') {
+        NSString *typed = [NSString stringWithUTF8String:shortcutName];
+        if (typed) {
+            label = typed;
+        }
+        else {
+            NSLog(@"[WebClip] shortcutName was not valid UTF-8 (likely truncated mid-character); falling back to the model name.");
+        }
+    }
+
+    NSString *targetURL = [NSString stringWithFormat:@"casioemu://launch?model=%@", WebClipPercentEncode(modelId)];
+
+    // Two distinct UUIDs are required: PayloadUUID must be unique per
+    // payload dictionary (the outer profile AND the inner Web Clip payload
+    // each need their own), and PayloadIdentifier should stay stable across
+    // re-installs of the *same* shortcut so iOS treats re-creating it as an
+    // update rather than piling up duplicate profiles. Deriving the
+    // identifier from the model id (rather than a fresh UUID each time)
+    // gets that for free.
+    NSString *profileUUID = [[NSUUID UUID] UUIDString];
+    NSString *clipUUID = [[NSUUID UUID] UUIDString];
+    NSString *safeModelIdForIdentifier = [[modelId componentsSeparatedByCharactersInSet:
+        [[NSCharacterSet alphanumericCharacterSet] invertedSet]] componentsJoinedByString:@"-"];
+    NSString *profileIdentifier = [NSString stringWithFormat:@"com.pkdevvn.casioemu.webclip.%@", safeModelIdForIdentifier];
+
+    // Label/Full Screen keys: Full Screen=false so the Web Clip target URL
+    // is handled as a normal URL open (routing straight to casioemu://,
+    // which iOS resolves via CFBundleURLTypes in Info.plist) rather than
+    // being rendered inside a stripped-down in-app Safari chrome, which is
+    // Full Screen=true's behavior and pointless for a non-http(s) scheme.
+    NSString *plist = [NSString stringWithFormat:
+        @"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
+        "<plist version=\"1.0\">\n"
+        "<dict>\n"
+        "  <key>PayloadContent</key>\n"
+        "  <array>\n"
+        "    <dict>\n"
+        "      <key>PayloadType</key>\n"
+        "      <string>com.apple.webClip.managed</string>\n"
+        "      <key>PayloadVersion</key>\n"
+        "      <integer>1</integer>\n"
+        "      <key>PayloadIdentifier</key>\n"
+        "      <string>%@.clip</string>\n"
+        "      <key>PayloadUUID</key>\n"
+        "      <string>%@</string>\n"
+        "      <key>PayloadDisplayName</key>\n"
+        "      <string>%@</string>\n"
+        "      <key>Label</key>\n"
+        "      <string>%@</string>\n"
+        "      <key>URL</key>\n"
+        "      <string>%@</string>\n"
+        "      <key>FullScreen</key>\n"
+        "      <false/>\n"
+        "      <key>Precomposed</key>\n"
+        "      <true/>\n"
+        "      <key>RemovalDisallowed</key>\n"
+        "      <false/>\n"
+        "      <key>IsRemovable</key>\n"
+        "      <true/>\n"
+        "    </dict>\n"
+        "  </array>\n"
+        "  <key>PayloadDisplayName</key>\n"
+        "  <string>%@ Shortcut</string>\n"
+        "  <key>PayloadDescription</key>\n"
+        "  <string>Adds a Home Screen icon that jumps straight to \"%@\" in CasioEmuMsvc.</string>\n"
+        "  <key>PayloadIdentifier</key>\n"
+        "  <string>%@</string>\n"
+        "  <key>PayloadType</key>\n"
+        "  <string>Configuration</string>\n"
+        "  <key>PayloadUUID</key>\n"
+        "  <string>%@</string>\n"
+        "  <key>PayloadVersion</key>\n"
+        "  <integer>1</integer>\n"
+        "  <key>PayloadRemovalDisallowed</key>\n"
+        "  <false/>\n"
+        "</dict>\n"
+        "</plist>\n",
+        profileIdentifier, clipUUID, label, label, targetURL,
+        label, label, profileIdentifier, profileUUID];
+
+    NSData *plistData = [plist dataUsingEncoding:NSUTF8StringEncoding];
+    if (!plistData) {
+        NSLog(@"[WebClip] Failed to encode the profile as UTF-8.");
+        return false;
+    }
+
+    // File extension matters here, not just content: iOS identifies
+    // .mobileconfig by extension/UTI to know it should offer "Install
+    // Profile" at all.
+    NSString *tempDir = NSTemporaryDirectory();
+    NSString *fileName = [NSString stringWithFormat:@"casioemu-%@.mobileconfig", safeModelIdForIdentifier];
+    NSString *filePath = [tempDir stringByAppendingPathComponent:fileName];
+
+    NSError *writeError = nil;
+    BOOL wrote = [plistData writeToFile:filePath options:NSDataWritingAtomic error:&writeError];
+    if (!wrote) {
+        NSLog(@"[WebClip] Failed to write .mobileconfig to disk: %@", writeError);
+        return false;
+    }
+
+    [[iOSNativeBridge sharedInstance] presentWebClipInstall:filePath];
+    return true;
 }
 #endif

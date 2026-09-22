@@ -54,4 +54,25 @@ extern "C" void saveFolderDialog();
 //                      platforms); Quick Actions use a fixed icon.
 extern "C" bool presentCreateHomeScreenShortcut(const char* modelIdentifier, const char* shortcutName, const char* iconPathOrNull);
 
+// Home Screen shortcut creation via a Web Clip Configuration Profile
+// (.mobileconfig): unlike Quick Actions above, this produces a real,
+// separate icon that sits directly on the Home Screen and launches the app
+// with no long-press required. iOS has no public API for a sideloaded app
+// to place that icon itself -- the only supported path is generating a
+// signed-or-unsigned .mobileconfig payload and having the user install it
+// once through Settings > General > VPN & Device Management (System
+// Settings prompts for this automatically once the file reaches the
+// device, typically via the share sheet this function opens). The profile
+// itself points at casioemu://launch?model=<id>, matching what
+// ShortcutLaunch.h already knows how to decode.
+//   modelIdentifier - the model's folder name under "models/"; must not be
+//                      NULL/empty.
+//   shortcutName    - display label under the new Home Screen icon; falls
+//                      back to modelIdentifier if NULL/empty.
+// Returns true once the .mobileconfig was written to disk and the share
+// sheet was presented -- NOT once the user has actually finished installing
+// it (iOS gives no callback for that; the user returns to the app
+// afterward on their own).
+extern "C" bool presentCreateHomeScreenWebClip(const char* modelIdentifier, const char* shortcutName);
+
 #endif /* iOSNativeBridge_h */

@@ -19,12 +19,18 @@ else()
 endif()
 
 set(SDL_TEST OFF CACHE BOOL "Disable building the SDL_test library" FORCE)
-if(ANDROID)
-    set(DEFAULT_BUILD_EXECUTABLE OFF)
-else()
-    set(DEFAULT_BUILD_EXECUTABLE ON)
+option(BUILD_EXECUTABLE "Build a statically linked executable" OFF)
+option(BUILD_MCP_PLUGIN "Build the MCP debugger plugin" ON)
+
+if(NOT DEFINED BUILD_EXECUTABLE)
+    if(ANDROID OR IOS)
+        set(BUILD_EXECUTABLE OFF)
+        message(STATUS "Auto-setting BUILD_EXECUTABLE: OFF (Mobile platform)")
+    else()
+        set(BUILD_EXECUTABLE ON)
+        message(STATUS "Auto-setting BUILD_EXECUTABLE: ON (Desktop platform)")
+    endif()
 endif()
-option(BUILD_EXECUTABLE "Build a statically linked executable" ${DEFAULT_BUILD_EXECUTABLE})
 
 if(IOS)
     # let Xcode handle the team selection, remove the "-" default which causes an error.
@@ -49,6 +55,21 @@ if(MSVC)
     else()
         set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
     endif()
+
+    # Enable PDB generation for Release build configuration
+    string(REPLACE "/Zi" "" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
+    string(REPLACE "/Z7" "" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /Zi")
+
+    string(REPLACE "/Zi" "" CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE}")
+    string(REPLACE "/Z7" "" CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE}")
+    set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} /Zi")
+
+    string(REPLACE "/DEBUG" "" CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE}")
+    set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} /DEBUG /OPT:REF /OPT:ICF")
+
+    string(REPLACE "/DEBUG" "" CMAKE_SHARED_LINKER_FLAGS_RELEASE "${CMAKE_SHARED_LINKER_FLAGS_RELEASE}")
+    set(CMAKE_SHARED_LINKER_FLAGS_RELEASE "${CMAKE_SHARED_LINKER_FLAGS_RELEASE} /DEBUG /OPT:REF /OPT:ICF")
 endif()
 
 # armeabi-v7a requires cpufeatures library
@@ -58,6 +79,21 @@ endif()
 
 # SDL sources are in a subfolder named "SDL"
 add_subdirectory(SDL)
+
+# On iOS, SDL2 builds as its own dylib (libSDL2.dylib) separate from the
+# main executable's dylib. SDLUIKitDelegate is defined in
+# SDL/src/video/uikit/SDL_uikitappdelegate.m and only referenced from
+# outside libSDL2.dylib -- CasioEmuAppDelegate.mm subclasses it in the
+# 'main' target. Nothing inside libSDL2.dylib itself calls it, so with
+# -dead_strip on (Xcode's default dylib link), the linker treats that
+# class's Objective-C metadata as unused and strips it from the dylib.
+# main then fails to link with "Undefined symbols ... _OBJC_CLASS_$_SDLUIKitDelegate"
+# even though SDL_uikitappdelegate.m compiled without error. -ObjC forces
+# the linker to keep every class/category from any object file that
+# defines one, which is exactly what's needed here.
+if(IOS AND TARGET SDL2)
+    target_link_options(SDL2 PRIVATE "-ObjC")
+endif()
 
 # Compilation of companion libraries
 set(SDL2IMAGE_AVIF OFF CACHE BOOL "Disable AVIF" FORCE)
@@ -82,3 +118,7 @@ endif()
 
 # Your game and its CMakeLists.txt are in a subfolder named "src"
 add_subdirectory(CasioEmuMsvc)
+
+if(WIN32 AND BUILD_EXECUTABLE AND BUILD_MCP_PLUGIN)
+    add_subdirectory(McpPlugin)
+endif()

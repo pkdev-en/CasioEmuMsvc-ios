@@ -1,4 +1,6 @@
 #pragma once
+#ifndef CASIOEMU_GUI_UI_HPP
+#define CASIOEMU_GUI_UI_HPP
 #include "Chipset/MMU.hpp"
 #include "Emulator.hpp"
 #include "LabelFile.h"
@@ -8,6 +10,7 @@
 
 
 class CodeViewer;
+class SnapshotWindow;
 CodeViewer* test_gui(bool* guiCreated, SDL_Window*, SDL_Renderer*);
 void gui_cleanup();
 void gui_loop();
@@ -21,6 +24,7 @@ extern std::vector<Label> g_labels;
 void SaveUIState();
 extern uint32_t pc_cache;
 extern CodeViewer* code_viewer;
+extern SnapshotWindow* snapshot_window;
 extern std::vector<class UIWindow*> windows;
 
 void SetDebugbreak(void); 
@@ -50,30 +54,28 @@ public:
             ImVec2(ThemeManager::Instance().padding,
                    ThemeManager::Instance().padding));
         #endif
-    
-        //ImGui::SetNextWindowCollapsed(!open, ImGuiCond_Always);
+
         ImGui::SetNextWindowSize(inital_size, ImGuiCond_FirstUseEver);
-    
+
         if (bring_to_front_requested) {
             ImGui::SetNextWindowFocus();
             bring_to_front_requested = false;
         }
-    
-        //if (!open) return;
+#ifdef CASIOEMU_CORE_WEB
+		if (ImGui::Begin(name, nullptr, flags)) {
+#else
+		if (ImGui::Begin(name, &open, flags)) {
+#endif
+			RenderCore();
+		}
+		ImGui::End();
 
-        bool keep_open = open;
-        if (ImGui::Begin(name, &keep_open, flags)) {
-            RenderCore();
-        }
-        ImGui::End();
-        
-        open = keep_open;
-    
         #if defined(__ANDROID__) || defined(IOS)
         ImGui::PopStyleVar();
         #endif
 	}
 	void BringToFront() {
+		open = true;
 		bring_to_front_requested = true;
 	}
 	virtual void RenderCore() = 0;
@@ -150,3 +152,4 @@ namespace UIHelpers {
 }
 
 inline constexpr ImGuiTableFlags pretty_table = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersV | ImGuiTableFlags_Reorderable | ImGuiTableFlags_Resizable;
+#endif // CASIOEMU_GUI_UI_HPP

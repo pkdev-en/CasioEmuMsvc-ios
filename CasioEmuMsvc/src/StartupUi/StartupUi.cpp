@@ -1,9 +1,15 @@
 // ???
 #include <SDL_rect.h>
+#include "ModelConfig.h"
 #include "ModelInfo.h"
 // 
 
 #include "StartupUi.h"
+#include "OnlineLoopbackServer.h"
+#include "OnlineModelClient.h"
+#include "OnlineModelPackage.h"
+#include "UpdateChecker.h"
+#include <OnlineBuildConfig.h>
 #include "3rd_licenses.h"
 #include "Binary.h"
 #include "Config.hpp"
@@ -11,6 +17,7 @@
 #include "Gui/imgui/imgui_impl_sdl2.h"
 #include "Gui/imgui/imgui_impl_sdlrenderer2.h"
 #include "Localization.h"
+#include "RendererBackend.h"
 #include "RomPackage.h"
 #include "Romu.h"
 #include "SysDialog.h"
@@ -22,7 +29,12 @@
 #include <array>
 #include <filesystem>
 #include <imgui.h>
+#include <fstream>
+#include <future>
 #include <iostream>
+#include <iterator>
+#include <optional>
+#include <set>
 
 #ifdef _WIN32
 #include <objbase.h>
@@ -51,6 +63,10 @@
 // like HandlePotentialShortcutLaunch() below don't need their own #ifdef
 // guards.
 #include "Ext/ShortcutLaunch.h"
+#include <algorithm>
+#include <cctype>
+#include <chrono>
+#include <cstring>
 
 #ifdef __ANDROID__
 #include "../Gui/ThemeManager.h"
@@ -128,7 +144,6 @@ class ModelEditor : public UIWindow {
 	casioemu::ModelInfo mi;
 	int v;
 	int k;
-	static constexpr const char* items[10] = {"##1", "##2", "##3", "ES(P)", "CWX", "CWII", "Fx5800p", "TI", "SolarII", "EPS6800"};
 	char path1[260];
 	char path2[260];
 	char path3[260];
@@ -148,15 +163,10 @@ class ModelEditor : public UIWindow {
 public:
 	ModelEditor(std::filesystem::path path) : UIWindow("Model Editor##114514"), pth(path) {
 		try {
-			std::filesystem::path configPath = path / "config.bin";
-			std::error_code ec;
-			if (!std::filesystem::exists(configPath) || !std::filesystem::is_regular_file(configPath, ec)) {
-				throw std::runtime_error("Cannot open config.bin (not found or is a directory).");
+			std::string error;
+			if (!casioemu::LoadModelInfoFromFolder(path, mi, nullptr, &error)) {
+				throw std::runtime_error(error);
 			}
-			std::ifstream ifs(configPath, std::ios::binary);
-			if (!ifs)
-				throw std::runtime_error("Cannot open config.bin.");
-			Binary::Read(ifs, mi);
 			v = mi.csr_mask;
 			k = mi.pd_value;
 			strncpy(path1, mi.interface_path.c_str(), sizeof(path1) - 1);
@@ -176,6 +186,41 @@ public:
 			std::cerr << "Failed to load ModelEditor: " << e.what() << std::endl;
 			init_failed = true;
 		}
+	}
+	~ModelEditor() override {
+		if (sdl_t)
+			SDL_DestroyTexture(sdl_t);
+	}
+	bool IsBoardModel() const {
+		return !mi.board_path.empty();
+	}
+	static bool HasSvgExtension(const std::filesystem::path& path) {
+		auto ext = path.extension().string();
+		for (auto& ch : ext)
+			ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+		return ext == ".svg";
+	}
+	SDL_Surface* LoadInterfaceSurface(const std::filesystem::path& path, const casioemu::SpriteInfo& interface_sprite) {
+		if (!HasSvgExtension(path))
+			return IMG_Load(path.string().c_str());
+
+		std::ifstream stream(path, std::ios::binary);
+		if (!stream)
+			return nullptr;
+		const std::string svg{std::istreambuf_iterator<char>{stream}, std::istreambuf_iterator<char>{}};
+		if (svg.empty())
+			return nullptr;
+
+		const int width = interface_sprite.src.w > 0 ? interface_sprite.src.w : 1;
+		const int height = interface_sprite.src.h > 0 ? interface_sprite.src.h : 1;
+		SDL_RWops* rw = SDL_RWFromConstMem(svg.data(), static_cast<int>(svg.size()));
+		if (!rw)
+			return nullptr;
+		SDL_Surface* surface = IMG_LoadSizedSVG_RW(rw, width, height);
+		SDL_RWclose(rw);
+		if (!surface)
+			SDL_Log("[StartupUI][Warn] IMG_LoadSizedSVG_RW failed for editor interface SVG: %s", IMG_GetError());
+		return surface;
 	}
 	void RenderSprite(const casioemu::SpriteInfo& sprite, ImTextureID texture_id, const ImVec2& texture_size, const ImVec2& render_size) {
 
@@ -236,10 +281,12 @@ public:
 			uv1, tint_clr);
 	}
 	void LoadInterface() {
-		if (sdl_t)
-			SDL_free(sdl_t);
+		if (sdl_t) {
+			SDL_DestroyTexture(sdl_t);
+			sdl_t = nullptr;
+		}
 		if (mi.sprites.find("rsd_interface") != mi.sprites.end()) {
-			SDL_Surface* surface = IMG_Load((pth / mi.interface_path).string().c_str());
+			SDL_Surface* surface = LoadInterfaceSurface(pth / mi.interface_path, mi.sprites["rsd_interface"]);
 			if (surface) {
 				sdl_t = SDL_CreateTextureFromSurface(renderer2, surface);
 				imgSz = {(float)surface->w, (float)surface->h};
@@ -258,47 +305,67 @@ public:
 		}
 
 		auto y = ImGui::GetCursorPosY();
-		auto scaleFactor = (400.f / imgSp.src.w);
+		const bool is_board_model = IsBoardModel();
+		const int model_width = is_board_model ? imgSp.dest.w : imgSp.src.w;
+		auto scaleFactor = model_width > 0 ? (400.f / model_width) : 1.0f;
 		if (sdl_t != 0) {
 			ImGui::SetCursorPosX(0);
 			RenderSprite2(imgSp, (ImTextureID)sdl_t, imgSz, {400, 400.0f * imgSp.dest.h / imgSp.dest.w});
-			for (auto& sp : mi.sprites) {
-				if (sp.first != "rsd_pixel" && sp.first != "rsd_interface") {
-					ImGui::SetCursorPos({(float)sp.second.dest.x * scaleFactor, (float)sp.second.dest.y * scaleFactor + y});
-					RenderSprite(sp.second, (ImTextureID)sdl_t, imgSz, {scaleFactor * (float)sp.second.dest.w, scaleFactor * (float)sp.second.dest.h});
-					if (sp.first == selected_sprite_key) {
-						auto min_p = ImGui::GetItemRectMin();
-						auto max_p = ImGui::GetItemRectMax();
-						ImGui::GetWindowDrawList()->AddRect(min_p, max_p, IM_COL32(255, 0, 0, 255), 0.0f, 0, 2.0f);
+			if (!is_board_model) {
+				for (auto& sp : mi.sprites) {
+					if (sp.first != "rsd_pixel" && sp.first != "rsd_interface") {
+						ImGui::SetCursorPos({(float)sp.second.dest.x * scaleFactor, (float)sp.second.dest.y * scaleFactor + y});
+						RenderSprite(sp.second, (ImTextureID)sdl_t, imgSz, {scaleFactor * (float)sp.second.dest.w, scaleFactor * (float)sp.second.dest.h});
+						if (sp.first == selected_sprite_key) {
+							auto min_p = ImGui::GetItemRectMin();
+							auto max_p = ImGui::GetItemRectMax();
+							ImGui::GetWindowDrawList()->AddRect(min_p, max_p, IM_COL32(255, 0, 0, 255), 0.0f, 0, 2.0f);
+						}
 					}
 				}
-			}
-			auto sp2 = mi.sprites["rsd_pixel"];
-			if (mi.hardware_id == casioemu::HW_ES_PLUS || mi.hardware_id == casioemu::HW_FX_5800P || mi.hardware_id == casioemu::HW_EPS6800) {
-				for (size_t j = 0; j < 31; j++) {
-					for (size_t i = 0; i < 96; i++) {
-						ImGui::SetCursorPos({(float)(sp2.dest.x + i * sp2.dest.w) * scaleFactor, (float)(sp2.dest.y + j * sp2.dest.h) * scaleFactor + y});
-						RenderSprite3(sp2, (ImTextureID)sdl_t, imgSz, {scaleFactor * (float)sp2.dest.w, scaleFactor * (float)sp2.dest.h});
+				auto sp2 = mi.sprites["rsd_pixel"];
+				if (mi.hardware_id == casioemu::HW_ES_PLUS || mi.hardware_id == casioemu::HW_FX_5800P || casioemu::IsEpsFamily(mi.hardware_id)) {
+					for (size_t j = 0; j < 31; j++) {
+						for (size_t i = 0; i < 96; i++) {
+							ImGui::SetCursorPos({(float)(sp2.dest.x + i * sp2.dest.w) * scaleFactor, (float)(sp2.dest.y + j * sp2.dest.h) * scaleFactor + y});
+							RenderSprite3(sp2, (ImTextureID)sdl_t, imgSz, {scaleFactor * (float)sp2.dest.w, scaleFactor * (float)sp2.dest.h});
+						}
 					}
 				}
-			}
-			else {
-				for (size_t j = 0; j < 63; j++) {
-					for (size_t i = 0; i < 192; i++) {
-						ImGui::SetCursorPos({(float)(sp2.dest.x + i * sp2.dest.w) * scaleFactor, (float)(sp2.dest.y + j * sp2.dest.h) * scaleFactor + y});
-						RenderSprite3(sp2, (ImTextureID)sdl_t, imgSz, {scaleFactor * (float)sp2.dest.w, scaleFactor * (float)sp2.dest.h});
+				else {
+					for (size_t j = 0; j < 63; j++) {
+						for (size_t i = 0; i < 192; i++) {
+							ImGui::SetCursorPos({(float)(sp2.dest.x + i * sp2.dest.w) * scaleFactor, (float)(sp2.dest.y + j * sp2.dest.h) * scaleFactor + y});
+							RenderSprite3(sp2, (ImTextureID)sdl_t, imgSz, {scaleFactor * (float)sp2.dest.w, scaleFactor * (float)sp2.dest.h});
+						}
 					}
 				}
 			}
 		}
-		for (auto& btn : mi.buttons) {
+		else {
+			ImGui::SetCursorPosX(0);
+			ImGui::Dummy({400, 600});
+			ImGui::SetCursorPos({0, y});
+			ImGui::TextUnformatted("Failed to load interface preview.");
+		}
+		for (size_t button_index = 0; button_index < mi.buttons.size(); ++button_index) {
+			auto& btn = mi.buttons[button_index];
 			ImGui::SetCursorPos({scaleFactor * btn.rect.x, scaleFactor * btn.rect.y + y});
 			ImGui::PushID(btn.kiko + 20);
-			if (ImGui::Button(btn.keyname.c_str(), {scaleFactor * btn.rect.w, scaleFactor * btn.rect.h})) {
+			const ImVec2 button_size{scaleFactor * btn.rect.w, scaleFactor * btn.rect.h};
+			const bool clicked = is_board_model
+				? ImGui::InvisibleButton(btn.keyname.c_str(), button_size)
+				: ImGui::Button(btn.keyname.c_str(), button_size);
+			if (clicked) {
 				btninfo = &btn;
 				strncpy(buffer, btn.keyname.c_str(), sizeof(buffer) - 1);
 				buffer[sizeof(buffer) - 1] = '\0';
 				SDL_itoa(btn.kiko, buffer2, 16);
+			}
+			if (is_board_model && btninfo == &btn) {
+				auto min_p = ImGui::GetItemRectMin();
+				auto max_p = ImGui::GetItemRectMax();
+				ImGui::GetWindowDrawList()->AddRect(min_p, max_p, IM_COL32(255, 0, 0, 255), 0.0f, 0, 2.0f);
 			}
 			ImGui::PopID();
 		}
@@ -332,11 +399,12 @@ public:
 					}
 					ImGui::TextUnformatted("ModelEditor.HardwareType"_lc);
 					ImGui::SetNextItemWidth(80);
-					if (ImGui::BeginCombo("##cb", items[mi.hardware_id])) {
-						for (int n = 0; n < IM_ARRAYSIZE(items); n++) {
-							bool is_selected = (mi.hardware_id == n);
-							if (ImGui::Selectable(items[n], is_selected)) {
-								mi.hardware_id = n;
+					const auto* selected_descriptor = casioemu::FindHardwareDescriptor(mi.hardware_id);
+					if (ImGui::BeginCombo("##cb", selected_descriptor ? selected_descriptor->display_name : "Invalid")) {
+						for (const auto& descriptor : casioemu::HARDWARE_DESCRIPTORS) {
+							bool is_selected = (mi.hardware_id == descriptor.hardware_id);
+							if (ImGui::Selectable(descriptor.display_name, is_selected)) {
+								mi.hardware_id = descriptor.hardware_id;
 							}
 							if (is_selected)
 								ImGui::SetItemDefaultFocus();
@@ -355,7 +423,21 @@ public:
 					ImGui::EndTabItem();
 				}
 				if (ImGui::BeginTabItem("Buttons")) {
-					if (btninfo) {
+					if (is_board_model) {
+						if (btninfo) {
+							ImGui::TextUnformatted("Button geometry is read from board.svg.");
+							if (ImGui::InputText("ModelEditor.KeyName"_lc, buffer, 260)) {
+								btninfo->keyname = buffer;
+							}
+							if (ImGui::InputText("ModelEditor.KIKO"_lc, buffer2, 12)) {
+								btninfo->kiko = SDL_strtol(buffer2, 0, 16);
+							}
+						}
+						else {
+							ImGui::Text("Select a button from the preview to edit.");
+						}
+					}
+					else if (btninfo) {
 						if (ImGui::InputText("ModelEditor.KeyName"_lc, buffer, 260)) {
 							btninfo->keyname = buffer;
 						}
@@ -372,7 +454,7 @@ public:
 					}
 					ImGui::EndTabItem();
 				}
-				if (ImGui::BeginTabItem("Sprites")) {
+				if (!is_board_model && ImGui::BeginTabItem("Sprites")) {
 					ImGui::Text("Sprite List");
 					ImGui::BeginChild("SpriteList", {0, 150}, true);
 
@@ -401,15 +483,40 @@ public:
 					}
 					ImGui::EndTabItem();
 				}
+				if (is_board_model && ImGui::BeginTabItem("Status")) {
+					if (mi.status_sprite_indexes.empty()) {
+						ImGui::TextUnformatted("No status sprites configured.");
+					}
+					else {
+						for (auto& [key, index] : mi.status_sprite_indexes) {
+							ImGui::PushID(key.c_str());
+							ImGui::TextUnformatted(key.c_str());
+							ImGui::SameLine(160.0f);
+							ImGui::SetNextItemWidth(80.0f);
+							ImGui::InputInt("Index", &index);
+							ImGui::PopID();
+						}
+					}
+					ImGui::EndTabItem();
+				}
 				ImGui::EndTabBar();
 			}
 
 			ImGui::Separator();
 			if (ImGui::Button("Button.Save"_lc)) {
-				std::ofstream ifs(pth / "config.bin", std::ios::binary);
-				if (!ifs)
-					PANIC("Cannot open.");
-				Binary::Write(ifs, mi);
+				std::set<int> used_kiko;
+				bool duplicate_kiko = false;
+				for (const auto& button : mi.buttons) {
+					if (!used_kiko.insert(button.kiko).second) {
+						duplicate_kiko = true;
+						break;
+					}
+				}
+				if (duplicate_kiko) {
+					SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Error", "Duplicate KIKO values are not allowed.", nullptr);
+					return;
+				}
+				casioemu::SaveModelInfoJson(pth, mi);
 				this->open = false;
 			}
 		}
@@ -617,7 +724,12 @@ static bool CreateDesktopShortcut(const std::filesystem::path& model_path, const
 	}
 
 	if (!std::filesystem::exists(desktop_dir)) {
-		std::filesystem::create_directories(desktop_dir);
+		std::error_code ec;
+		std::filesystem::create_directories(desktop_dir, ec);
+		if (ec) {
+			std::cerr << "[Shortcut] Failed to create Desktop directory: " << ec.message() << "\n";
+			return false;
+		}
 	}
 
 	// Get executable path
@@ -672,11 +784,8 @@ static bool CreateDesktopShortcut(const std::filesystem::path& model_path, const
 
 	std::filesystem::path desktop = std::filesystem::path(home) / "Desktop";
 
-	std::filesystem::path exe_path = std::filesystem::canonical("/proc/self/exe"); 
-	// ⚠️ NOTE: macOS không có /proc/self/exe chuẩn
-
-	// FIX macOS proper way:
-	// exe path real:
+	// macOS has no /proc/self/exe; resolve the real executable path via
+	// _NSGetExecutablePath instead.
 	uint32_t size = 0;
 	_NSGetExecutablePath(nullptr, &size);
 	std::string buffer(size, '\0');
@@ -716,27 +825,40 @@ static bool CreateDesktopShortcut(const std::filesystem::path& model_path, const
 }
 #elif defined(IOS)
 static bool CreateDesktopShortcut(const std::filesystem::path& model_path, const std::string& shortcut_name, const std::string& icon_path_str) {
-	// iOS has no public API to place a separate icon on the Home Screen, and
-	// the only way to fake one (a WebClip configuration profile, the
-	// LiveContainer-style approach an earlier version of this function
-	// used) needs a local HTTP server, an ATS exception, Safari, and the
-	// user manually walking through Settings' "Install Profile" flow --
-	// too many independently-failing pieces, and unreliable in practice
-	// (e.g. an active VPN can interfere with local loopback networking).
-	// This instead adds a Home Screen Quick Action (long-press the app's
-	// own icon to see it) via UIApplication.shortcutItems -- a fully
-	// native, synchronous, offline call. See IOSNativeBridge.mm
-	// (presentCreateHomeScreenShortcut) for the native side,
-	// CasioEmuAppDelegate.mm for how a tap is read back out of iOS, and
-	// HandlePotentialShortcutLaunch() further down in this file plus the
-	// unified check in casioemu.cpp's emulator loop for how that then
-	// routes into a direct model launch.
+	// Home Screen Quick Action (long-press the app's own icon to see it)
+	// via UIApplication.shortcutItems -- a fully native, synchronous,
+	// offline call. See IOSNativeBridge.mm (presentCreateHomeScreenShortcut)
+	// for the native side, CasioEmuAppDelegate.mm for how a tap is read
+	// back out of iOS, and HandlePotentialShortcutLaunch() further down in
+	// this file plus the unified check in casioemu.cpp's emulator loop for
+	// how that then routes into a direct model launch.
+	//
+	// See CreateDesktopShortcutWebClip() below for the alternative that
+	// produces a genuinely separate Home Screen icon instead.
 	std::string modelId = model_path.filename().string();
 	if (modelId.empty()) {
 		std::cerr << "[Shortcut] Cannot create a shortcut for an unnamed model path: " << model_path << "\n";
 		return false;
 	}
 	return presentCreateHomeScreenShortcut(modelId.c_str(), shortcut_name.c_str(), icon_path_str.c_str());
+}
+
+// A genuinely separate Home Screen icon (as opposed to the Quick Action
+// above, which requires a long-press on the app's *existing* icon). iOS has
+// no public API for a sideloaded app to place that icon itself -- a Web
+// Clip Configuration Profile (.mobileconfig), installed once through
+// Settings after this opens the native "Install Profile" flow, is the only
+// supported mechanism. See IOSNativeBridge.mm
+// (presentCreateHomeScreenWebClip) for the native side; it targets
+// casioemu://launch?model=<id>, exactly what ShortcutLaunch.h already knows
+// how to decode, so nothing on the launch-handling side needed to change.
+static bool CreateDesktopShortcutWebClip(const std::filesystem::path& model_path, const std::string& shortcut_name) {
+	std::string modelId = model_path.filename().string();
+	if (modelId.empty()) {
+		std::cerr << "[Shortcut] Cannot create a shortcut for an unnamed model path: " << model_path << "\n";
+		return false;
+	}
+	return presentCreateHomeScreenWebClip(modelId.c_str(), shortcut_name.c_str());
 }
 #endif
 
@@ -759,7 +881,66 @@ namespace casioemu {
 		};
 		std::vector<Model> models;
 		std::filesystem::path selected_path{};
+		std::shared_ptr<ModelResourceStore> selected_resources;
+		char online_api[512] = "";
+		bool show_online_popup = false;
+		OnlineAuthRequest online_auth{};
+		std::unique_ptr<OnlineLoopbackServer> online_loopback;
+		std::string online_access_token;
+		bool online_authorization_pending = false;
+		Uint64 online_authorization_deadline = 0;
+		Uint64 online_browser_open_at = 0;
+		std::string online_browser_uri;
+		std::string online_approval_grant;
+		std::string online_status;
+		std::vector<OnlineModelEntry> online_models;
+		int selected_online_model = -1;
+		char online_search_txt[200]{};
+		char online_filter[32] = "##";
+		bool online_hide_emu = false;
+		bool close_online_popup_requested = false;
+		enum class OnlineOperation { Idle, StartLogin, LoadModels, PollAuthorization, Logout, DownloadModel };
+		struct OnlineTaskResult {
+			OnlineOperation operation = OnlineOperation::Idle;
+			OnlineAuthRequest auth{};
+			std::string access_token;
+			std::vector<OnlineModelEntry> models;
+			std::vector<uint8_t> archive;
+			std::string model_id;
+			std::string error;
+			bool authentication_error = false;
+		};
+		OnlineOperation online_operation = OnlineOperation::Idle;
+		std::future<OnlineTaskResult> online_task;
+		UpdateChecker update_checker;
+		UpdateInfo update_info;
+		bool show_update = false;
+		bool update_result_consumed = false;
 		StartupUi() {
+			update_checker.Start();
+			std::ifstream api_settings{"online_api.cfg"};
+			if (api_settings) {
+				std::string value;
+				std::getline(api_settings, value);
+				if (!value.empty()) std::snprintf(online_api, sizeof(online_api), "%s", value.c_str());
+			}
+			// OnlineModelClient's constructor throws when the API address is
+			// empty, and online_api starts empty unless online_api.cfg exists
+			// (it doesn't on a fresh install). Don't construct it at all in
+			// that case — there's no online API configured, so there's no
+			// token to load either.
+			if (online_api[0] != '\0') {
+				try {
+					OnlineModelClient client{online_api};
+					online_access_token = LoadOnlineToken(client.ApiBase());
+				}
+				catch (...) {
+					online_access_token.clear();
+				}
+			}
+			else {
+				online_access_token.clear();
+			}
 			std::ifstream ifs2{"roms.db", std::ifstream::binary};
 			if (ifs2) {
 				try {
@@ -776,135 +957,124 @@ namespace casioemu {
 		}
 		void Reload() {
 			loading = true;
-			std::filesystem::create_directory("models");
+			{
+				std::error_code ec;
+				std::filesystem::create_directory("models", ec);
+				// Non-fatal if this fails — the directory_iterator inside the
+				// scan thread below has its own try/catch and will just find
+				// nothing to enumerate.
+			}
 			std::thread thd([&]() {
 				models.clear();
-				for (auto& dir : std::filesystem::directory_iterator("models")) {
-					if (dir.is_directory()) {
-						try {
-							printf("[StartupUI][Info] Checking %s\n", dir.path().string().c_str());
-							auto config = dir.path() / "config.bin";
-							std::error_code ec;
-							if (!std::filesystem::exists(config) || !std::filesystem::is_regular_file(config, ec)) {
-								printf("[StartupUI][Info] Unable to open %s\n", config.string().c_str());
+				try {
+					for (auto& dir : std::filesystem::directory_iterator("models")) {
+						if (dir.path().filename() == ".online") continue;
+						if (dir.is_directory()) {
+							try {
+								printf("[StartupUI][Info] Checking %s\n", dir.path().string().c_str());
+								std::error_code ec;
+								std::string load_error;
+								ModelInfo mi{};
+								if (!LoadModelInfoFromFolder(dir.path(), mi, nullptr, &load_error)) {
+									printf("[StartupUI][Info] Unable to load model configuration for %s: %s\n", dir.path().string().c_str(), load_error.c_str());
+									continue;
+								}
+								Model mod{};
+								mod.path = dir;
+								mod.name = mi.model_name;
+								mod.realhw = mi.real_hardware;
+								mod.type = HardwareStartupFilter(mi.hardware_id);
+								{
+									std::filesystem::path romPath = dir.path() / mi.rom_path;
+									if (mi.rom_path.empty() || !std::filesystem::exists(romPath) || !std::filesystem::is_regular_file(romPath, ec))
+										continue;
+									std::ifstream ifs2(romPath, std::ios::in | std::ios::binary);
+									if (!ifs2)
+										continue;
+									std::vector<byte> rom{std::istreambuf_iterator<char>{ifs2.rdbuf()}, std::istreambuf_iterator<char>{}};
+									ifs2.close();
+									std::vector<byte> flash{};
+
+									if (!mi.flash_path.empty()) {
+										std::filesystem::path flashPath = dir.path() / mi.flash_path;
+										if (std::filesystem::exists(flashPath) && std::filesystem::is_regular_file(flashPath, ec)) {
+											std::ifstream ifs3(flashPath, std::ios::in | std::ios::binary);
+											if (ifs3)
+												flash = {std::istreambuf_iterator<char>{ifs3.rdbuf()}, std::istreambuf_iterator<char>{}};
+										}
+									}
+									else if (mi.hardware_id == HW_FX_5800P && rom.size() > 0x20000) {
+										flash.assign(rom.begin() + 0x20000, rom.end());
+										rom.resize(0x20000);
+									}
+									auto ri = rom_info(rom, flash, mi.real_hardware);
+									if (ri.type != 0) {
+										switch (ri.type) {
+										case RomInfo::ES:
+											mod.type = "ES";
+											break;
+										case RomInfo::ESP:
+											mod.type = "ESP";
+											break;
+										case RomInfo::ESP2nd:
+											mod.type = "ESP2nd";
+											break;
+										case RomInfo::CWX:
+											mod.type = "CWX";
+											break;
+										case RomInfo::CWII:
+											mod.type = "CWII";
+											break;
+										case RomInfo::Fx5800p:
+											mod.type = "Fx5800p";
+											break;
+										default:
+											mod.type = "???";
+											break;
+										}
+									}
+									if (ri.ok) {
+										mod.version = ri.ver;
+										std::array<char, 8> key{};
+										memcpy(key.data(), mod.version.data(), 6);
+										auto iter = RomNames.find(key);
+										if (iter != RomNames.end())
+											mod.name = iter->second;
+										mod.checksum = tohex(ri.real_sum, 4);
+										mod.checksum2 = tohex(ri.desired_sum, 4);
+										mod.sum_good = ri.real_sum == ri.desired_sum ? "OK" : "NG";
+										// Safely form version key and id
+										std::array<char, 8> key2{};
+										std::memset(key2.data(), 0, key2.size());
+										std::memcpy(key2.data(), mod.version.data(), std::min<std::size_t>(6, mod.version.size()));
+										mod.id = tohex(*(unsigned long long*)ri.cid, 8);
+										if (ri.type == RomInfo::ES) {
+											auto a = get_pd(mi.pd_value);
+											mod.version += std::string(" (P") + a + ")";
+										}
+									}
+									else {
+										mod.show_sum = false;
+									}
+									printf("[StartupUI][Debug] Model Summary\n"
+										   "[StartupUI][Debug] Name: %s\n"
+										   "[StartupUI][Debug] Type: %s\n",
+										mod.name.c_str(), mod.type.c_str());
+								}
+								models.push_back(mod);
+							}
+							catch (...) {
+								std::cerr << "[StartupUI][Error] Failed to load model from " << dir.path().string() << std::endl;
 								continue;
 							}
-
-							std::ifstream ifs(config, std::ios::in | std::ios::binary);
-							if (!ifs) {
-								printf("[StartupUI][Info] Unable to open %s\n", config.string().c_str());
-								continue;
-							}
-							ModelInfo mi{};
-							Binary::Read(ifs, mi);
-							ifs.close();
-							Model mod{};
-							mod.path = dir;
-							mod.name = mi.model_name;
-							mod.realhw = mi.real_hardware;
-							switch (mi.hardware_id) {
-							case HW_ES_PLUS:
-								mod.type = "ESP";
-								break;
-							case HW_CLASSWIZ:
-								mod.type = "CWX";
-								break;
-							case HW_CLASSWIZ_II:
-								mod.type = "CWII";
-								break;
-							case HW_FX_5800P:
-								mod.type = "Fx5800p";
-								break;
-							case HW_TI:
-								mod.type = "TI";
-								break;
-							case HW_SOLARII:
-								mod.type = "SolarII";
-								break;
-							default:
-								mod.type = "Unknown";
-								break;
-							}
-							{
-								std::filesystem::path romPath = dir.path() / mi.rom_path;
-								if (mi.rom_path.empty() || !std::filesystem::exists(romPath) || !std::filesystem::is_regular_file(romPath, ec))
-									continue;
-								std::ifstream ifs2(romPath, std::ios::in | std::ios::binary);
-								if (!ifs2)
-									continue;
-								std::vector<byte> rom{std::istreambuf_iterator<char>{ifs2.rdbuf()}, std::istreambuf_iterator<char>{}};
-								ifs2.close();
-								std::vector<byte> flash{};
-
-								if (!mi.flash_path.empty()) {
-									std::filesystem::path flashPath = dir.path() / mi.flash_path;
-									if (std::filesystem::exists(flashPath) && std::filesystem::is_regular_file(flashPath, ec)) {
-										std::ifstream ifs3(flashPath, std::ios::in | std::ios::binary);
-										if (ifs3)
-											flash = {std::istreambuf_iterator<char>{ifs3.rdbuf()}, std::istreambuf_iterator<char>{}};
-									}
-								}
-								auto ri = rom_info(rom, flash, mi.real_hardware);
-								if (ri.type != 0) {
-									switch (ri.type) {
-									case RomInfo::ES:
-										mod.type = "ES";
-										break;
-									case RomInfo::ESP:
-										mod.type = "ESP";
-										break;
-									case RomInfo::ESP2nd:
-										mod.type = "ESP2nd";
-										break;
-									case RomInfo::CWX:
-										mod.type = "CWX";
-										break;
-									case RomInfo::CWII:
-										mod.type = "CWII";
-										break;
-									case RomInfo::Fx5800p:
-										mod.type = "Fx5800p";
-										break;
-									default:
-										mod.type = "???";
-										break;
-									}
-								}
-								if (ri.ok) {
-									mod.version = ri.ver;
-									std::array<char, 8> key{};
-									memcpy(key.data(), mod.version.data(), 6);
-									auto iter = RomNames.find(key);
-									if (iter != RomNames.end())
-										mod.name = iter->second;
-									mod.checksum = tohex(ri.real_sum, 4);
-									mod.checksum2 = tohex(ri.desired_sum, 4);
-									mod.sum_good = ri.real_sum == ri.desired_sum ? "OK" : "NG";
-									// Safely form version key and id
-									std::array<char, 8> key2{};
-									std::memset(key2.data(), 0, key2.size());
-									std::memcpy(key2.data(), mod.version.data(), std::min<std::size_t>(6, mod.version.size()));
-									mod.id = tohex(*(unsigned long long*)ri.cid, 8);
-									if (ri.type == RomInfo::ES) {
-										auto a = get_pd(mi.pd_value);
-										mod.version += std::string(" (P") + a + ")";
-									}
-								}
-								else {
-									mod.show_sum = false;
-								}
-								printf("[StartupUI][Debug] Model Summary\n"
-									   "[StartupUI][Debug] Name: %s\n"
-									   "[StartupUI][Debug] Type: %s\n",
-									mod.name.c_str(), mod.type.c_str());
-							}
-							models.push_back(mod);
-						}
-						catch (const std::exception& e) {
-							std::cerr << "[StartupUI][Error] Failed to load model from " << dir.path().string() << ": " << e.what() << std::endl;
-							continue;
 						}
 					}
+				}
+				catch (const std::exception& e) {
+					std::cerr << "[StartupUI][Error] Failed to enumerate \"models\" directory: " << e.what() << std::endl;
+				}
+				catch (...) {
+					std::cerr << "[StartupUI][Error] Failed to enumerate \"models\" directory (unknown exception)" << std::endl;
 				}
 				loading = false;
 			});
@@ -931,7 +1101,476 @@ namespace casioemu {
 			return dir_name;
 		}
 
+		void SaveOnlineApiAddress() {
+			std::ofstream settings{"online_api.cfg", std::ios::trunc};
+			if (settings) settings << online_api;
+		}
+
+		bool OnlineBusy() const {
+			return online_operation != OnlineOperation::Idle;
+		}
+
+		void BeginLoadOnlineModels() {
+			if (OnlineBusy() || online_access_token.empty()) return;
+			const std::string api = online_api;
+			const std::string token = online_access_token;
+			online_operation = OnlineOperation::LoadModels;
+			online_status = "StartupUI.OnlineLoading"_lc;
+			online_task = std::async(std::launch::async, [api, token] {
+				OnlineTaskResult result;
+				result.operation = OnlineOperation::LoadModels;
+				try { result.models = OnlineModelClient{api}.ListModels(token); }
+				catch (const OnlineAuthenticationError& error) { result.authentication_error = true; result.error = error.what(); }
+				catch (const std::exception& error) { result.error = error.what(); }
+				return result;
+			});
+		}
+
+		void ClearOnlineSessionState() {
+			if (online_loopback) {
+				online_loopback->Stop();
+				online_loopback.reset();
+			}
+			online_access_token.clear();
+			online_authorization_pending = false;
+			online_authorization_deadline = 0;
+			online_browser_open_at = 0;
+			online_browser_uri.clear();
+			online_approval_grant.clear();
+			online_auth = {};
+			online_models.clear();
+			selected_online_model = -1;
+		}
+
+		void InvalidateOnlineLogin() {
+			ClearOnlineSessionState();
+			if (online_api[0] != '\0') {
+				try { ClearOnlineToken(OnlineModelClient{online_api}.ApiBase()); }
+				catch (...) {}
+			}
+			online_status = "StartupUI.OnlineLoginExpired"_lc;
+		}
+
+		void BeginLogoutOnline() {
+			if (OnlineBusy()) return;
+			const std::string api = online_api;
+			const std::string token = online_access_token;
+			online_operation = OnlineOperation::Logout;
+			online_status = "StartupUI.OnlineLoggingOut"_lc;
+			online_task = std::async(std::launch::async, [api, token] {
+				OnlineTaskResult result;
+				result.operation = OnlineOperation::Logout;
+				try { if (!token.empty()) OnlineModelClient{api}.RevokeDevice(token); }
+				catch (...) {}
+				return result;
+			});
+		}
+
+		void BeginOnlineLogin() {
+			if (OnlineBusy()) return;
+#ifdef __ANDROID__
+			ClearOnlineAuthorizationCallback();
+#endif
+			SaveOnlineApiAddress();
+			if (online_api[0] == '\0') {
+				online_status = "StartupUI.OnlineApiEmpty"_lc;
+				return;
+			}
+			OnlineModelClient client{online_api};
+			ClearOnlineToken(client.ApiBase());
+			ClearOnlineSessionState();
+#ifdef __ANDROID__
+			const std::string redirect_uri = "u8emu://online-auth";
+#else
+			auto loopback = std::make_unique<OnlineLoopbackServer>();
+			const std::string redirect_uri = loopback->RedirectUri();
+			online_loopback = std::move(loopback);
+#endif
+			const std::string api = online_api;
+			online_operation = OnlineOperation::StartLogin;
+			online_status = "StartupUI.OnlineStartingLogin"_lc;
+			online_task = std::async(std::launch::async, [api, redirect_uri] {
+				OnlineTaskResult result;
+				result.operation = OnlineOperation::StartLogin;
+				try { result.auth = OnlineModelClient{api}.StartAuthorization(redirect_uri); }
+				catch (const std::exception& error) { result.error = error.what(); }
+				return result;
+			});
+		}
+
+		void BeginCompleteOnlineLogin() {
+			if (OnlineBusy() || !online_authorization_pending) return;
+			const std::string api = online_api;
+			const std::string approval_grant = online_approval_grant;
+			online_operation = OnlineOperation::PollAuthorization;
+			online_status = "StartupUI.OnlineCompletingLogin"_lc;
+			online_task = std::async(std::launch::async, [api, approval_grant] {
+				OnlineTaskResult result;
+				result.operation = OnlineOperation::PollAuthorization;
+				try { OnlineModelClient{api}.PollAuthorization(approval_grant, result.access_token); }
+				catch (const std::exception& error) { result.error = error.what(); }
+				return result;
+			});
+		}
+
+#ifdef __ANDROID__
+		void ClearOnlineAuthorizationCallback() {
+			auto* env = static_cast<JNIEnv*>(SDL_AndroidGetJNIEnv());
+			jobject activity = static_cast<jobject>(SDL_AndroidGetActivity());
+			if (!env || !activity) return;
+			jclass activity_class = env->GetObjectClass(activity);
+			jmethodID method = activity_class
+				? env->GetMethodID(activity_class, "clearOnlineAuthorizationCallback", "()V")
+				: nullptr;
+			if (method) env->CallVoidMethod(activity, method);
+			if (env->ExceptionCheck()) env->ExceptionClear();
+			if (activity_class) env->DeleteLocalRef(activity_class);
+			env->DeleteLocalRef(activity);
+		}
+
+		bool OpenOnlineAuthorization(const std::string& uri) {
+			auto* env = static_cast<JNIEnv*>(SDL_AndroidGetJNIEnv());
+			jobject activity = static_cast<jobject>(SDL_AndroidGetActivity());
+			if (!env || !activity) return false;
+			jclass activity_class = env->GetObjectClass(activity);
+			jmethodID method = activity_class
+				? env->GetMethodID(activity_class, "openOnlineAuthorization", "(Ljava/lang/String;)Z")
+				: nullptr;
+			jstring value = env->NewStringUTF(uri.c_str());
+			const bool opened = method && value && env->CallBooleanMethod(activity, method, value) == JNI_TRUE;
+			if (env->ExceptionCheck()) env->ExceptionClear();
+			if (value) env->DeleteLocalRef(value);
+			if (activity_class) env->DeleteLocalRef(activity_class);
+			env->DeleteLocalRef(activity);
+			return opened;
+		}
+
+		std::optional<std::string> ConsumeOnlineAuthorizationCallback() {
+			auto* env = static_cast<JNIEnv*>(SDL_AndroidGetJNIEnv());
+			jobject activity = static_cast<jobject>(SDL_AndroidGetActivity());
+			if (!env || !activity) return std::nullopt;
+			jclass activity_class = env->GetObjectClass(activity);
+			jmethodID method = activity_class
+				? env->GetMethodID(activity_class, "consumeOnlineAuthorizationCallback", "()Ljava/lang/String;")
+				: nullptr;
+			jstring grant = method ? static_cast<jstring>(env->CallObjectMethod(activity, method)) : nullptr;
+			std::optional<std::string> result;
+			if (grant) {
+				const char* chars = env->GetStringUTFChars(grant, nullptr);
+				if (chars) { result = chars; env->ReleaseStringUTFChars(grant, chars); }
+				env->DeleteLocalRef(grant);
+			}
+			if (env->ExceptionCheck()) env->ExceptionClear();
+			if (activity_class) env->DeleteLocalRef(activity_class);
+			env->DeleteLocalRef(activity);
+			return result;
+		}
+#endif
+
+		void PollOnlineTask() {
+			if (!OnlineBusy() || !online_task.valid()
+				|| online_task.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
+			OnlineTaskResult result = online_task.get();
+			online_operation = OnlineOperation::Idle;
+			if (result.authentication_error) {
+				InvalidateOnlineLogin();
+				return;
+			}
+			if (!result.error.empty()) {
+				if ((result.operation == OnlineOperation::StartLogin || result.operation == OnlineOperation::PollAuthorization)
+					&& online_loopback) {
+					online_loopback->Stop();
+					online_loopback.reset();
+				}
+				if (result.operation == OnlineOperation::PollAuthorization) {
+					online_authorization_pending = false;
+				}
+				online_status = result.error;
+				return;
+			}
+			switch (result.operation) {
+			case OnlineOperation::StartLogin:
+				online_auth = std::move(result.auth);
+				online_authorization_pending = true;
+				online_authorization_deadline = SDL_GetTicks64() + 600000;
+				online_status = "StartupUI.OnlineBrowserOpened"_lc;
+				online_browser_uri = online_auth.verification_uri;
+				online_browser_open_at = SDL_GetTicks64() + 250;
+				break;
+			case OnlineOperation::LoadModels:
+				online_models = std::move(result.models);
+				selected_online_model = online_models.empty() ? -1 : 0;
+				online_status = std::to_string(online_models.size()) + " " + std::string("StartupUI.OnlineModelsLoaded"_lc);
+				break;
+			case OnlineOperation::PollAuthorization:
+				online_access_token = std::move(result.access_token);
+				online_authorization_pending = false;
+				online_authorization_deadline = 0;
+				if (online_loopback) { online_loopback->Stop(); online_loopback.reset(); }
+				if (online_api[0] != '\0') {
+					try { SaveOnlineToken(OnlineModelClient{online_api}.ApiBase(), online_access_token); }
+					catch (...) {}
+				}
+				online_status = OnlineTokenPersistenceAvailable()
+					? std::string("StartupUI.OnlineLoginSuccess"_lc)
+					: std::string("StartupUI.OnlineLoginSessionOnly"_lc);
+				BeginLoadOnlineModels();
+				break;
+			case OnlineOperation::Logout:
+				if (online_api[0] != '\0') {
+					try { ClearOnlineToken(OnlineModelClient{online_api}.ApiBase()); }
+					catch (...) {}
+				}
+				ClearOnlineSessionState();
+				online_status = "StartupUI.OnlineLoggedOut"_lc;
+				break;
+			case OnlineOperation::DownloadModel:
+				try {
+					selected_resources = LoadOnlineModelPackage(result.archive, result.model_id);
+					selected_path = "memory-online-" + result.model_id;
+					close_online_popup_requested = true;
+				}
+				catch (const std::exception& error) { online_status = error.what(); }
+				break;
+			default:
+				break;
+			}
+		}
+
+		void BeginDownloadOnlineModel() {
+			if (OnlineBusy()) return;
+			if (selected_online_model < 0 || selected_online_model >= static_cast<int>(online_models.size())
+				|| !OnlineModelVisible(online_models[selected_online_model])) {
+				online_status = "Select an online model first.";
+				return;
+			}
+			const std::string api = online_api;
+			const std::string token = online_access_token;
+			const std::string model_id = online_models[selected_online_model].id;
+			online_operation = OnlineOperation::DownloadModel;
+			online_status = "StartupUI.OnlineDownloading"_lc;
+			online_task = std::async(std::launch::async, [api, token, model_id] {
+				OnlineTaskResult result;
+				result.operation = OnlineOperation::DownloadModel;
+				result.model_id = model_id;
+				try { result.archive = OnlineModelClient{api}.DownloadModel(token, model_id); }
+				catch (const OnlineAuthenticationError& error) { result.authentication_error = true; result.error = error.what(); }
+				catch (const std::exception& error) { result.error = error.what(); }
+				return result;
+			});
+		}
+
+		bool OnlineModelVisible(const OnlineModelEntry& item) const {
+			const bool matches_filter = std::strcmp(online_filter, "##") == 0 || item.model_type == online_filter;
+			const bool matches_search = stristr(item.name.c_str(), online_search_txt) != nullptr || stristr(item.id.c_str(), online_search_txt) != nullptr;
+			const bool matches_rom_kind = !online_hide_emu || item.real_hardware;
+			return matches_filter && matches_search && matches_rom_kind;
+		}
+
+		void RenderOnlineModels() {
+			if (show_online_popup) {
+				ImGui::OpenPopup("StartupUI.OnlineModels"_lc);
+				show_online_popup = false;
+				BeginLoadOnlineModels();
+			}
+			PollOnlineTask();
+			const Uint64 online_now = SDL_GetTicks64();
+			if (!online_browser_uri.empty() && online_now >= online_browser_open_at) {
+				const std::string uri = std::move(online_browser_uri);
+				online_browser_uri.clear();
+				online_browser_open_at = 0;
+#ifdef __ANDROID__
+				if (!OpenOnlineAuthorization(uri)) online_status = "Failed to open browser authorization.";
+#else
+				if (SDL_OpenURL(uri.c_str()) != 0)
+					online_status = std::string("SDL_OpenURL failed: ") + SDL_GetError();
+#endif
+			}
+			if (online_authorization_pending && online_authorization_deadline
+				&& online_now >= online_authorization_deadline) {
+				online_authorization_pending = false;
+				if (online_loopback) { online_loopback->Stop(); online_loopback.reset(); }
+				online_status = "StartupUI.OnlineAuthorizationExpired"_lc;
+			}
+			const ImVec2 viewport_size = ImGui::GetMainViewport()->WorkSize;
+#ifdef __ANDROID__
+			const ImVec2 online_popup_size(viewport_size.x * 0.96f, viewport_size.y * 0.90f);
+#else
+			const ImVec2 online_popup_size(
+				(std::min)(1180.0f, viewport_size.x * 0.90f),
+				(std::min)(820.0f, viewport_size.y * 0.88f));
+#endif
+			ImGui::SetNextWindowSize(online_popup_size, ImGuiCond_Appearing);
+			ImGui::PushStyleColor(ImGuiCol_PopupBg, ImGui::GetStyleColorVec4(ImGuiCol_WindowBg));
+			if (!ImGui::BeginPopupModal("StartupUI.OnlineModels"_lc, nullptr,
+				ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+				ImGui::PopStyleColor();
+				return;
+			}
+			if (close_online_popup_requested) {
+				close_online_popup_requested = false;
+				ImGui::CloseCurrentPopup();
+			}
+
+			if (online_authorization_pending && !OnlineBusy() && online_loopback && online_loopback->Completed()) {
+				online_approval_grant = online_loopback->ApprovalGrant();
+				BeginCompleteOnlineLogin();
+			}
+#ifdef __ANDROID__
+			if (online_authorization_pending && !OnlineBusy()) {
+				if (auto grant = ConsumeOnlineAuthorizationCallback()) {
+					online_approval_grant = std::move(*grant);
+					BeginCompleteOnlineLogin();
+				}
+			}
+#endif
+			if (online_authorization_pending && online_loopback) {
+				const auto loopback_error = online_loopback->Error();
+				if (!loopback_error.empty()) online_status = loopback_error;
+			}
+
+			ImGui::TextUnformatted("StartupUI.OnlineApiAddress"_lc);
+			ImGui::SetNextItemWidth(-1);
+			const bool api_address_disabled = !online_access_token.empty() || online_authorization_pending || OnlineBusy();
+			if (api_address_disabled) ImGui::BeginDisabled();
+			if (ImGui::InputText("##OnlineApiAddress", online_api, sizeof(online_api))) {
+				ClearOnlineSessionState();
+				SaveOnlineApiAddress();
+			}
+			if (api_address_disabled) ImGui::EndDisabled();
+
+			const bool network_controls_disabled = OnlineBusy();
+			if (network_controls_disabled) ImGui::BeginDisabled();
+			if (online_access_token.empty() && !online_authorization_pending && ImGui::Button("StartupUI.OnlineLogin"_lc)) {
+				try { BeginOnlineLogin(); }
+				catch (const std::exception& e) { online_status = e.what(); }
+			}
+			if (online_authorization_pending) {
+				if (ImGui::Button("StartupUI.OnlineRelogin"_lc)) {
+					try { BeginOnlineLogin(); }
+					catch (const std::exception& e) { online_status = e.what(); }
+				}
+			}
+			if (!online_access_token.empty() && ImGui::Button("Button.Refresh"_lc)) {
+				BeginLoadOnlineModels();
+			}
+			if (!online_access_token.empty()) {
+				ImGui::SameLine();
+				if (ImGui::Button("StartupUI.OnlineLogout"_lc)) BeginLogoutOnline();
+			}
+			if (network_controls_disabled) ImGui::EndDisabled();
+
+			if (!online_status.empty()) {
+				if (OnlineBusy()) {
+					static constexpr char spinner[] = "|/-\\";
+					const int frame = static_cast<int>(ImGui::GetTime() * 8.0) & 3;
+					ImGui::Text("%c", spinner[frame]);
+					ImGui::SameLine();
+				}
+				ImGui::TextWrapped("%s", online_status.c_str());
+			}
+			ImGui::Separator();
+
+			ImGui::SetNextItemWidth(220.0f);
+			ImGui::InputText("StartupUI.SearchBoxHeader"_lc, online_search_txt, 200);
+			ImGui::SameLine();
+			std::vector<std::string> online_types{"##"};
+			for (const auto& item : online_models) {
+				if (std::find(online_types.begin(), online_types.end(), item.model_type) == online_types.end())
+					online_types.push_back(item.model_type);
+			}
+			std::sort(online_types.begin() + 1, online_types.end());
+			ImGui::SetNextItemWidth(110.0f);
+			if (ImGui::BeginCombo("##OnlineTypeFilter", online_filter)) {
+				for (const auto& type : online_types) {
+					const bool is_selected = std::strcmp(online_filter, type.c_str()) == 0;
+					if (ImGui::Selectable(type.c_str(), is_selected)) {
+						std::snprintf(online_filter, sizeof(online_filter), "%s", type.c_str());
+					}
+					if (is_selected) ImGui::SetItemDefaultFocus();
+				}
+				ImGui::EndCombo();
+			}
+			ImGui::SameLine();
+			ImGui::Checkbox("StartupUI.DontShowEmuRom"_lc, &online_hide_emu);
+
+			const float list_height = (std::max)(180.0f, ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() * 2.0f);
+			if (ImGui::BeginChild("OnlineModelList", ImVec2(0, list_height), true)) {
+				for (int index = 0; index < static_cast<int>(online_models.size()); ++index) {
+					const auto& item = online_models[index];
+					if (!OnlineModelVisible(item)) continue;
+					ImGui::PushID(index);
+					const std::string label = item.name + "  [" + item.id + "]  " + item.model_type;
+					if (ImGui::Selectable(label.c_str(), selected_online_model == index)) selected_online_model = index;
+					ImGui::PopID();
+				}
+			}
+			ImGui::EndChild();
+
+			const bool launch_controls_disabled = OnlineBusy();
+			if (launch_controls_disabled) ImGui::BeginDisabled();
+			if (ImGui::Button("StartupUI.OnlineLaunch"_lc)) BeginDownloadOnlineModel();
+			ImGui::SameLine();
+			if (ImGui::Button("Button.Negative"_lc)) ImGui::CloseCurrentPopup();
+			if (launch_controls_disabled) ImGui::EndDisabled();
+			ImGui::EndPopup();
+			ImGui::PopStyleColor();
+		}
+
 		void Render() {
+			if (update_checker.Ready() && !update_result_consumed) {
+				update_info = update_checker.TakeResult();
+				update_result_consumed = true;
+				show_update = !update_info.tag.empty();
+			}
+			if (show_update && std::filesystem::exists("locale.txt")) {
+				const ImVec2 work_size = ImGui::GetMainViewport()->WorkSize;
+#ifdef __ANDROID__
+				const ImVec2 update_popup_size(work_size.x * 0.96f, work_size.y * 0.90f);
+#else
+				const ImVec2 update_popup_size(
+					(std::min)(1180.0f, work_size.x * 0.90f),
+					(std::min)(820.0f, work_size.y * 0.88f));
+#endif
+				ImGui::SetNextWindowSize(update_popup_size, ImGuiCond_Appearing);
+				ImGui::OpenPopup("StartupUI.UpdateAvailableTitle"_lc);
+				if (ImGui::BeginPopupModal("StartupUI.UpdateAvailableTitle"_lc, &show_update)) {
+					ImGui::PushTextWrapPos(0.0f);
+					ImGui::TextWrapped("%s %s", "StartupUI.UpdateAvailableMessage"_lc, update_info.tag.c_str());
+					if (!update_info.title.empty() && update_info.title != update_info.tag) ImGui::TextWrapped("%s", update_info.title.c_str());
+					ImGui::PopTextWrapPos();
+					const char* open_label = "StartupUI.OpenReleasePage"_lc;
+					const char* later_label = "StartupUI.UpdateLater"_lc;
+					const char* dismiss_label = "StartupUI.UpdateDismissToday"_lc;
+					const ImGuiStyle& style = ImGui::GetStyle();
+					const float open_width = ImGui::CalcTextSize(open_label).x + style.FramePadding.x * 2.0f;
+					const float later_width = ImGui::CalcTextSize(later_label).x + style.FramePadding.x * 2.0f;
+					const float dismiss_width = ImGui::CalcTextSize(dismiss_label).x + style.FramePadding.x * 2.0f;
+					const float available_width = ImGui::GetContentRegionAvail().x;
+					const bool first_row_fits = open_width + style.ItemSpacing.x + later_width <= available_width;
+					const bool all_buttons_fit = open_width + style.ItemSpacing.x + later_width + style.ItemSpacing.x + dismiss_width <= available_width;
+					const int button_rows = all_buttons_fit ? 1 : (first_row_fits ? 2 : 3);
+					const float footer_height = button_rows * ImGui::GetFrameHeight() + button_rows * style.ItemSpacing.y;
+					if (!update_info.notes.empty()) {
+						ImGui::SeparatorText("StartupUI.ReleaseNotes"_lc);
+						if (ImGui::BeginChild("UpdateReleaseNotes", ImVec2(0.0f, -footer_height), ImGuiChildFlags_Border)) {
+							ImGui::PushTextWrapPos(0.0f);
+							ImGui::TextWrapped("%s", update_info.notes.c_str());
+							ImGui::PopTextWrapPos();
+						}
+						ImGui::EndChild();
+					}
+					if (ImGui::Button(open_label)) { SDL_OpenURL(update_info.url.c_str()); show_update = false; }
+					if (first_row_fits) ImGui::SameLine();
+					if (ImGui::Button(later_label)) show_update = false;
+					if (all_buttons_fit) ImGui::SameLine();
+					if (ImGui::Button(dismiss_label)) {
+						update_checker.DismissForToday(update_info.tag);
+						show_update = false;
+					}
+					ImGui::EndPopup();
+				}
+			}
 			auto& io = ImGui::GetIO();
 
 #if defined(__ANDROID__) || defined(IOS)
@@ -947,7 +1586,12 @@ namespace casioemu {
 			float searchBarWidth = contentWidth * 0.45f;
 			float filterWidth = contentWidth * 0.25f;
 			float tableHeight = scaledHeight * 0.38f; // A bit more room so rows aren't cramped
-			float buttonWidth = contentWidth * 0.45f; // Was 0.3f — too narrow to read/tap comfortably
+			// Three buttons (Import.../Refresh/Online Models) render on one row via
+			// SameLine(), so their combined width — 3*buttonWidth plus the two gaps
+			// between them — must fit inside contentWidth. A flat 0.45x multiplier
+			// (3 * 0.45 = 1.35x) always overflowed off-screen regardless of fontScale.
+			float buttonRowGap = padding * 4.0f; // matches the SameLine() spacing below
+			float buttonWidth = (contentWidth - buttonRowGap * 2.0f) / 3.0f;
 #else
 			float scaledWidth = io.DisplaySize.x;
 			float scaledHeight = io.DisplaySize.y;
@@ -1004,7 +1648,12 @@ namespace casioemu {
 					}
 				});
 			}
+			ImGui::SameLine();
+			if (ImGui::Button("Button.Refresh"_lc, ImVec2(buttonWidth, 0))) Reload();
+			ImGui::SameLine(0.0f, padding * 4.0f);
+			if (ImGui::Button("StartupUI.OnlineModels"_lc, ImVec2(buttonWidth, 0))) show_online_popup = true;
 			ImGui::PopStyleVar();
+			RenderOnlineModels();
 			if (show_password_input) {
 				ImGui::OpenPopup("StartupUI.EnterPassword"_lc);
 			}
@@ -1070,11 +1719,6 @@ namespace casioemu {
 				ImGui::EndPopup();
 			}
 
-			ImGui::SameLine();
-			if (ImGui::Button("Button.Refresh"_lc)) {
-				Reload();
-			}
-
 			if (loading) {
 #if defined(__ANDROID__) || defined(IOS)
 				ImGui::PopStyleVar(3);
@@ -1092,7 +1736,7 @@ namespace casioemu {
 			}
 
 			if (ImGui::BeginTable("Recently", 4, pretty_table | ImGuiTableFlags_ScrollY, ImVec2(0, tableHeight))) {
-				RenderHeaders();
+				RenderHeaders(fontScale);
 				auto i = 114;
 				auto ru = recently_used;
 				for (auto& s : ru) {
@@ -1113,10 +1757,14 @@ namespace casioemu {
 				ImGui::InputText("StartupUI.SearchBoxHeader"_lc, search_txt, 200);
 				ImGui::SameLine();
 
-				const char* items[] = {"##", "ES", "ESP", "ESP2nd", "CWX", "CWII", "Fx5800p", "TI", "SolarII"};
+				std::vector<const char*> items = {"##", "ES", "ESP", "ESP2nd"};
+				for (const auto& descriptor : HARDWARE_DESCRIPTORS) {
+					if (descriptor.hardware_id != HW_ES_PLUS)
+						items.push_back(descriptor.startup_filter);
+				}
 				ImGui::SetNextItemWidth(filterWidth);
 				if (ImGui::BeginCombo("##cb", current_filter)) {
-					for (int n = 0; n < IM_ARRAYSIZE(items); n++) {
+					for (size_t n = 0; n < items.size(); n++) {
 						bool is_selected = (current_filter == items[n]);
 						if (ImGui::Selectable(items[n], is_selected))
 							current_filter = items[n];
@@ -1130,7 +1778,7 @@ namespace casioemu {
 				ImGui::Checkbox("StartupUI.DontShowEmuRom"_lc, &not_show_emu);
 
 				if (ImGui::BeginTable("All", 4, pretty_table | ImGuiTableFlags_ScrollY, ImVec2(0, tableHeight))) {
-					RenderHeaders();
+					RenderHeaders(fontScale);
 					auto i = 114;
 					for (auto& model : models) {
 						bool matches_filter = (strcmp(current_filter, "##") == 0) || (current_filter == model.type);
@@ -1160,7 +1808,11 @@ namespace casioemu {
 				ImGui::Separator();
 				ImGui::Spacing();
 
+#if defined(IOS)
+				if (ImGui::Button("StartupUI.CreateQuickAction"_lc, ImVec2(160, 0))) {
+#else
 				if (ImGui::Button("Button.Positive"_lc, ImVec2(120, 0))) {
+#endif
 					std::string name_str = shortcut_name;
 					std::string icon_str; // icon path field removed; always use the default icon
 					if (!name_str.empty()) {
@@ -1186,6 +1838,37 @@ namespace casioemu {
 						ImGui::CloseCurrentPopup();
 					}
 				}
+#if defined(IOS)
+				ImGui::SameLine();
+				if (ImGui::Button("StartupUI.CreateHomeScreenIcon"_lc, ImVec2(200, 0))) {
+					std::string name_str = shortcut_name;
+					if (!name_str.empty()) {
+						try {
+							bool ok = CreateDesktopShortcutWebClip(shortcut_model_path, name_str);
+							if (!ok) {
+								SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
+									"StartupUI.CreateShortcutTitle"_lc,
+									"StartupUI.ShortcutFailed"_lc, nullptr);
+							}
+							// On success there's no "created" message box here
+							// (unlike the Quick Action button above): iOS's own
+							// "Install Profile" sheet is about to take over the
+							// screen, so a message box would just be another
+							// dialog stacked underneath it.
+						}
+						catch (const std::exception& e) {
+							std::cerr << "[Shortcut] Error: " << e.what() << std::endl;
+							SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
+								"StartupUI.CreateShortcutTitle"_lc,
+								"StartupUI.ShortcutFailed"_lc, nullptr);
+						}
+						ImGui::CloseCurrentPopup();
+					}
+				}
+				if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) {
+					ImGui::SetTooltip("%s", "StartupUI.CreateHomeScreenIconHint"_lc);
+				}
+#endif
 				ImGui::SameLine();
 				if (ImGui::Button("Button.Negative"_lc, ImVec2(120, 0))) {
 					ImGui::CloseCurrentPopup();
@@ -1198,11 +1881,11 @@ namespace casioemu {
 #endif
 			ImGui::End();
 		}
-		void RenderHeaders() {
-			ImGui::TableSetupColumn("StartupUI.RomName"_lc, ImGuiTableColumnFlags_WidthStretch, 200);
-			ImGui::TableSetupColumn("StartupUI.RomVer"_lc, ImGuiTableColumnFlags_WidthFixed, 120);
-			ImGui::TableSetupColumn("StartupUI.RomSum"_lc, ImGuiTableColumnFlags_WidthFixed, 130);
-			ImGui::TableSetupColumn("StartupUI.RomType"_lc, ImGuiTableColumnFlags_WidthFixed, 70);
+		void RenderHeaders(float scale = 1.0f) {
+			ImGui::TableSetupColumn("StartupUI.RomName"_lc, ImGuiTableColumnFlags_WidthStretch, 200 * scale);
+			ImGui::TableSetupColumn("StartupUI.RomVer"_lc, ImGuiTableColumnFlags_WidthFixed, 120 * scale);
+			ImGui::TableSetupColumn("StartupUI.RomSum"_lc, ImGuiTableColumnFlags_WidthFixed, 130 * scale);
+			ImGui::TableSetupColumn("StartupUI.RomType"_lc, ImGuiTableColumnFlags_WidthFixed, 70 * scale);
 			// ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 80);
 			ImGui::TableHeadersRow();
 		}
@@ -1381,7 +2064,9 @@ namespace casioemu {
 #endif
 					if (ImGui::MenuItem("StartupUI.Edit"_lc)) {
 						try {
-							windows2->push_back(new ModelEditor(model.path));
+							auto* editor = new ModelEditor(model.path);
+							editor->open = true;
+							windows2->push_back(editor);
 						}
 						catch (const std::exception& e) {
 							SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Error", "Failed to open model editor.", nullptr);
@@ -1503,18 +2188,23 @@ static inline void HandlePotentialShortcutLaunch(const SDL_Event& event, casioem
 }
 
 void HandleStartupEvent(const SDL_Event& event) {
+#ifdef __ANDROID__
+	if (event.type == SDL_TEXTINPUT) {
+		ThemeManager::Instance().RegisterInputGlyphs(event.text.text);
+	}
+#endif
 	ImGui_ImplSDL2_ProcessEvent(&event);
 }
 
-std::string sui_loop() {
+StartupSelection sui_loop() {
 	if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0) {
 		SDL_Log("SDL_Init failed in StartupUI: %s", SDL_GetError());
-		return "";
+		return {};
 	}
 	if (IMG_Init(IMG_INIT_PNG) != IMG_INIT_PNG) {
 		SDL_Log("IMG_Init failed in StartupUI: %s", IMG_GetError());
 		SDL_Quit();
-		return "";
+		return {};
 	}
 	SDL_SetHint(SDL_HINT_IME_SHOW_UI, "1");
 	windows2 = new std::vector<UIWindow*>();
@@ -1537,6 +2227,7 @@ std::string sui_loop() {
 		SDL_WINDOWPOS_UNDEFINED,
 		1200, 800,
 		SDL_WINDOW_SHOWN | (SDL_WINDOW_RESIZABLE));
+	casioemu::SetPreferredRendererDriverHint();
 	renderer2 = SDL_CreateRenderer(window2, -1, SDL_RENDERER_PRESENTVSYNC | SDL_RENDERER_ACCELERATED);
 #ifdef _WIN32
 	EnableDarkTitleBar(GetSDLWindowHandle(window2));
@@ -1548,12 +2239,12 @@ std::string sui_loop() {
 			SDL_DestroyWindow(window2);
 		IMG_Quit();
 		SDL_Quit();
-		return "";
+		return {};
 	}
 	IMGUI_CHECKVERSION();
 	ImGui::CreateContext();
 	ImGuiIO& io = ImGui::GetIO();
-	RebuildFont();
+	// RebuildFont();
 	io.WantCaptureKeyboard = true;
 	io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 	io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
@@ -1564,6 +2255,8 @@ std::string sui_loop() {
 #endif
 	ImGui_ImplSDL2_InitForSDLRenderer(window2, renderer2);
 	ImGui_ImplSDLRenderer2_Init(renderer2);
+	ThemeManager::Instance().RequestFontRebuild();
+	ThemeManager::Instance().ProcessFontRebuild();
 	auto frame_event = SDL_RegisterEvents(1);
 	std::atomic<bool> exited = {false};
 	std::thread t3([&]() {
@@ -1585,7 +2278,7 @@ std::string sui_loop() {
 	while (!done) {
 		SDL_Event event;
 		if (SDL_WaitEvent(&event)) {
-			ImGui_ImplSDL2_ProcessEvent(&event);
+			HandleStartupEvent(event);
 			if (event.type == SDL_QUIT) {
 				done = true;
 			}
@@ -1597,7 +2290,7 @@ std::string sui_loop() {
 			}
 			HandlePotentialShortcutLaunch(event, ui);
 			while (SDL_PollEvent(&event)) {
-				ImGui_ImplSDL2_ProcessEvent(&event);
+				HandleStartupEvent(event);
 				if (event.type == SDL_QUIT) {
 					done = true;
 				}
@@ -1693,11 +2386,7 @@ std::string sui_loop() {
 					if (!languages.empty() && selected_language_index < languages.size()) {
 						const std::string& selected_lang = languages[selected_language_index];
 						g_local.ChangeLanguage(selected_lang);
-						if ("Localization.EnableCJK"_l == "1" || "Localization.EnableCJK"_l == "true")
-							ThemeManager::Instance().RequestFontRebuild();
-						std::ofstream outfile("locale.txt");
-						outfile << selected_lang;
-						outfile.close();
+						ThemeManager::Instance().RequestFontRebuild();
 						ImGui::CloseCurrentPopup();
 						DiscordRPC::UpdatePresence("");
 					}
@@ -1741,5 +2430,5 @@ std::string sui_loop() {
 	}
 	IMG_Quit();
 	SDL_Quit();
-	return ui.selected_path.string();
+	return {ui.selected_path.string(), std::move(ui.selected_resources)};
 }

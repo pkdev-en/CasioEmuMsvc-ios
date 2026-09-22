@@ -6,9 +6,9 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-// �T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T
-//  ���� / ����
-// �T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T
+// ════════════════════════════════════════════════════════════
+//  构造 / 基础
+// ════════════════════════════════════════════════════════════
 
 TouchMouseTranslator::TouchMouseTranslator(
 	Uint32 windowId,
@@ -37,9 +37,9 @@ bool TouchMouseTranslator::HandleEvent(const SDL_Event& event,
 	}
 }
 
-// �T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T
+// ════════════════════════════════════════════════════════════
 //  FingerDown
-// �T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T
+// ════════════════════════════════════════════════════════════
 
 bool TouchMouseTranslator::HandleFingerDown(
 	const SDL_TouchFingerEvent& finger, int windowW, int windowH) {
@@ -56,16 +56,16 @@ bool TouchMouseTranslator::HandleFingerDown(
 		StartFinger(primary_, finger.fingerId, x, y, target);
 
 		/*
-		 * ���� ImGui ���� Emulator�������� FingerDown ʱ����������ꡣ
-		 * �� Motion ������ֵ��ʼ��ק������ Up ʱ�ж� tap / long-press��
-		 * �����ƶ����벻���Ͳ��ᴥ���κ�����¼���
+		 * 无论 ImGui 还是 Emulator，都不在 FingerDown 时立即按下鼠标。
+		 * 等 Motion 超过阈值后开始拖拽，或在 Up 时判断 tap / long-press。
+		 * 这样移动距离不够就不会触发任何鼠标事件。
 		 */
 		return true;
 	}
 
 	if (!secondary_.active && finger.fingerId != primary_.fingerId) {
-		// �ڶ�����ָ���� �� ת˫ָ����
-		// ���ͷ���������⿨ס
+		// 第二根手指按下 → 转双指滚动
+		// 先释放左键，避免卡住
 		if (primary_.dragging || leftButtonDown_) {
 			EmitMouseButton(primary_.target, SDL_BUTTON_LEFT,
 				SDL_RELEASED,
@@ -82,9 +82,9 @@ bool TouchMouseTranslator::HandleFingerDown(
 	return true;
 }
 
-// �T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T
+// ════════════════════════════════════════════════════════════
 //  FingerUp
-// �T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T
+// ════════════════════════════════════════════════════════════
 
 bool TouchMouseTranslator::HandleFingerUp(
 	const SDL_TouchFingerEvent& finger, int windowW, int windowH) {
@@ -93,20 +93,20 @@ bool TouchMouseTranslator::HandleFingerUp(
 	const float y = finger.y * static_cast<float>(windowH);
 	const Uint32 now = SDL_GetTicks();
 
-	// ���� primary up ������������������������������������������������������������������������������������
+	// ── primary up ──────────────────────────────────────────
 	if (primary_.active && primary_.fingerId == finger.fingerId) {
 		primary_.currentX = x;
 		primary_.currentY = y;
 
 		if (primary_.dragging || leftButtonDown_) {
-			// ������ק�� �� �ͷ����
+			// 正在拖拽中 → 释放左键
 			EmitMouseMotion(primary_.target, x, y);
 			EmitMouseButton(primary_.target, SDL_BUTTON_LEFT,
 				SDL_RELEASED, x, y);
 			primary_.dragging = false;
 		}
 		else {
-			// û����ק �� �ж� tap / long-press
+			// 没有拖拽 → 判断 tap / long-press
 			const float dx = x - primary_.startX;
 			const float dy = y - primary_.startY;
 			const float distSq = dx * dx + dy * dy;
@@ -115,17 +115,17 @@ bool TouchMouseTranslator::HandleFingerUp(
 
 			if (primary_.isTapCandidate && distSq <= thresholdSq) {
 				if (now - primary_.startTime < longPressDelayMs_) {
-					// �̰� �� ������
+					// 短按 → 左键点击
 					EmitMouseClick(primary_.target,
 						SDL_BUTTON_LEFT, x, y);
 				}
 				else {
-					// ���� �� �Ҽ����
+					// 长按 → 右键点击
 					EmitMouseClick(primary_.target,
 						SDL_BUTTON_RIGHT, x, y);
 				}
 			}
-			// �ƶ����벻�� �� suppressTap �� ʲô������
+			// 移动距离不够 且 suppressTap → 什么都不做
 		}
 
 		ResetFinger(primary_);
@@ -135,7 +135,7 @@ bool TouchMouseTranslator::HandleFingerUp(
 		return true;
 	}
 
-	// ���� secondary up ��������������������������������������������������������������������������������
+	// ── secondary up ────────────────────────────────────────
 	if (secondary_.active && secondary_.fingerId == finger.fingerId) {
 		secondary_.currentX = x;
 		secondary_.currentY = y;
@@ -153,9 +153,9 @@ bool TouchMouseTranslator::HandleFingerUp(
 	return true;
 }
 
-// �T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T
+// ════════════════════════════════════════════════════════════
 //  FingerMotion
-// �T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T
+// ════════════════════════════════════════════════════════════
 
 bool TouchMouseTranslator::HandleFingerMotion(
 	const SDL_TouchFingerEvent& finger, int windowW, int windowH) {
@@ -163,7 +163,7 @@ bool TouchMouseTranslator::HandleFingerMotion(
 	const float x = finger.x * static_cast<float>(windowW);
 	const float y = finger.y * static_cast<float>(windowH);
 
-	// ���� primary motion ����������������������������������������������������������������������������
+	// ── primary motion ──────────────────────────────────────
 	if (primary_.active && primary_.fingerId == finger.fingerId) {
 
 		if (!secondary_.active) {
@@ -182,7 +182,7 @@ bool TouchMouseTranslator::HandleFingerMotion(
 		return true;
 	}
 
-	// ���� secondary motion ������������������������������������������������������������������������
+	// ── secondary motion ────────────────────────────────────
 	if (secondary_.active && secondary_.fingerId == finger.fingerId) {
 
 		if (primary_.active) {
@@ -201,9 +201,9 @@ bool TouchMouseTranslator::HandleFingerMotion(
 	return true;
 }
 
-// �T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T
-//  �ڲ��ƶ�����
-// �T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T
+// ════════════════════════════════════════════════════════════
+//  内部移动处理
+// ════════════════════════════════════════════════════════════
 
 void TouchMouseTranslator::HandleSingleFingerMove(
 	TouchState& state, float x, float y) {
@@ -211,23 +211,19 @@ void TouchMouseTranslator::HandleSingleFingerMove(
 	const float dx = x - state.startX;
 	const float dy = y - state.startY;
 	const float distSq = dx * dx + dy * dy;
-	const float thresholdSq = dragThresholdPixels_ * dragThresholdPixels_;
-	
-	if (std::abs(dx) > 3.0f || std::abs(dy) > 3.0f)
-		state.isTapCandidate = false;
-	
-	if (distSq > thresholdSq)
-	{
-		state.movedBeyondThreshold = true;
+	const float thresholdSq =
+		dragThresholdPixels_ * dragThresholdPixels_;
+
+	if (!state.dragging && distSq > thresholdSq) {
+		// 超过阈值 → 开始拖拽
+		// 从起始点按下，再移到当前位置，防止 ImGui 窗口漂移
+		EmitMouseMotion(state.target, state.startX, state.startY);
+		EmitMouseButton(state.target, SDL_BUTTON_LEFT, SDL_PRESSED,
+			state.startX, state.startY);
+		EmitMouseMotion(state.target, x, y);
+		state.dragging = true;
+		state.suppressTap = true;
 	}
-
-	if (!state.dragging && distSq > thresholdSq){
-	state.dragging = true;
-	state.suppressTap = true;
-
-	EmitMouseMotion(state.target, x, y);
-	EmitMouseButton(state.target, SDL_BUTTON_LEFT, SDL_PRESSED, x, y);
-}
 
 	if (state.dragging) {
 		EmitMouseMotion(state.target, x, y);
@@ -255,9 +251,9 @@ void TouchMouseTranslator::HandleTwoFingerMove(
 	state.lastScrollTime = now;
 }
 
-// �T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T
-//  ����
-// �T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T
+// ════════════════════════════════════════════════════════════
+//  辅助
+// ════════════════════════════════════════════════════════════
 
 void TouchMouseTranslator::StartFinger(
 	TouchState& state, SDL_FingerID fingerId,
@@ -314,9 +310,9 @@ void TouchMouseTranslator::ResetTrail(TouchTrail& trail) {
 	trail.count = 0;
 }
 
-// �T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T
-//  ��Ⱦ
-// �T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T
+// ════════════════════════════════════════════════════════════
+//  渲染
+// ════════════════════════════════════════════════════════════
 
 static void RenderFilledCircle(SDL_Renderer* renderer,
 	int cx, int cy, int radius) {
@@ -364,7 +360,7 @@ void TouchMouseTranslator::RenderDebug(SDL_Renderer* renderer) const {
 	DrawCross(renderer, primary_, 255, 0, 0);
 	DrawCross(renderer, secondary_, 0, 255, 0);
 
-	// �������Ȼ���������ָ��ס��δ��ק��δ suppress ʱ��ʾ
+	// 长按进度环：仅当单指按住、未拖拽、未 suppress 时显示
 	DrawLongPressRing(renderer, primary_);
 	DrawLongPressRing(renderer, secondary_);
 }
@@ -409,7 +405,7 @@ void TouchMouseTranslator::DrawCross(SDL_Renderer* renderer,
 	if (!state.active) {
 		return;
 	}
-	// ��ѡ������ʮ��׼��
+	// 可选：绘制十字准星
 	// SDL_SetRenderDrawColor(renderer, r, g, b, 255);
 	// ...
 	(void)r;
@@ -425,12 +421,12 @@ void TouchMouseTranslator::DrawLongPressRing(
 		return;
 	}
 
-	// ������ק���ѱ����� �� ����ʾ��
+	// 正在拖拽或已被抑制 → 不显示环
 	if (state.dragging || state.suppressTap) {
 		return;
 	}
 
-	// ����ƶ������Ƿ�����ֵ��
+	// 检查移动距离是否还在阈值内
 	const float dx = state.currentX - state.startX;
 	const float dy = state.currentY - state.startY;
 	const float distSq = dx * dx + dy * dy;
@@ -443,21 +439,21 @@ void TouchMouseTranslator::DrawLongPressRing(
 	const Uint32 now = SDL_GetTicks();
 	const Uint32 elapsed = now - state.startTime;
 
-	// ���� 0.0 ~ 1.0
+	// 进度 0.0 ~ 1.0
 	float progress = static_cast<float>(elapsed) / static_cast<float>(longPressDelayMs_);
 	progress = std::min(progress, 1.0f);
 
-	// ����̫С����
+	// 进度太小不画
 	if (progress < 0.5f) {
 		return;
 	}
-	progress = (progress - 0.5f) * 2.0f; // 0.5~1.0 ӳ�䵽 0.0~1.0
+	progress = (progress - 0.5f) * 2.0f; // 0.5~1.0 映射到 0.0~1.0
 
 	const int cx = static_cast<int>(state.startX);
 	const int cy = static_cast<int>(state.startY);
 	const float endAngle = progress * 2.0f * static_cast<float>(M_PI);
 
-	// ��ɫ��δ����ɫ��������ɫ
+	// 颜色：未满白色，满了绿色
 	if (progress >= 1.0f) {
 		SDL_SetRenderDrawColor(renderer, 100, 255, 100, 220);
 	}
@@ -465,15 +461,15 @@ void TouchMouseTranslator::DrawLongPressRing(
 		SDL_SetRenderDrawColor(renderer, 255, 255, 255, 180);
 	}
 
-	// ���߶αƽ�Բ��
+	// 用线段逼近圆弧
 	const int segments = std::max(16, static_cast<int>(progress * 64));
-	const float startAng = -static_cast<float>(M_PI) / 2.0f; // 12 ���ӷ���
+	const float startAng = -static_cast<float>(M_PI) / 2.0f; // 12 点钟方向
 
 	for (int i = 0; i < segments; ++i) {
 		float a1 = startAng + endAngle * static_cast<float>(i) / static_cast<float>(segments);
 		float a2 = startAng + endAngle * static_cast<float>(i + 1) / static_cast<float>(segments);
 
-		// ��ÿ�λ��ߣ��������ģ���߿�
+		// 对每段弧线，画多层以模拟线宽
 		for (float r = ringRadius_ - ringThickness_ * 0.5f;
 			r <= ringRadius_ + ringThickness_ * 0.5f;
 			r += 1.0f) {
@@ -487,7 +483,7 @@ void TouchMouseTranslator::DrawLongPressRing(
 		}
 	}
 
-	// ����֮��һ��С��ǿ��
+	// 满了之后画一个小点强调
 	if (progress >= 1.0f) {
 		SDL_SetRenderDrawColor(renderer, 100, 255, 100, 255);
 		RenderFilledCircle(renderer,
@@ -499,9 +495,9 @@ void TouchMouseTranslator::DrawLongPressRing(
 	}
 }
 
-// �T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T
-//  �¼�����
-// �T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T�T
+// ════════════════════════════════════════════════════════════
+//  事件发射
+// ════════════════════════════════════════════════════════════
 
 void TouchMouseTranslator::EmitMouseMotion(
 	TouchTarget target, float x, float y) {

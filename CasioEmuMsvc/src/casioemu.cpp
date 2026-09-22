@@ -1,4 +1,6 @@
 #include "Config.hpp"
+#include "Gui/PopUpDisplay.h"
+#include "Gui/ThemeManager.h"
 #include "Ui.hpp"
 #include "imgui_impl_sdl2.h"
 #include "Gui/PopUpDisplay.h"
@@ -13,7 +15,9 @@
 #include <SDL.h>
 #include <SDL_image.h>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
+#include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -25,6 +29,7 @@
 #include <map>
 #include <mutex>
 #include <ostream>
+#include <sstream>
 #include <string>
 #include <thread>
 #if _WIN32
@@ -41,7 +46,10 @@
 #ifdef ENABLE_SENTRY
 #include <sentry.h>
 #endif
-
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#include <unistd.h>
+#endif
 #include "StartupUi/StartupUi.h"
 #include <Gui.h>
 #include <Plugin/PluginMan.h>
@@ -100,7 +108,8 @@ static void TouchCrashLock() {
 }
 
 static void RemoveCrashLock() {
-	std::filesystem::remove(kCrashLockFile);
+	std::error_code ec;
+	std::filesystem::remove(kCrashLockFile, ec);
 }
 
 static bool IsPointInImGuiWindow(float x, float y) {
@@ -144,6 +153,46 @@ static bool IsPointInImGuiWindow(float x, float y) {
 	return false;
 }
 
+static Uint32 GetEventWindowId(const SDL_Event& event) {
+	switch (event.type) {
+	case SDL_WINDOWEVENT:
+		return event.window.windowID;
+	case SDL_KEYDOWN:
+	case SDL_KEYUP:
+		return event.key.windowID;
+	case SDL_TEXTEDITING:
+	case SDL_TEXTINPUT:
+		return event.text.windowID;
+	case SDL_MOUSEMOTION:
+		return event.motion.windowID;
+	case SDL_MOUSEBUTTONDOWN:
+	case SDL_MOUSEBUTTONUP:
+		return event.button.windowID;
+	case SDL_MOUSEWHEEL:
+		return event.wheel.windowID;
+	default:
+		return 0;
+	}
+}
+
+static void ProcessImGuiEvent(const SDL_Event& event) {
+#ifdef __ANDROID__
+	if (event.type == SDL_TEXTINPUT) {
+		ThemeManager::Instance().RegisterInputGlyphs(event.text.text);
+	}
+#endif
+	ImGui_ImplSDL2_ProcessEvent(&event);
+}
+
+static bool IsScreenMirrorWindowEvent(const SDL_Event& event) {
+	const Uint32 windowId = GetEventWindowId(event);
+	if (windowId == 0) {
+		return false;
+	}
+	SDL_Window* eventWindow = SDL_GetWindowFromID(windowId);
+	return eventWindow && SDL_GetWindowData(eventWindow, SCREEN_MIRROR_WINDOW_DATA_KEY);
+}
+
 int main(int argc, char* argv[]) {
 #ifdef _WIN32
 	SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
@@ -169,7 +218,8 @@ int main(int argc, char* argv[]) {
 		const char* home = getenv("HOME");
 		if (home) {
 			std::string path = std::string(home) + "/CasioEmuMsvc";
-			std::filesystem::create_directories(path);
+			std::error_code ec;
+			std::filesystem::create_directories(path, ec);
 			chdir(path.c_str());
     
             std::filesystem::path src =
@@ -204,8 +254,38 @@ int main(int argc, char* argv[]) {
 	// like "models" here — before SDL_Init() establishes anything — silently
 	// resolves against the wrong directory and leaves the app without any
 	// models, locales, or fonts after the chdir() below runs.
+#elif defined(__APPLE__)
+	char path[1024];
+	uint32_t size = sizeof(path);
+	if (_NSGetExecutablePath(path, &size) == 0) {
+		char* last_slash = strrchr(path, '/');
+		if (last_slash) {
+			*last_slash = '\0';
+			chdir(path);
+		}
+	}
 #endif
 #ifndef __IOS__
+#ifdef __ANDROID__
+	{
+		// Game.java's extractAssets() copies locales/*.lc into this same
+		// directory from a separate Java-side onCreate() path; give it a
+		// moment to finish before loading translations, since an empty
+		// locales/ here means every "..."_lc lookup silently falls back to
+		// printing the raw key instead of translated text.
+		for (int attempt = 0; attempt < 40; ++attempt) {
+			std::error_code ec;
+			bool hasLocaleFiles = false;
+			if (std::filesystem::exists("./locales", ec)) {
+				for (auto& entry : std::filesystem::directory_iterator("./locales", ec)) {
+					if (entry.path().extension() == ".lc") { hasLocaleFiles = true; break; }
+				}
+			}
+			if (hasLocaleFiles) break;
+			std::this_thread::sleep_for(std::chrono::milliseconds(50));
+		}
+	}
+#endif
 	g_local.Load();
 	ThemeManager::Instance().LoadSettings();
 #endif
@@ -258,6 +338,7 @@ int main(int argc, char* argv[]) {
 			logger::Info("[argv][Info] #%i: key '%s' already set\n", ix, key.c_str());
 	}
 	bool headless = argv_map.find("headless") != argv_map.end();
+	std::shared_ptr<casioemu::ModelResourceStore> startup_resources;
 	int sdlFlags = SDL_INIT_VIDEO | SDL_INIT_TIMER;
 	if (SDL_Init(sdlFlags) != 0)
 		PANIC("SDL_Init failed: %s\n", SDL_GetError());
@@ -267,6 +348,29 @@ int main(int argc, char* argv[]) {
 
 #ifdef __IOS__
 	{
+		// Diagnostic logging for a bug report: locale.txt (the saved
+		// language choice) appears to sometimes not survive a kill-and-
+		// relaunch even without reinstalling the app, and SDL_Log alone
+		// isn't visible without Xcode/Console.app (which the reporter
+		// doesn't have access to — no Mac). Writing the same diagnostics to
+		// a plain text file works around that: UIFileSharingEnabled is
+		// already set in Info.plist, so ~/Documents/CasioEmuMsvc is
+		// directly browsable through the iOS Files app (On My iPad/iPhone >
+		// CasioEmuMsvc) without any cable or Mac. Appends across launches
+		// (separated by a timestamp) so "right after picking a language"
+		// can be compared against "next launch" in one file. This is
+		// intentionally temporary — strip it once the actual failure point
+		// is identified from a real log.
+		auto diagLog = [](std::ofstream& f, const char* fmt, ...) {
+			char buf[512];
+			va_list args;
+			va_start(args, fmt);
+			vsnprintf(buf, sizeof(buf), fmt, args);
+			va_end(args);
+			SDL_Log("%s", buf);
+			if (f.is_open()) f << buf << "\n";
+		};
+
 		// SDL_GetBasePath() is the reliable way to find the app bundle's
 		// Resources directory on iOS/macOS — it does NOT depend on the
 		// process's working directory at launch (which SDL leaves
@@ -278,16 +382,67 @@ int main(int argc, char* argv[]) {
 		if (basePathRaw) SDL_free(basePathRaw);
 
 		const char* home = getenv("HOME");
+		std::string diagLogPath = home ? (std::string(home) + "/Documents/CasioEmuMsvc/locale_diag.log") : "";
+		std::ofstream diagFile;
+		if (!diagLogPath.empty()) {
+			std::error_code mkEc;
+			std::filesystem::create_directories(std::string(home) + "/Documents/CasioEmuMsvc", mkEc);
+			diagFile.open(diagLogPath, std::ios::app);
+		}
+
+		{
+			auto now = std::chrono::system_clock::now();
+			auto t = std::chrono::system_clock::to_time_t(now);
+			char timebuf[64];
+			std::strftime(timebuf, sizeof(timebuf), "%Y-%m-%d %H:%M:%S", std::localtime(&t));
+			diagLog(diagFile, "\n===== [LocaleDiag] launch at %s =====", timebuf);
+		}
+
+		diagLog(diagFile, "[LocaleDiag] SDL_GetBasePath() = '%s'", basePath.c_str());
+		diagLog(diagFile, "[LocaleDiag] getenv(HOME) = '%s'", home ? home : "(null)");
+
 		if (home && !basePath.empty()) {
 			std::string path = std::string(home) + "/Documents/CasioEmuMsvc";
-			std::filesystem::create_directories(path);
+			diagLog(diagFile, "[LocaleDiag] target path = '%s'", path.c_str());
 			std::error_code ec;
-			std::filesystem::copy(basePath + "models", path + "/models", std::filesystem::copy_options::recursive | std::filesystem::copy_options::skip_existing, ec);
-			std::filesystem::copy(basePath + "locales", path + "/locales", std::filesystem::copy_options::recursive | std::filesystem::copy_options::skip_existing, ec);
-			std::filesystem::copy(basePath + "fonts", path + "/fonts", std::filesystem::copy_options::recursive | std::filesystem::copy_options::skip_existing, ec);
-			std::filesystem::copy(basePath + "fonts_cjk", path + "/fonts_cjk", std::filesystem::copy_options::recursive | std::filesystem::copy_options::skip_existing, ec);
-			std::filesystem::copy(basePath + "License.md", path + "/License.md", std::filesystem::copy_options::skip_existing, ec);
+			std::filesystem::create_directories(path, ec);
+			if (ec) diagLog(diagFile, "[LocaleDiag] create_directories FAILED: %s", ec.message().c_str());
+
+			// NOTE: overwrite_existing, not skip_existing. These are
+			// read-only assets shipped with THIS build of the app, not user
+			// data -- they must always match the binary. skip_existing was
+			// a one-way trap: if an earlier install had ever left this
+			// directory partially populated (an interrupted copy, or an
+			// older build whose bundle was missing some locale files), the
+			// destination directory would already "exist" from that point
+			// on, and no future update would ever be allowed to add the
+			// missing files -- e.g. locales/*.lc staying incomplete forever
+			// once bad, silently breaking every "..."_lc lookup into
+			// printing the raw key instead of translated text.
+			//
+			// Each copy now checks/logs its own error_code (previously all
+			// five shared one unchecked `ec`, so a failure on any single
+			// call besides the last was invisible).
+			auto copyAndLog = [&](const std::string& what, const std::string& src, const std::string& dst) {
+				std::error_code copyEc;
+				bool srcExists = std::filesystem::exists(src);
+				std::filesystem::copy(src, dst, std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing, copyEc);
+				diagLog(diagFile, "[LocaleDiag] copy %s: src_exists=%d src='%s' dst='%s' -> %s",
+					what.c_str(), srcExists ? 1 : 0, src.c_str(), dst.c_str(),
+					copyEc ? copyEc.message().c_str() : "ok");
+			};
+			copyAndLog("models", basePath + "models", path + "/models");
+			copyAndLog("locales", basePath + "locales", path + "/locales");
+			copyAndLog("fonts", basePath + "fonts", path + "/fonts");
+			copyAndLog("fonts_cjk", basePath + "fonts_cjk", path + "/fonts_cjk");
+			{
+				std::error_code copyEc;
+				bool srcExists = std::filesystem::exists(basePath + "License.md");
+				std::filesystem::copy(basePath + "License.md", path + "/License.md", std::filesystem::copy_options::overwrite_existing, copyEc);
+				diagLog(diagFile, "[LocaleDiag] copy License.md: src_exists=%d -> %s", srcExists ? 1 : 0, copyEc ? copyEc.message().c_str() : "ok");
+			}
 			chdir(path.c_str());
+			diagLog(diagFile, "[LocaleDiag] chdir'd to '%s'", path.c_str());
 		}
 		else if (!basePath.empty()) {
 			// No writable HOME dir available — fall back to running
@@ -295,9 +450,36 @@ int main(int argc, char* argv[]) {
 			// can still find its resources, even though it won't be able
 			// to persist settings/recordings/etc.
 			chdir(basePath.c_str());
+			diagLog(diagFile, "[LocaleDiag] no writable HOME; chdir'd to bundle basePath '%s' instead", basePath.c_str());
 		}
+		else {
+			diagLog(diagFile, "[LocaleDiag] WARNING: basePath is empty and no fallback chdir happened at all.");
+		}
+
+		{
+			bool localeTxtExists = std::filesystem::exists("locale.txt");
+			diagLog(diagFile, "[LocaleDiag] locale.txt exists (post-chdir, pre-Load) = %d", localeTxtExists ? 1 : 0);
+			if (localeTxtExists) {
+				std::ifstream f("locale.txt");
+				std::string content;
+				std::getline(f, content);
+				diagLog(diagFile, "[LocaleDiag] locale.txt content = '%s'", content.c_str());
+			}
+			bool localesDirExists = std::filesystem::exists("./locales");
+			int localeFileCount = 0;
+			if (localesDirExists) {
+				std::error_code diagEc;
+				for (auto& entry : std::filesystem::directory_iterator("./locales", diagEc)) {
+					if (entry.path().extension() == ".lc") localeFileCount++;
+				}
+			}
+			diagLog(diagFile, "[LocaleDiag] ./locales exists=%d, .lc file count=%d", localesDirExists ? 1 : 0, localeFileCount);
+		}
+
+		g_local.Load();
+		diagLog(diagFile, "[LocaleDiag] after Load(): current locale = '%s'", g_local.GetCurrentLanguage().c_str());
+		diagFile.close();
 	}
-	g_local.Load();
 	ThemeManager::Instance().LoadSettings();
 #endif
 
@@ -307,7 +489,6 @@ int main(int argc, char* argv[]) {
 	if (headless && argv_map["model"].empty()) {
 		PANIC("No model path supplied.\n");
 	}
-	
 	while (true) {
 #ifdef __IOS__
 		if (argv_map["model"].empty()) {
@@ -322,13 +503,14 @@ int main(int argc, char* argv[]) {
 		}
 #endif
 		if (argv_map["model"].empty()) {
-		auto s = sui_loop();
-		argv_map["model"] = std::move(s);
-		if (argv_map["model"].empty()) {
-      DiscordRPC::Shutdown();
-			return -1;
-	  }
-	}
+			auto selection = sui_loop();
+			argv_map["model"] = std::move(selection.model_path);
+			startup_resources = std::move(selection.resources);
+			if (argv_map["model"].empty()) {
+				DiscordRPC::Shutdown();
+				return -1;
+			}
+		}
 
 	// After startupui has done its job:
 	// startupui doesn't need that.
@@ -339,7 +521,7 @@ int main(int argc, char* argv[]) {
 
 	bool no_dbg = !argv_map["no_dbg"].empty();
 	low_perf_ext = !argv_map["low_perf_ext"].empty();
-	Emulator emulator(argv_map);
+	Emulator emulator(argv_map, false, std::move(startup_resources));
 	m_emu = &emulator;
 
 	// static std::atomic<bool> running(true);
@@ -354,7 +536,7 @@ int main(int argc, char* argv[]) {
 
 		[&](const SDL_Event& translatedEvent, TouchTarget target) {
 			if (target == TouchTarget::ImGui) {
-				ImGui_ImplSDL2_ProcessEvent(&translatedEvent);
+				ProcessImGuiEvent(translatedEvent);
 				return;
 			}
 
@@ -378,6 +560,18 @@ int main(int argc, char* argv[]) {
 	auto frame_event = SDL_RegisterEvents(1);
 	bool busy = false;
 	bool running = true;
+#if !defined(__ANDROID__) && !defined(__IOS__)
+	// See the SDL_Delay branch below: SDL_RENDERER_PRESENTVSYNC is only
+	// requested on the first tier of Emulator.cpp's renderer fallback
+	// chain. If that attempt fails (GPU driver issue, virtualized/RDP
+	// session, older integrated GPU) and a later tier without vsync gets
+	// used instead, nothing blocks SDL_RenderPresent() and this loop would
+	// otherwise spin at ~1000Hz (SDL_Delay(1)), pegging a CPU core. Check
+	// once up front instead of assuming vsync always worked.
+	SDL_RendererInfo rendererInfo{};
+	bool hasRealVsync = (SDL_GetRendererInfo(emulator.renderer, &rendererInfo) == 0) &&
+		(rendererInfo.flags & SDL_RENDERER_PRESENTVSYNC) != 0;
+#endif
 	std::thread t3([&]() {
 		SDL_Event se{};
 		se.type = frame_event;
@@ -386,21 +580,28 @@ int main(int argc, char* argv[]) {
 			if (!busy)
 				SDL_PushEvent(&se);
 #if defined(__ANDROID__) || defined(__IOS__)
-			// [Perf fix — 2026-09-03 13:44 GMT+7] Was SDL_Delay(40) — hard-capped every device at ~25fps
-			// regardless of what the screen can actually do. Now this
-			// thread just offers a new frame far faster than any real
-			// display refreshes; SDL_RENDERER_PRESENTVSYNC (set in
-			// Emulator.cpp) is what actually blocks SDL_RenderPresent()
-			// until the next vblank, so the real ceiling becomes each
-			// device's own panel rate — 60Hz on older iPhones, up to
-			// 120Hz on ProMotion — instead of one fixed number forced
-			// on every device alike.
-			SDL_Delay(4);
+			// [Perf fix — 2026-09-03] tried relying solely on
+			// SDL_RENDERER_PRESENTVSYNC (set in Emulator.cpp) to throttle via
+			// SDL_RenderPresent() blocking until vblank, with only a 4ms
+			// delay here as a floor. That assumption breaks under
+			// LiveContainer: the app is embedded inside LiveContainer's own
+			// process rather than owning its own display link, so vsync
+			// blocking isn't guaranteed to reach this thread. The result was
+			// this thread pushing frame-ready events at ~250Hz regardless of
+			// what the screen could show, sustaining ~84% CPU until iOS
+			// killed the process on the CPU watchdog (confirmed via
+			// LiveContainer_cpu_resource_fatal crash report).
+			// 16ms (~60fps) restores a real ceiling that holds no matter
+			// whether vsync blocking reaches this thread or not, while still
+			// being far above the old fixed 25fps (40ms) cap this replaced.
+			SDL_Delay(16);
 #else
 			if (ThemeManager::Instance().Settings().lowPerformanceMode || low_perf_ext)
 				SDL_Delay(24);
-			else
+			else if (hasRealVsync)
 				SDL_Delay(1);
+			else
+				SDL_Delay(16);
 #endif
 		}
 	});
@@ -510,8 +711,9 @@ int main(int argc, char* argv[]) {
 			SDL_RenderPresent(emulator.renderer);
 #else
 			emulator.Frame();
-			if (!no_dbg)
+			if (!no_dbg) {
 				gui_loop();
+			}
 			SDL_RenderPresent(emulator.renderer);
 #endif
 			if (!no_dbg) {
@@ -540,22 +742,27 @@ int main(int argc, char* argv[]) {
 		}
 		int wid, hei;
 		SDL_GetWindowSize(window, &wid, &hei);
+		const Uint32 eventWindowId = GetEventWindowId(event);
+		if (IsScreenMirrorWindowEvent(event)) {
+			if (event.type == SDL_KEYDOWN || event.type == SDL_KEYUP) {
+				event.key.windowID = SDL_GetWindowID(emulator.window);
+				emulator.UIEvent(event);
+			}
+			continue;
+		}
 		switch (event.type) {
 		case SDL_WINDOWEVENT:
 			switch (event.window.event) {
 			case SDL_WINDOWEVENT_CLOSE: {
+				if (SDL_Window* closedWindow = SDL_GetWindowFromID(eventWindowId)) {
+					if (SDL_GetWindowData(closedWindow, SCREEN_MIRROR_WINDOW_DATA_KEY)) {
+						break;
+					}
+				}
 				extern SDL_Window* window; // This is the debugger window
 				if (event.window.windowID == SDL_GetWindowID(emulator.window)) {
-#if !defined(__ANDROID__) && !defined(__IOS__)
-					if (!no_dbg) {
-						emulator.calculator_as_tab.store(true);
-						SDL_HideWindow(emulator.window);
-					} else {
-						emulator.Shutdown();
-					}
-#else
 					emulator.Shutdown();
-#endif
+					std::exit(0);
 				} else if (window && event.window.windowID == SDL_GetWindowID(window)) {
 					std::exit(0);
 				}
@@ -587,14 +794,14 @@ int main(int argc, char* argv[]) {
 		case SDL_TEXTINPUT:
 		case SDL_MOUSEWHEEL:
 #ifdef SINGLE_WINDOW
-			ImGui_ImplSDL2_ProcessEvent(&event);
+			ProcessImGuiEvent(event);
 			if (ImGui::GetIO().WantCaptureMouse) {
 				break;
 			}
 #else
 			if (!no_dbg)
-				if ((SDL_GetKeyboardFocus() != emulator.window) && guiCreated) {
-					ImGui_ImplSDL2_ProcessEvent(&event);
+				if (guiCreated && eventWindowId != 0 && window && eventWindowId == SDL_GetWindowID(window)) {
+					ProcessImGuiEvent(event);
 					break;
 				}
 #endif
@@ -626,14 +833,15 @@ int main(int argc, char* argv[]) {
 	}
 #endif
 	break;
-	} // end while(true)
-	
+	}
+
 #ifdef ENABLE_SENTRY
 	sentry_close();
 #endif
   DiscordRPC::Shutdown();
 	return 0;
-};
+}
+
 #ifdef __IOS__
 #include <chrono>
 #include <thread>
@@ -653,7 +861,9 @@ extern "C" void onFileSelected(const char* path, const unsigned char* data, int 
     if (SystemDialogs::fileOpenCallback) {
         // Write the received data to a temp file, then pass the path to the callback
         std::filesystem::path tempDir = std::filesystem::temp_directory_path() / "casioemu_ios_tmp";
-        std::filesystem::create_directories(tempDir);
+        std::error_code ec;
+        std::filesystem::create_directories(tempDir, ec);
+        if (ec) return;
         std::filesystem::path fileName = std::filesystem::path(path).filename();
         std::filesystem::path tempPath = tempDir / fileName;
         {

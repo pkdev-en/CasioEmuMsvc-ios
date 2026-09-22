@@ -1,5 +1,6 @@
 #include "Keyboard.hpp"
 #include <SDL.h>
+#include <SDL_image.h>
 
 #include "Chipset/Chipset.hpp"
 #include "Chipset/MMU.hpp"
@@ -9,13 +10,69 @@
 #include "ePSCpu.h"
 #include "vibration.h"
 #include <ML620Ports.h>
+#include <algorithm>
 #include <chrono>
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 
 namespace casioemu {
+	namespace {
+		constexpr int SHAPE_PADDING = 2;
+		constexpr int EPS_KBD_ROW_COUNT = 16;
+		constexpr int EPS_KBD_COL_COUNT = 8;
+		constexpr int EPS_MATRIX_SLOT_COUNT = EPS_KBD_ROW_COUNT * EPS_KBD_COL_COUNT;
+		constexpr int BUTTON_SLOT_COUNT = EPS_MATRIX_SLOT_COUNT + 2;
+		uint32_t MinimumPressDuration(int hardware_id) {
+			const auto* descriptor = FindHardwareDescriptor(static_cast<unsigned short>(hardware_id));
+			return descriptor ? descriptor->minimum_press_ms : 25;
+		}
+
+		SDL_Rect ExpandRect(const SDL_Rect& rect, int padding) {
+			return {
+				rect.x - padding,
+				rect.y - padding,
+				std::max(1, rect.w + padding * 2),
+				std::max(1, rect.h + padding * 2)};
+		}
+
+		std::string BuildButtonShapeSvg(const ButtonInfo& button, const SDL_Rect& shape_rect) {
+			std::ostringstream stream;
+			stream << "<svg xmlns=\"http://www.w3.org/2000/svg\" "
+				   << "xmlns:xlink=\"http://www.w3.org/1999/xlink\" "
+				   << "width=\"" << shape_rect.w << "\" height=\"" << shape_rect.h << "\" "
+				   << "viewBox=\"" << shape_rect.x << ' ' << shape_rect.y << ' ' << shape_rect.w << ' ' << shape_rect.h << "\">"
+				   << "<style>*{fill:#fff!important;stroke:none!important;opacity:1!important;fill-opacity:1!important;}</style>"
+				   << button.svg_defs
+				   << button.svg_shape
+				   << "</svg>";
+			return stream.str();
+		}
+
+		int EpsMatrixIndexForButtonCode(uint8_t code) {
+			const int ko = (code >> 4) & 0x0f;
+			const int ki = code & 0x0f;
+			if (ki >= EPS_KBD_COL_COUNT)
+				return -1;
+			return ko * EPS_KBD_COL_COUNT + ki;
+		}
+
+		int ButtonSlotForCode(uint8_t code, unsigned short hardware_id) {
+			if (code == BUTTON_KIKO_POWER)
+				return EPS_MATRIX_SLOT_COUNT;
+			if (code == BUTTON_KIKO_RESET)
+				return EPS_MATRIX_SLOT_COUNT + 1;
+			if (hardware_id == HW_TI)
+				return code;
+			if (IsEpsFamily(hardware_id))
+				return EpsMatrixIndexForButtonCode(code);
+			return ((code >> 1) & 0x38) | (code & 0x07);
+		}
+	}
+
 	class Keyboard : public Peripheral, public IKeyboardAutomation {
 		MMURegion region_ko_mask, region_ko, region_ki, region_input_mode, region_input_filter;
 		uint16_t keyboard_out, keyboard_out_mask;
@@ -38,17 +95,22 @@ namespace casioemu {
 			enum ButtonType {
 				BT_NONE,
 				BT_BUTTON,
-				BT_POWER
-			} type;
-			SDL_Rect rect;
-			uint8_t ko_bit, ki_bit;
-			uint8_t code;
-			bool pressed, stuck;
-			uint32_t pressTime;
-			SDL_TimerID releaseTimer;
+				BT_POWER,
+				BT_RESET
+			} type{};
+			SDL_Rect rect{};
+			SDL_Rect shape_rect{};
+			SDL_Texture* shape_texture{};
+			std::vector<uint8_t> shape_alpha;
+			uint16_t ko_bit{};
+			uint8_t ki_bit{};
+			uint8_t code{};
+			bool pressed{}, stuck{};
+			uint32_t pressTime{};
+			SDL_TimerID releaseTimer{};
 			struct DelayedReleaseParam* releaseParam = nullptr;
-			SDL_FingerID pressingFingerId; // ID of the finger currently pressing this button
-		} buttons[64];
+			SDL_FingerID pressingFingerId{-1}; // ID of the finger currently pressing this button
+		} buttons[BUTTON_SLOT_COUNT];
 
 		// Maps from keycode to an index to (buttons).
 		std::unordered_map<SDL_Keycode, size_t> keyboard_map;
@@ -67,11 +129,16 @@ namespace casioemu {
 		void UIEvent(SDL_Event& event);
 		void Uninitialise();
 		void PressButton(Button& button, bool stick, SDL_FingerID fingerId);
+		void ResetEpsCpuForPowerButton(Button& button);
 		void PressAt(int x, int y, bool stick, SDL_FingerID fingerId);
 		void ReleaseAt(int x, int y, SDL_FingerID fingerId);
 		void PressButtonByCode(uint8_t code);
 		bool TryReleaseButton(Button& button);
 		void ExecuteDelayedRelease(size_t button_index);
+		void SetEpsButtonState(Button& button, bool pressed);
+		void BuildButtonShape(Button& button, const ButtonInfo& info);
+		void DestroyButtonShapes();
+		bool ButtonContainsPoint(const Button& button, int x, int y) const;
 		void StartInject();
 		void StoreKeyLog();
 		void ReleaseAll();
@@ -108,8 +175,10 @@ namespace casioemu {
 
 		// 通过 IKeyboardAutomation 继承
 		void Key(int ki, int ko, bool pressed) override {
-			uint8_t ki_bit = (uint8_t)(1 << ki);
-			uint8_t ko_bit = (uint8_t)(1 << ko);
+			if (ki < 0 || ki >= EPS_KBD_COL_COUNT || ko < 0 || ko >= EPS_KBD_ROW_COUNT)
+				return;
+			uint8_t ki_bit = (uint8_t)(1u << ki);
+			uint16_t ko_bit = (uint16_t)(1u << ko);
 			for (auto& button : buttons) {
 				if (button.type == Button::BT_BUTTON &&
 					button.ki_bit == ki_bit && button.ko_bit == ko_bit) {
@@ -129,15 +198,33 @@ namespace casioemu {
 			if (pressed) {
 				PressButtonByCode(code);
 			} else {
-				int button_index;
-				if (code == 0xFF) button_index = 63;
-				else button_index = ((code >> 1) & 0x38) | (code & 0x07);
-				if (button_index < 64) {
-					auto& button = buttons[button_index];
+				for (auto& button : buttons) {
+					if (button.type == Button::BT_NONE || button.code != code)
+						continue;
 					if (TryReleaseButton(button)) {
 						if (real_hardware) RecalculateGhost();
 						else RecalculateEmuInput();
 					}
+					break;
+				}
+			}
+		}
+		void BindKeycode(int keycode, uint8_t code) override {
+			const int button_index = ButtonSlotForCode(code, emulator.hardware_id);
+			if (button_index >= 0 && button_index < static_cast<int>(std::size(buttons))) {
+				keyboard_map[static_cast<SDL_Keycode>(keycode)] = static_cast<size_t>(button_index);
+			}
+		}
+		void HandleKeycode(int keycode, bool pressed) override {
+			auto iterator = keyboard_map.find(static_cast<SDL_Keycode>(keycode));
+			if (iterator == keyboard_map.end()) return;
+			if (pressed) {
+				PressButton(buttons[iterator->second], false, iterator->second);
+			}
+			else {
+				if (TryReleaseButton(buttons[iterator->second])) {
+					if (real_hardware) RecalculateGhost();
+					else RecalculateEmuInput();
 				}
 			}
 		}
@@ -155,13 +242,14 @@ namespace casioemu {
 	}
 
 	void Keyboard::ExecuteDelayedRelease(size_t button_index) {
-		if (button_index >= 64) return;
+		if (button_index >= std::size(buttons)) return;
 		auto& button = buttons[button_index];
 		button.releaseTimer = 0; // timer fired
 		button.releaseParam = nullptr;
 		if (button.pressed && !button.stuck) {
 			button.pressed = false;
 			button.pressingFingerId = -1;
+			SetEpsButtonState(button, false);
 			if (real_hardware) {
 				RecalculateGhost();
 			}
@@ -176,26 +264,52 @@ namespace casioemu {
 
 		uint32_t now = SDL_GetTicks();
 		uint32_t elapsed = now - button.pressTime;
-		if (elapsed < 25) {
+		const uint32_t min_press_ms = MinimumPressDuration(emulator.hardware_id);
+		if (elapsed < min_press_ms) {
 			if (button.releaseTimer != 0) {
 				return false; // Timer already running
 			}
 			size_t button_index = &button - buttons;
 			auto* param = new DelayedReleaseParam{this, button_index};
 			button.releaseParam = param;
-			button.releaseTimer = SDL_AddTimer(25 - elapsed, DelayedReleaseCallback, param);
+			button.releaseTimer = SDL_AddTimer(min_press_ms - elapsed, DelayedReleaseCallback, param);
 			return false; // Not released yet
 		}
 
 		// Immediately release
 		button.pressed = false;
 		button.pressingFingerId = -1;
+		SetEpsButtonState(button, false);
 		return true; // Indicates it was immediately released
+	}
+
+	void Keyboard::SetEpsButtonState(Button& button, bool pressed) {
+		if (!IsEpsFamily(emulator.hardware_id) || !emulator.chipset.epscpu)
+			return;
+		if (button.type == Button::BT_POWER) {
+			if (pressed) {
+				emulator.chipset.epscpu->OnDown();
+			}
+			else {
+				emulator.chipset.epscpu->OnUp();
+			}
+			return;
+		}
+		if (button.type != Button::BT_BUTTON)
+			return;
+		const int matrix_index = EpsMatrixIndexForButtonCode(button.code);
+		if (matrix_index < 0)
+			return;
+		if (pressed)
+			emulator.chipset.epscpu->KeyDown(static_cast<uint8_t>(matrix_index));
+		else
+			emulator.chipset.epscpu->KeyUp(static_cast<uint8_t>(matrix_index));
 	}
 
 	void Keyboard::Initialise() {
 		renderer = emulator.GetRenderer();
 
+		DestroyButtonShapes();
 		for (auto& button : buttons) {
 			button.pressingFingerId = -1; // Initialize finger ID
 		}
@@ -220,14 +334,9 @@ namespace casioemu {
 			pp->SetPortInput(4, 0, 0xff);
 			goto init_kbd;
 		}
-		if (emulator.hardware_id == HW_EPS6800) {
-			// TODO!
-			emulator.chipset.epscpu->portacalc = [this]() {
-				this->RecalculateKI();
-			};
+		if (IsEpsFamily(emulator.hardware_id)) {
 			goto init_kbd;
 		}
-
 		region_ki.Setup(0xF040, 1, "Keyboard/KI", this,
 			[](MMURegion* region, size_t) {
 				return ((Keyboard*)region->userdata)->keyboard_in;
@@ -307,11 +416,11 @@ namespace casioemu {
 			keyboard_ready_emu = 1;
 			emu_ki_readcount = 0;
 			emu_ko_readcount = 0;
-			int offset = emulator.hardware_id == HW_ES_PLUS ? 0 : emulator.hardware_id == HW_CLASSWIZ ? 0x40000
+			int offset = emulator.hardware_id == HW_ES_PLUS || emulator.hardware_id == HW_SOLARII ? 0 : emulator.hardware_id == HW_CLASSWIZ ? 0x40000
 																									  : 0x80000;
-			size_t rse = 0x8E00;
-			size_t ki = 0x8E01;
-			size_t ko = 0x8E02;
+			size_t rse = emulator.hardware_id == HW_SOLARII ? 0xE800 : 0x8E00;
+			size_t ki = emulator.hardware_id == HW_SOLARII ? 0xE801 : 0x8E01;
+			size_t ko = emulator.hardware_id == HW_SOLARII ? 0xE802 : 0x8E02;
 			if (emulator.ModelDefinition.is_sample_rom) {
 				rse += 7;
 				ki += 4;
@@ -365,7 +474,7 @@ namespace casioemu {
 		if (emulator.hardware_id == HW_CLASSWIZ_II) {
 			region_pd_emu.Setup(0xF058, 1, "Keyboard/PdValue", &emulator.ModelDefinition.pd_value, MMURegion::DefaultRead<uint8_t>, MMURegion::IgnoreWrite, emulator);
 		}
-		else if (emulator.hardware_id == HW_ES_PLUS || emulator.hardware_id == HW_CLASSWIZ) {
+		else if (emulator.hardware_id == HW_ES_PLUS || emulator.hardware_id == HW_CLASSWIZ || emulator.hardware_id == HW_FX_5800P || emulator.hardware_id == HW_SOLARII) {
 			region_pd_emu.Setup(0xF050, 1, "Keyboard/PdValue", &emulator.ModelDefinition.pd_value, MMURegion::DefaultRead<uint8_t>, MMURegion::IgnoreWrite, emulator);
 		}
 
@@ -375,20 +484,10 @@ namespace casioemu {
 
 		for (auto& btn : emulator.ModelDefinition.buttons) {
 			uint8_t code = btn.kiko;
-			size_t button_ix;
-			if (code == 0xFF) {
-				button_ix = 63;
-			}
-			else {
-				if (emulator.hardware_id == HW_TI) {
-					button_ix = btn.kiko;
-				}
-				else {
-					button_ix = ((code >> 1) & 0x38) | (code & 0x07);
-				}
-				if (button_ix >= 64)
-					PANIC("button index doesn't fit 6 bits\n");
-			}
+			const int button_slot = ButtonSlotForCode(code, emulator.hardware_id);
+			if (button_slot < 0 || button_slot >= static_cast<int>(std::size(buttons)))
+				PANIC("button index doesn't fit keyboard slots\n");
+			const size_t button_ix = static_cast<size_t>(button_slot);
 #ifndef CASIOEMU_CORE_WEB
 			auto button_name = btn.keyname.c_str();
 
@@ -436,11 +535,14 @@ namespace casioemu {
 			Button& button = buttons[button_ix];
 			button = {};
 
-			if (code == 0xFF)
+			if (code == BUTTON_KIKO_POWER)
 				button.type = Button::BT_POWER;
+			else if (code == BUTTON_KIKO_RESET)
+				button.type = Button::BT_RESET;
 			else
 				button.type = Button::BT_BUTTON;
 			button.rect = btn.rect;
+			button.code = code;
 			if (emulator.hardware_id == HW_TI) {
 				int kimap[] = {7, 0, 1, 2, 3, 4, 5, 6};
 				auto ki = kimap[btn.kiko & 7];
@@ -450,12 +552,12 @@ namespace casioemu {
 				}
 				button.ki_bit = 1 << ki;
 				button.ko_bit = 1 << ko;
-				button.code = btn.kiko;
 			}
 			else {
-				button.ko_bit = 1 << ((code >> 4) & 0xF);
-				button.ki_bit = 1 << (code & 0xF);
+				button.ko_bit = (uint16_t)(1u << ((code >> 4) & 0xF));
+				button.ki_bit = (uint8_t)(1u << (code & 0xF));
 			}
+			BuildButtonShape(button, btn);
 		}
 	}
 	}
@@ -470,6 +572,16 @@ namespace casioemu {
 		keyboard_in_last = 0xFF;
 		input_filter_last = 0;
 
+		if (IsEpsFamily(emulator.hardware_id)) {
+			// A RESET contact releases the physical keyboard.  Keep the UI
+			// state in sync with the EPS core, including right-click latches.
+			for (auto& button : buttons) {
+				button.pressed = false;
+				button.stuck = false;
+				button.pressingFingerId = -1;
+			}
+		}
+
 		if (!real_hardware) {
 			keyboard_in_emu = 0;
 			emu_ki_readcount = 0;
@@ -477,14 +589,13 @@ namespace casioemu {
 			emu_ko_readcount = 0;
 		}
 
-		RecalculateGhost();
+		if (!IsEpsFamily(emulator.hardware_id))
+			RecalculateGhost();
 	}
 
 	void Keyboard::Tick() {
-		if (emulator.ModelDefinition.hardware_id == HW_TI) {
-			return;
-		}
-		if (emulator.ModelDefinition.hardware_id == HW_EPS6800) {
+		if (emulator.ModelDefinition.hardware_id == HW_TI ||
+			IsEpsFamily(emulator.ModelDefinition.hardware_id)) {
 			return;
 		}
 		if (factory_test) {
@@ -529,7 +640,18 @@ namespace casioemu {
 	void Keyboard::Frame() {
 		SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
 		for (auto& button : buttons) {
-			if (button.type != Button::BT_NONE && button.pressed) {
+			if (button.type == Button::BT_NONE)
+				continue;
+			if (button.shape_texture) {
+				if (!button.pressed)
+					continue;
+				SDL_SetTextureColorMod(button.shape_texture, button.stuck ? 180 : 0, 0, 0);
+				SDL_SetTextureAlphaMod(button.shape_texture, button.stuck ? 150 : 127);
+				SDL_RenderCopy(renderer, button.shape_texture, nullptr, &button.shape_rect);
+				SDL_SetTextureColorMod(button.shape_texture, 255, 255, 255);
+				SDL_SetTextureAlphaMod(button.shape_texture, 255);
+			}
+			else if (button.pressed) {
 				if (button.stuck)
 					SDL_SetRenderDrawColor(renderer, 127, 0, 0, 127);
 				else
@@ -583,8 +705,7 @@ namespace casioemu {
 				// This is a point of potential conflict to revisit if mixed input is common.
 				bool button_released_by_mouse = false;
 				for (auto& button : buttons) {
-					if (button.rect.x <= event.button.x && button.rect.y <= event.button.y &&
-						button.rect.x + button.rect.w > event.button.x && button.rect.y + button.rect.h > event.button.y) {
+					if (ButtonContainsPoint(button, event.button.x, event.button.y)) {
 						if (button.pressed && button.pressingFingerId == -1 && !button.stuck) { // Only if pressed by mouse (no fingerId)
 							if (TryReleaseButton(button)) {
 								button_released_by_mouse = true;
@@ -668,6 +789,8 @@ namespace casioemu {
 		case SDL_KEYUP:
 			SDL_Keycode keycode = event.key.keysym.sym;
 			auto iterator = keyboard_map.find(keycode);
+			// printf("[Keyboard][Info] SDL_Keycode: %x(%s)\n", keycode, SDL_GetKeyName(keycode));
+#ifndef CASIOEMU_CORE_WEB
 			if (event.key.keysym.sym == SDLK_F12 && event.key.state == SDL_PRESSED) {
 				if (event.key.keysym.mod & KMOD_CTRL) {
 					return;
@@ -677,6 +800,7 @@ namespace casioemu {
 				printf("[Keyboard][Info] Screenshot requested via F12\n");
 				return;
 			}
+#endif
 			if (event.key.keysym.sym == SDLK_F11 && event.key.state) {
 				if (event.key.keysym.mod & KMOD_LCTRL) {
 					emulator.chipset.Reset();
@@ -709,6 +833,7 @@ namespace casioemu {
 	}
 
 	void Keyboard::Uninitialise() {
+		DestroyButtonShapes();
 		for (auto& button : buttons) {
 			if (button.releaseTimer != 0) {
 				SDL_RemoveTimer(button.releaseTimer);
@@ -719,6 +844,80 @@ namespace casioemu {
 				}
 			}
 		}
+	}
+
+	void Keyboard::BuildButtonShape(Button& button, const ButtonInfo& info) {
+		if (info.svg_shape.empty())
+			return;
+
+		button.shape_rect = ExpandRect(button.rect, SHAPE_PADDING);
+		const std::string svg = BuildButtonShapeSvg(info, button.shape_rect);
+		SDL_RWops* rw = SDL_RWFromConstMem(svg.data(), static_cast<int>(svg.size()));
+		if (!rw) {
+			SDL_Log("[Keyboard][Warn] SDL_RWFromConstMem failed for SVG button shape: %s", SDL_GetError());
+			return;
+		}
+
+		SDL_Surface* loaded = IMG_Load_RW(rw, 1);
+		if (!loaded) {
+			SDL_Log("[Keyboard][Warn] IMG_Load_RW failed for SVG button shape: %s", IMG_GetError());
+			return;
+		}
+
+		SDL_Surface* surface = SDL_ConvertSurfaceFormat(loaded, SDL_PIXELFORMAT_RGBA32, 0);
+		SDL_FreeSurface(loaded);
+		if (!surface) {
+			SDL_Log("[Keyboard][Warn] SDL_ConvertSurfaceFormat failed for SVG button shape: %s", SDL_GetError());
+			return;
+		}
+
+		button.shape_rect.w = surface->w;
+		button.shape_rect.h = surface->h;
+		button.shape_alpha.assign(static_cast<size_t>(surface->w) * static_cast<size_t>(surface->h), 0);
+		for (int y = 0; y < surface->h; ++y) {
+			auto* row = reinterpret_cast<uint8_t*>(surface->pixels) + y * surface->pitch;
+			for (int x = 0; x < surface->w; ++x) {
+				Uint8 r = 0, g = 0, b = 0, a = 0;
+				auto* pixel_ptr = reinterpret_cast<Uint32*>(row + x * surface->format->BytesPerPixel);
+				const Uint32 pixel = *pixel_ptr;
+				SDL_GetRGBA(pixel, surface->format, &r, &g, &b, &a);
+				button.shape_alpha[static_cast<size_t>(y) * static_cast<size_t>(surface->w) + static_cast<size_t>(x)] = a;
+				*pixel_ptr = SDL_MapRGBA(surface->format, 255, 255, 255, a);
+			}
+		}
+
+		button.shape_texture = SDL_CreateTextureFromSurface(renderer, surface);
+		SDL_FreeSurface(surface);
+		if (!button.shape_texture) {
+			SDL_Log("[Keyboard][Warn] SDL_CreateTextureFromSurface failed for SVG button shape: %s", SDL_GetError());
+			button.shape_alpha.clear();
+			return;
+		}
+		SDL_SetTextureBlendMode(button.shape_texture, SDL_BLENDMODE_BLEND);
+	}
+
+	void Keyboard::DestroyButtonShapes() {
+		for (auto& button : buttons) {
+			if (button.shape_texture) {
+				SDL_DestroyTexture(button.shape_texture);
+				button.shape_texture = nullptr;
+			}
+			button.shape_alpha.clear();
+		}
+	}
+
+	bool Keyboard::ButtonContainsPoint(const Button& button, int x, int y) const {
+		if (button.shape_texture && !button.shape_alpha.empty()) {
+			if (x < button.shape_rect.x || y < button.shape_rect.y ||
+				x >= button.shape_rect.x + button.shape_rect.w || y >= button.shape_rect.y + button.shape_rect.h) {
+				return false;
+			}
+			const int local_x = x - button.shape_rect.x;
+			const int local_y = y - button.shape_rect.y;
+			const size_t index = static_cast<size_t>(local_y) * static_cast<size_t>(button.shape_rect.w) + static_cast<size_t>(local_x);
+			return index < button.shape_alpha.size() && button.shape_alpha[index] > 24;
+		}
+		return button.rect.x <= x && button.rect.y <= y && button.rect.x + button.rect.w > x && button.rect.y + button.rect.h > y;
 	}
 
 	bool Keyboard::AnyFingerPressing() {
@@ -832,7 +1031,50 @@ namespace casioemu {
 			button.pressingFingerId = fingerId; // Assign current finger, or -1 for mouse/key
 		}
 
-		if (button.type == Button::BT_POWER && button.pressed && !old_pressed_state) {
+		if (button.type == Button::BT_RESET) {
+			if (button.pressed && !old_pressed_state) {
+				// A physical RESET clears the EPS keyboard peripheral, but matrix
+				// contacts held by the user remain electrically closed.  Snapshot
+				// them before reset and restore them without generating fresh key
+				// edges so reset-vector key-combination checks can observe them.
+				const bool reset_stuck = button.stuck;
+				const SDL_FingerID reset_finger_id = button.pressingFingerId;
+				if (IsEpsFamily(emulator.hardware_id) && emulator.chipset.epscpu) {
+					const bool was_paused = emulator.GetPaused();
+					emulator.SetPaused(true);
+					std::vector<uint8_t> held_matrix_indices;
+					for (const auto& held_button : buttons) {
+						if (!held_button.pressed || held_button.type != Button::BT_BUTTON)
+							continue;
+						const int matrix_index = EpsMatrixIndexForButtonCode(held_button.code);
+						if (matrix_index >= 0)
+							held_matrix_indices.push_back(static_cast<uint8_t>(matrix_index));
+					}
+					emulator.chipset.epscpu->ClearRamAndReset();
+					for (const uint8_t matrix_index : held_matrix_indices)
+						emulator.chipset.epscpu->RestoreKeyDown(matrix_index);
+					emulator.SetPaused(was_paused);
+				}
+				else
+					emulator.chipset.Reset();
+				// Restore only the RESET UI state; held matrix-button UI state was
+				// never cleared by the EPS core reset.
+				button.pressed = true;
+				button.stuck = reset_stuck;
+				button.pressingFingerId = reset_finger_id;
+			}
+			return;
+		}
+
+		if (button.type == Button::BT_POWER && EpsPowerKeyResetsCpu(emulator.hardware_id)) {
+			if (button.pressed && !old_pressed_state) {
+				ResetEpsCpuForPowerButton(button);
+			}
+			return;
+		}
+
+		if (button.type == Button::BT_POWER && button.pressed && !old_pressed_state &&
+			!IsEpsFamily(emulator.hardware_id)) {
 			if (!(emulator.hardware_id == HW_CLASSWIZ && (emulator.chipset.data_FCON & 0x03) == 0x03)) {
 				emulator.chipset.Reset();
 			}
@@ -848,24 +1090,60 @@ namespace casioemu {
 		}
 
 		bool state_effectively_changed = (old_pressed_state != button.pressed) || (button.pressed && old_finger_id != button.pressingFingerId);
+		if (old_pressed_state != button.pressed)
+			SetEpsButtonState(button, button.pressed);
 
 		if (button.type == Button::BT_BUTTON && state_effectively_changed) {
 			if (button.pressed) { // Vibrate only if it results in a pressed state
 				Vibration::vibrate(100);
 			}
-			if (real_hardware) {
-				RecalculateGhost(); // This internally calls RecalculateKI
-			}
-			else {
-				RecalculateEmuInput();
+			if (!IsEpsFamily(emulator.hardware_id)) {
+				if (real_hardware) {
+					RecalculateGhost(); // This internally calls RecalculateKI
+				}
+				else {
+					RecalculateEmuInput();
+				}
 			}
 		}
+	}
+
+	void Keyboard::ResetEpsCpuForPowerButton(Button& button) {
+		const bool was_paused = emulator.GetPaused();
+		emulator.SetPaused(true);
+		const bool power_stuck = button.stuck;
+		const SDL_FingerID power_finger_id = button.pressingFingerId;
+		struct HeldButton {
+			size_t index;
+			bool stuck;
+			SDL_FingerID finger_id;
+		};
+		std::vector<HeldButton> held_buttons;
+		for (size_t index = 0; index < std::size(buttons); ++index) {
+			if (buttons[index].pressed && buttons[index].type == Button::BT_BUTTON)
+				held_buttons.push_back({index, buttons[index].stuck,
+					buttons[index].pressingFingerId});
+		}
+		emulator.chipset.Reset();
+		button.pressed = true;
+		button.stuck = power_stuck;
+		button.pressingFingerId = power_finger_id;
+		for (const auto& held : held_buttons) {
+			auto& restored = buttons[held.index];
+			restored.pressed = true;
+			restored.stuck = held.stuck;
+			restored.pressingFingerId = held.finger_id;
+			const int matrix_index = EpsMatrixIndexForButtonCode(restored.code);
+			if (matrix_index >= 0)
+				emulator.chipset.epscpu->RestoreKeyDown(static_cast<uint8_t>(matrix_index));
+		}
+		emulator.SetPaused(was_paused);
 	}
 
 	void Keyboard::PressAt(int x, int y, bool stick, SDL_FingerID fingerId) {
 		// SDL_Log("PressAt: x %d, y %d, stick %d, fingerId %lld", x, y, stick, fingerId);
 		for (auto& button : buttons) {
-			if (button.rect.x <= x && button.rect.y <= y && button.rect.x + button.rect.w > x && button.rect.y + button.rect.h > y) {
+			if (ButtonContainsPoint(button, x, y)) {
 				PressButton(button, stick, fingerId);
 				return; // Process only the first button found at coordinates
 			}
@@ -876,7 +1154,7 @@ namespace casioemu {
 		// SDL_Log("ReleaseAt: x %d, y %d, fingerId %lld", x, y, fingerId);
 		bool button_effectively_released = false;
 		for (auto& button : buttons) {
-			if (button.rect.x <= x && button.rect.y <= y && button.rect.x + button.rect.w > x && button.rect.y + button.rect.h > y) {
+			if (ButtonContainsPoint(button, x, y)) {
 				// To release, the button must be currently pressed by THIS finger and NOT be stuck.
 				// If it's stuck, a finger_up event for the finger that stuck it does NOT release it.
 				// It would require a subsequent "stick" press on it to toggle the stuck state.
@@ -909,18 +1187,11 @@ namespace casioemu {
 	}
 
 	void Keyboard::PressButtonByCode(uint8_t code) {
-		if (code == 0xFF) {
-			// Assuming POWER button is at index 63, not passing fingerId (treat as system event)
-			PressButton(buttons[63], false, 0);
-		}
-		else {
-			int button_index = ((code >> 1) & 0x38) | (code & 0x07);
-			if (button_index < 63) {						  // Ensure index is valid
-				PressButton(buttons[button_index], false, 0); // Not passing fingerId
-			}
-			else {
-				// printf("[Keyboard][Info] Invalid button code 0x%02X for PressButtonByCode!\n", code);
-			}
+		for (auto& button : buttons) {
+			if (button.type == Button::BT_NONE || button.code != code)
+				continue;
+			PressButton(button, false, 0);
+			break;
 		}
 	}
 
@@ -931,6 +1202,8 @@ namespace casioemu {
 	}
 
 	void Keyboard::RecalculateGhost() { // This is for real_hardware=true path
+		if (IsEpsFamily(emulator.hardware_id))
+			return;
 		struct KOColumn {
 			uint8_t connections;
 			uint8_t KIRows;

@@ -21,7 +21,7 @@ public:
 	}
 
 	void Render() override {
-#if !defined(__ANDROID__) && !defined(IOS)
+#if !defined(__ANDROID__) && !defined(IOS) && !defined(CASIOEMU_CORE_WEB)
 		if (!m_emu || !m_emu->tx || !m_emu->calculator_as_tab.load()) return;
 		UIWindow::Render();
 #endif
