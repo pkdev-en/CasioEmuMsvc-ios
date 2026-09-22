@@ -713,13 +713,30 @@ private:
 		// Kiem tra xem ImGui co dang muon nhap lieu (InputInt, InputText) 
 		// hoac TextEditor custom cua chung ta co dang duoc focus khong
 		bool needsKeyboard = io.WantTextInput || editorFocused_;
-		
-		if (needsKeyboard && !isKeyboardActive_) {
+
+		// FIX: isKeyboardActive_ is a local cache and can silently go out
+		// of sync with the real SDL state -- the ImGui SDL2 backend's own
+		// SetPlatformImeData (io.WantTextInput-driven) and Ui.cpp's tap-
+		// outside-to-dismiss check both also call SDL_Start/StopTextInput()
+		// independently, on other windows, other frames. If our cache says
+		// "already active" while SDL is actually inactive (or vice versa),
+		// we'd either wrongly skip a needed Start, or wrongly skip a Stop.
+		// Reading the live SDL_IsTextInputActive() instead of trusting the
+		// cache keeps this in sync with whatever any other path just did.
+		// It's also guarded the same way on the other side: only call
+		// Start/Stop on an actual state transition, never redundantly --
+		// a redundant SDL_StartTextInput() on iOS tears down and recreates
+		// the native input responder, which is what makes the keyboard
+		// visibly flash open and instantly close.
+		bool sdlActive = SDL_IsTextInputActive();
+		if (needsKeyboard && !sdlActive) {
 			SDL_StartTextInput();
 			isKeyboardActive_ = true;
-		} else if (!needsKeyboard && isKeyboardActive_) {
+		} else if (!needsKeyboard && sdlActive) {
 			SDL_StopTextInput();
 			isKeyboardActive_ = false;
+		} else {
+			isKeyboardActive_ = sdlActive;
 		}
 	}
 

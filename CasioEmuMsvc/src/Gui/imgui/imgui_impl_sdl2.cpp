@@ -157,14 +157,29 @@ static void ImGui_ImplSDL2_SetPlatformImeData(ImGuiContext*,ImGuiViewport*, ImGu
         r.w = 1;
         r.h = (int)data->InputLineHeight;
         SDL_SetTextInputRect(&r);
-        SDL_StartTextInput();
+        // FIX: on iOS, SDL_StartTextInput() tears down and recreates the
+        // hidden native UITextField every time it's called, even if text
+        // input is already active. This callback can fire on consecutive
+        // frames (e.g. the cursor moving, or the input rect shifting as
+        // docked windows/safe-area insets settle), and other code paths
+        // (RopCompilerUI's own mobile-keyboard manager, Ui.cpp's tap-to-
+        // dismiss check) can also call SDL_Start/StopTextInput() in the
+        // same or a neighboring frame. Calling SDL_StartTextInput() again
+        // while it's already active is exactly what makes the on-screen
+        // keyboard visibly flash open and instantly close, so only call it
+        // on the actual off->on transition; just refresh the rect otherwise.
+        if (!SDL_IsTextInputActive())
+            SDL_StartTextInput();
     }else {
 #if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IOS)
         // On mobile, the on-screen keyboard must be explicitly dismissed
         // when no ImGui text field is focused (e.g. user tapped outside
         // the input area). Desktop platforms keep this disabled to avoid
         // IME flicker, see note above.
-        SDL_StopTextInput();
+        // Same idempotency guard as above: don't call Stop if we're
+        // already stopped (avoids fighting other Start callers mid-frame).
+        if (SDL_IsTextInputActive())
+            SDL_StopTextInput();
 #endif
     }
 }

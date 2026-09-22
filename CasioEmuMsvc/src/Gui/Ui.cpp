@@ -567,6 +567,12 @@ void gui_loop() {
     // calculator keypresses and window events before they could reach
     // emulator.UIEvent(), which is what made input feel laggy/dropped.
     //
+#ifndef CASIOEMU_CORE_WEB
+    ImGui_ImplSDLRenderer2_NewFrame();
+    ImGui_ImplSDL2_NewFrame();
+#endif
+    ImGui::NewFrame();
+
     // FIX: this used to special-case "inside the Calculator window" as the
     // only place a tap was allowed to keep the keyboard open, and close it
     // for everything else. That meant tapping any OTHER input field (a
@@ -575,10 +581,21 @@ void gui_loop() {
     // it via WantTextInput -- the keyboard would flash open and instantly
     // close. io.WantTextInput is the actual, widget-agnostic signal for
     // "some ImGui text field currently has focus and wants the on-screen
-    // keyboard"; deferring to it here (checked *after* NewFrame() below
-    // would process this tap's click-to-focus) is what the toolbar-area
-    // exception still needs to guard against, since a tap on the toolbar
-    // itself isn't a text field but also shouldn't immediately dismiss.
+    // keyboard".
+    //
+    // FIX 2: this check must run AFTER ImGui::NewFrame(), not before it.
+    // ImGui::IsMouseClicked()/io.MouseClicked[] are only recomputed inside
+    // NewFrame() (see UpdateMouseInputs()); reading them before this
+    // frame's NewFrame() call returns last frame's already-consumed click,
+    // not this frame's tap. That meant a fresh tap landing on a brand new
+    // field was evaluated a whole frame late, against whatever the mouse
+    // was doing next -- an easy way to fire SDL_StopTextInput() right on
+    // top of the Start the backend had just issued for that same tap,
+    // producing the "flashes open then instantly closes" symptom.
+    // io.WantTextInput itself doesn't need to wait: it's set once per
+    // frame at the top of NewFrame() from last frame's widget submissions,
+    // so its value is identical whether read here or before NewFrame() --
+    // only the click needed to move.
     if (SDL_IsTextInputActive() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         const ImVec2 clickPos = io.MousePos;
         const bool insideToolbar = (clickPos.y < 60.0f);
@@ -587,12 +604,6 @@ void gui_loop() {
             ImGui::SetWindowFocus(nullptr);
         }
     }
-
-#ifndef CASIOEMU_CORE_WEB
-    ImGui_ImplSDLRenderer2_NewFrame();
-    ImGui_ImplSDL2_NewFrame();
-#endif
-    ImGui::NewFrame();
 
 #if !defined(__ANDROID__) && !defined(__IOS__)
     ImGuiViewport* viewport = ImGui::GetMainViewport();
