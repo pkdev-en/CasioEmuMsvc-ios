@@ -142,6 +142,8 @@ void RenderClippedSprite(SDL_Renderer* renderer, SDL_Texture* texture, const cas
 class ModelEditor : public UIWindow {
 	std::filesystem::path pth;
 	casioemu::ModelInfo mi;
+	std::string original_rom_path;
+	std::string original_flash_path;
 	int v;
 	int k;
 	char path1[260];
@@ -175,6 +177,8 @@ public:
 			path2[sizeof(path2) - 1] = '\0';
 			strncpy(path3, mi.flash_path.c_str(), sizeof(path3) - 1);
 			path3[sizeof(path3) - 1] = '\0';
+			original_rom_path = mi.rom_path;
+			original_flash_path = mi.flash_path;
 			strncpy(name, mi.model_name.c_str(), sizeof(name) - 1);
 			name[sizeof(name) - 1] = '\0';
 			color[0] = mi.ink_color.r / 255.0f;
@@ -516,6 +520,28 @@ public:
 					SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Error", "Duplicate KIKO values are not allowed.", nullptr);
 					return;
 				}
+				// If the user renamed the ROM/flash filename in the editor,
+				// rename the physical file on disk to match so the model
+				// isn't silently dropped from the list next time it's scanned
+				// (StartupUi's scan skips any model whose rom_path doesn't
+				// point at an existing file).
+				auto RenamePhysicalFile = [&](const std::string& old_name, const std::string& new_name) {
+					if (old_name.empty() || new_name.empty() || old_name == new_name)
+						return;
+					std::error_code ec;
+					std::filesystem::path old_full = pth / old_name;
+					std::filesystem::path new_full = pth / new_name;
+					if (std::filesystem::exists(old_full, ec) && !std::filesystem::exists(new_full, ec)) {
+						std::filesystem::rename(old_full, new_full, ec);
+						if (ec) {
+							SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, "Warning",
+								("Failed to rename '" + old_name + "' to '" + new_name + "': " + ec.message()).c_str(), nullptr);
+						}
+					}
+				};
+				RenamePhysicalFile(original_rom_path, mi.rom_path);
+				RenamePhysicalFile(original_flash_path, mi.flash_path);
+
 				casioemu::SaveModelInfoJson(pth, mi);
 				this->open = false;
 			}
