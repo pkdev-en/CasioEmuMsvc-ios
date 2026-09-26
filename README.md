@@ -36,7 +36,7 @@
 - 🔬 **Rich developer tools** — debugger, disassembler, hex editor
 - 📸 **Snapshot system** with branching save-states and screen previews
 - 🔌 **Plugin API** — MCP (AI-driven), Python, Cw2tools, and custom plugins
-- 🚀 **Multi-platform** — Windows (MSVC), macOS, Linux (CMake/Ninja), Android (Gradle/NDK), iOS (GitHub Actions only)
+- 🚀 **Multi-platform** — Windows (MSVC), macOS, Linux (CMake/Ninja), Android (Gradle/NDK), iOS (Xcode)
 - 🎨 **Theme manager**, localization, Discord Rich Presence, and auto-update checker
 
 ---
