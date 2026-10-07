@@ -5,6 +5,7 @@
 #import <AudioToolbox/AudioToolbox.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
+#include <mach/mach.h>
 #include <string>
 
 // Include the header we just made
@@ -622,5 +623,46 @@ bool presentCreateHomeScreenWebClip(const char* modelIdentifier, const char* sho
 
     [[iOSNativeBridge sharedInstance] presentWebClipInstall:filePath];
     return true;
+}
+
+#pragma mark - Resource Monitoring (diagnostic)
+//
+// For tracking down "the app crashes after a few minutes of use" reports.
+// phys_footprint is the specific figure iOS's Jetsam memory killer uses to
+// decide whether to terminate a process -- if this grows steadily and
+// doesn't come back down during normal use, that's a real leak. CPU usage
+// is measured the same way the OS's own CPU watchdog does (sustained
+// average over wall-clock time), matching how the earlier
+// LiveContainer_cpu_resource_fatal crash was actually triggered.
+
+double getMemoryFootprintMB(void) {
+    task_vm_info_data_t info;
+    mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+    kern_return_t kr = task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&info, &count);
+    if (kr != KERN_SUCCESS) {
+        return -1.0;
+    }
+    return (double)info.phys_footprint / (1024.0 * 1024.0);
+}
+
+double getCPUUsagePercentSinceLaunch(void) {
+    static NSTimeInterval appStartTime = 0.0;
+    if (appStartTime == 0.0) {
+        appStartTime = [[NSProcessInfo processInfo] systemUptime];
+    }
+    NSTimeInterval wallClockElapsed = [[NSProcessInfo processInfo] systemUptime] - appStartTime;
+    if (wallClockElapsed <= 0.0) {
+        return 0.0;
+    }
+
+    struct rusage usage;
+    if (getrusage(RUSAGE_SELF, &usage) != 0) {
+        return -1.0;
+    }
+    double userSeconds = usage.ru_utime.tv_sec + usage.ru_utime.tv_usec / 1e6;
+    double sysSeconds = usage.ru_stime.tv_sec + usage.ru_stime.tv_usec / 1e6;
+    double cpuSecondsUsed = userSeconds + sysSeconds;
+
+    return (cpuSecondsUsed / wallClockElapsed) * 100.0;
 }
 #endif
