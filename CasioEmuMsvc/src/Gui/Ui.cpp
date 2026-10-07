@@ -561,6 +561,37 @@ void gui_loop() {
     ThemeManager::Instance().UpdateUIScale();
 #endif
 
+#ifdef __IOS__
+    {
+        // Diagnostic: periodic resource snapshot to track down "crashes
+        // after a few minutes" reports. Logged every 10s, not every frame,
+        // to keep I/O overhead negligible. Intentionally temporary --
+        // strip once the actual cause is identified from a real log.
+        static float sinceLastLog = 0.0f;
+        sinceLastLog += io.DeltaTime;
+        if (sinceLastLog >= 10.0f) {
+            sinceLastLog = 0.0f;
+            const char* home = getenv("HOME");
+            if (home) {
+                std::string logPath = std::string(home) + "/Documents/CasioEmuMsvc/resource_diag.log";
+                std::ofstream f(logPath, std::ios::app);
+                if (f.is_open()) {
+                    double memMB = getMemoryFootprintMB();
+                    double cpuPct = getCPUUsagePercentSinceLaunch();
+                    auto now = std::chrono::system_clock::now();
+                    auto t = std::chrono::system_clock::to_time_t(now);
+                    char timebuf[32];
+                    std::strftime(timebuf, sizeof(timebuf), "%H:%M:%S", std::localtime(&t));
+                    f << "[" << timebuf << "] mem=" << memMB << "MB cpu_avg=" << cpuPct << "% windows_open=";
+                    int openCount = 0;
+                    for (auto* w : windows) if (w && w->open) openCount++;
+                    f << openCount << "\n";
+                }
+            }
+        }
+    }
+#endif
+
     // NOTE: no SDL_PollEvent pump here. The main loop in casioemu.cpp owns
     // the event queue and already forwards everything to ImGui via
     // ProcessImGuiEvent(). Draining the queue here as well used to swallow
