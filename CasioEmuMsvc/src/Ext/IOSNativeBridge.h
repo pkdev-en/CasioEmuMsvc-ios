@@ -75,4 +75,9 @@ extern "C" bool presentCreateHomeScreenShortcut(const char* modelIdentifier, con
 // afterward on their own).
 extern "C" bool presentCreateHomeScreenWebClip(const char* modelIdentifier, const char* shortcutName);
 
+// Diagnostic helpers for tracking down "crashes after a few minutes" bug
+// reports. See the .mm for what each one actually measures and why.
+extern "C" double getMemoryFootprintMB(void);
+extern "C" double getCPUUsagePercentSinceLaunch(void);
+
 #endif /* iOSNativeBridge_h */
