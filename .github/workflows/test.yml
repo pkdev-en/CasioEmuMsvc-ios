@@ -1,0 +1,150 @@
+name: Tao nhanh ios-on-upstream
+
+# Chay 1 lan bang tay: Actions -> "Tao nhanh ios-on-upstream" -> Run workflow.
+# Can secret PUSH_TOKEN (Personal Access Token co quyen repo + workflow).
+
+on:
+  workflow_dispatch:
+    inputs:
+      old_branch:
+        description: "Nhanh iOS cu cua ban (nguon chep file iOS)"
+        default: "stable"
+      new_branch:
+        description: "Ten nhanh moi se tao"
+        default: "ios-on-upstream"
+
+jobs:
+  make:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.old_branch }}
+          fetch-depth: 0
+          token: ${{ secrets.PUSH_TOKEN }}
+
+      - name: Lay upstream va tao nhanh moi
+        run: |
+          git config user.name  "ios-sync"
+          git config user.email "ios-sync@users.noreply.github.com"
+          git remote add upstream https://github.com/telecomadm1145/CasioEmuMsvc.git
+          git fetch upstream stable
+          git branch -f backup-old "origin/${{ inputs.old_branch }}" || true
+          git checkout -B "${{ inputs.new_branch }}" upstream/stable
+
+      - name: Them "|| defined(IOS)" vao cac khoi __ANDROID__
+        run: |
+          cat > ios_patch.py <<'PYEOF'
+          #!/usr/bin/env python3
+          """Them '|| defined(IOS)' vao cac khoi #if __ANDROID__ cua upstream.
+          Khoi nao chua API chi co tren Android (JNI, SDL_Android*, android/log) se KHONG bi doi,
+          chi duoc liet ke vao ios_manual_review.txt de xem tay.
+          Chay tai thu muc goc repo:  python3 ios_patch.py"""
+          import re, subprocess, sys, pathlib
+
+          SKIP_FILES = re.compile(r'AndroidSystemFont|imgui/|Config\.hpp|vibration')
+          ANDROID_ONLY = re.compile(r'jni\.h|JNIEnv|JNI_|JNIEXPORT|SDL_Android|android/log|__android_log|AAssetManager|ANDROID_LOG|jobject|jclass|JavaVM')
+          DIRECTIVE = re.compile(r'^\s*#\s*(if|ifdef|ifndef|elif|else|endif)\b')
+
+          def files():
+              out = subprocess.check_output(['git','grep','-l','__ANDROID__','--','CasioEmuMsvc/src'], text=True)
+              return [f for f in out.split() if not SKIP_FILES.search(f)]
+
+          def region_end(lines, i):
+              """chi so dong #endif tuong ung voi #if tai i"""
+              depth = 0
+              for j in range(i, len(lines)):
+                  m = DIRECTIVE.match(lines[j])
+                  if not m: continue
+                  k = m.group(1)
+                  if k in ('if','ifdef','ifndef'): depth += 1
+                  elif k == 'endif':
+                      depth -= 1
+                      if depth == 0: return j
+              return len(lines)-1
+
+          def transform(line):
+              eol = '\r\n' if line.endswith('\r\n') else ('\n' if line.endswith('\n') else '')
+              s = line.rstrip('\r\n')
+              m = re.match(r'^(\s*#\s*)ifdef\s+__ANDROID__\s*$', s)
+              if m: return f'{m.group(1)}if defined(__ANDROID__) || defined(IOS)'+eol
+              m = re.match(r'^(\s*#\s*)ifndef\s+__ANDROID__\s*$', s)
+              if m: return f'{m.group(1)}if !defined(__ANDROID__) && !defined(IOS)'+eol
+              if re.match(r'^\s*#\s*(if|elif)\b', s) and 'defined(__ANDROID__)' in s and 'defined(IOS)' not in s:
+                  return s.replace('defined(__ANDROID__)', '(defined(__ANDROID__) || defined(IOS))')+eol
+              return None
+
+          changed = 0; review = []
+          for f in files():
+              p = pathlib.Path(f)
+              lines = p.read_bytes().decode('utf-8', 'surrogateescape').splitlines(keepends=True)
+              out = list(lines); touched = False
+              for i, ln in enumerate(lines):
+                  if not re.match(r'^\s*#\s*(if|ifdef|ifndef|elif)\b', ln) or '__ANDROID__' not in ln: continue
+                  new = transform(ln)
+                  if new is None: continue
+                  # elif: xet khoi cha; if: xet tu i den endif
+                  start = i
+                  if re.match(r'^\s*#\s*elif', ln):
+                      depth = 0
+                      for j in range(i, -1, -1):
+                          m = DIRECTIVE.match(lines[j])
+                          if not m: continue
+                          if m.group(1) == 'endif': depth += 1
+                          elif m.group(1) in ('if','ifdef','ifndef'):
+                              if depth == 0: start = j; break
+                              depth -= 1
+                  end = region_end(lines, start)
+                  body = ''.join(lines[start:end+1])
+                  if ANDROID_ONLY.search(body):
+                      review.append(f'{f}:{i+1}: {ln.strip()}'); continue
+                  out[i] = new; touched = True; changed += 1
+              if touched:
+                  p.write_bytes(''.join(out).encode('utf-8', 'surrogateescape'))
+          pathlib.Path('ios_manual_review.txt').write_text('\n'.join(review)+'\n')
+          print(f'da doi: {changed} dong | can xem tay: {len(review)} dong (xem ios_manual_review.txt)')
+          PYEOF
+          cat > ios_config.py <<'PYEOF'
+          import pathlib
+          p=pathlib.Path('CasioEmuMsvc/src/Config.hpp')
+          raw=p.read_bytes(); bom=raw[:3]==b'\xef\xbb\xbf'
+          t=raw.decode('utf-8-sig' if bom else 'utf-8'); nl='\r\n' if '\r\n' in t else '\n'
+          block=nl.join(['#if defined(__APPLE__)','#include <TargetConditionals.h>','#if TARGET_OS_IPHONE','#ifndef IOS','#define IOS','#endif','#ifndef __IOS__','#define __IOS__','#endif','#elif TARGET_OS_MAC','#ifndef MACOS','#define MACOS','#endif','#endif','#endif'])+nl
+          t=t.replace('#pragma once'+nl,'#pragma once'+nl+block,1)
+          t=t.replace('#if !defined(SINGLE_WINDOW) && defined(__ANDROID__)','#if !defined(SINGLE_WINDOW) && (defined(__ANDROID__) || defined(IOS))')
+          t=t.replace('#if !defined(__ANDROID__) && !defined(__EMSCRIPTEN__) && !defined(DISABLE_SENTRY)','#if !defined(__ANDROID__) && !defined(IOS) && !defined(__EMSCRIPTEN__) && !defined(DISABLE_SENTRY)')
+          p.write_bytes((b'\xef\xbb\xbf' if bom else b'')+t.encode('utf-8'))
+          PYEOF
+          python3 ios_patch.py
+          python3 ios_config.py
+          mkdir -p /tmp/ios-report && mv ios_manual_review.txt /tmp/ios-report/
+          rm -f ios_patch.py ios_config.py
+
+      - name: Chep file rieng cua iOS tu nhanh cu
+        run: |
+          OLD="origin/${{ inputs.old_branch }}"
+          for f in \
+            CasioEmuMsvc/src/Ext/IOSNativeBridge.h \
+            CasioEmuMsvc/src/Ext/IOSNativeBridge.mm \
+            CasioEmuMsvc/src/Ext/CasioEmuAppDelegate.mm \
+            CasioEmuMsvc/src/Ext/vibration.cpp \
+            CasioEmuMsvc/src/Ext/ShortcutLaunch.h \
+            CasioEmuMsvc/src/Gui/CalculatorWindow.h \
+            CasioEmuMsvc/src/Gui/hex.hpp \
+            iOSresources docs/forios; do
+            git checkout "$OLD" -- "$f" 2>/dev/null && echo "copied $f" || echo "SKIP $f"
+          done
+          # KHONG dua chung chi ky app (da bi lo cong khai) sang nhanh moi
+          git rm -rq --cached -f iOSresources/export_anar.p12 iOSresources/export_anar.mobileprovision 2>/dev/null || true
+          rm -f iOSresources/export_anar.p12 iOSresources/export_anar.mobileprovision
+
+      - name: Commit va push
+        run: |
+          git add -A
+          git commit -m "iOS on upstream: them defined(IOS) + file iOS" || true
+          git push -f origin "${{ inputs.new_branch }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-manual-review
+          path: /tmp/ios-report/
