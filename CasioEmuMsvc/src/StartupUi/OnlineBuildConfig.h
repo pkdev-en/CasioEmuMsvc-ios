@@ -14,7 +14,7 @@ inline constexpr std::size_t CASIOEMU_ONLINE_BUILD_KEY_LENGTH = 0;
 #define CASIOEMU_ONLINE_BUILD_OS "Windows"
 #elif defined(__APPLE__)
 #define CASIOEMU_ONLINE_BUILD_OS "macOS"
-#elif defined(__ANDROID__)
+#elif (defined(__ANDROID__) || defined(IOS))
 #define CASIOEMU_ONLINE_BUILD_OS "Android"
 #else
 #define CASIOEMU_ONLINE_BUILD_OS "Linux"

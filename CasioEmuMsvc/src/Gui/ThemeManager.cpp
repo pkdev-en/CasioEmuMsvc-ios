@@ -7,7 +7,7 @@
 #endif // !TEST_BUILD
 #include "Gui.h"
 #include "Localization.h"
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 #include "RuntimeFontGlyphCache.h"
 #endif
 #ifdef CASIOEMU_CORE_WEB
@@ -173,7 +173,7 @@ void ThemeManager::RequestFontRebuild() {
 	m_fontRebuildRequested = true;
 }
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 void ThemeManager::RegisterInputGlyphs(const char* utf8_text) {
 	if (utf8_text && RuntimeFontGlyphCache::Instance().AddText(utf8_text)) {
 		RequestFontRebuild();
@@ -189,7 +189,7 @@ void ThemeManager::ProcessFontRebuild() {
 	if (!m_fontRebuildRequested)
 		return;
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 	// RebuildFont() replaces the CPU-side atlas. Drop the renderer's old atlas
 	// texture first so the backend uploads the rebuilt glyphs on the next frame.
 	ImGui_ImplSDLRenderer2_DestroyFontsTexture();
@@ -383,7 +383,7 @@ void ThemeManager::ApplyDefaultTheme() {
 	style.Colors[ImGuiCol_TabUnfocused] = ImVec4(0.08f, 0.10f, 0.15f, 1.0f);
 	style.Colors[ImGuiCol_TabUnfocusedActive] = ImVec4(0.12f, 0.16f, 0.26f, 1.0f);
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 	style.ScaleAllSizes(3.0f);
 #endif
 }

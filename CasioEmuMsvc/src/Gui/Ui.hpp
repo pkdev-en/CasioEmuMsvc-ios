@@ -28,7 +28,7 @@ void SetDebugbreak(void);
 class UIWindow {
 public:
 	UIWindow(const char* name) : name(name) {
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 		inital_size = ImVec2(
 			800 * ThemeManager::Instance().fontScale,
 			800 * ThemeManager::Instance().fontScale);
@@ -45,7 +45,7 @@ public:
 	virtual void Render() {
 		if (!open)
 			return;
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
 			ImVec2(ThemeManager::Instance().padding, ThemeManager::Instance().padding));
 #endif
@@ -63,7 +63,7 @@ public:
 		}
 		ImGui::End();
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 		ImGui::PopStyleVar();
 #endif
 	}

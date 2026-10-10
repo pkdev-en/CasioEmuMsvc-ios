@@ -1036,14 +1036,14 @@ namespace casioemu {
 
 		void BeginOnlineLogin() {
 			if (OnlineBusy()) return;
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 			ClearOnlineAuthorizationCallback();
 #endif
 			SaveOnlineApiAddress();
 			OnlineModelClient client{online_api};
 			ClearOnlineToken(client.ApiBase());
 			ClearOnlineSessionState();
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 			const std::string redirect_uri = "u8emu://online-auth";
 #else
 			auto loopback = std::make_unique<OnlineLoopbackServer>();
@@ -1237,7 +1237,7 @@ namespace casioemu {
 				const std::string uri = std::move(online_browser_uri);
 				online_browser_uri.clear();
 				online_browser_open_at = 0;
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 				if (!OpenOnlineAuthorization(uri)) online_status = "Failed to open browser authorization.";
 #else
 				if (SDL_OpenURL(uri.c_str()) != 0)
@@ -1251,7 +1251,7 @@ namespace casioemu {
 				online_status = "StartupUI.OnlineAuthorizationExpired"_lc;
 			}
 			const ImVec2 viewport_size = ImGui::GetMainViewport()->WorkSize;
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 			const ImVec2 online_popup_size(viewport_size.x * 0.96f, viewport_size.y * 0.90f);
 #else
 			const ImVec2 online_popup_size(
@@ -1274,7 +1274,7 @@ namespace casioemu {
 				online_approval_grant = online_loopback->ApprovalGrant();
 				BeginCompleteOnlineLogin();
 			}
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 			if (online_authorization_pending && !OnlineBusy()) {
 				if (auto grant = ConsumeOnlineAuthorizationCallback()) {
 					online_approval_grant = std::move(*grant);
@@ -1383,7 +1383,7 @@ namespace casioemu {
 			}
 			if (show_update && std::filesystem::exists("locale.txt")) {
 				const ImVec2 work_size = ImGui::GetMainViewport()->WorkSize;
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 				const ImVec2 update_popup_size(work_size.x * 0.96f, work_size.y * 0.90f);
 #else
 				const ImVec2 update_popup_size(
@@ -1431,7 +1431,7 @@ namespace casioemu {
 			}
 			auto& io = ImGui::GetIO();
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 			ThemeManager::Instance().UpdateUIScale();
 			auto& tm = ThemeManager::Instance();
 			float scaledWidth = tm.windowWidth;
@@ -1458,7 +1458,7 @@ namespace casioemu {
 			float buttonWidth = 200.0f;
 #endif
 			ImGui::Begin("StartupUI.Title"_lc);
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 			ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(padding, padding));
 			ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(padding * 1.5f, padding));
 			ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2(padding, padding * 0.5f));
@@ -1511,21 +1511,21 @@ namespace casioemu {
 				ImGui::OpenPopup("StartupUI.EnterPassword"_lc);
 			}
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 			ImGui::SetNextWindowSize(ImVec2(contentWidth * 0.8f, 0));
 #endif
 
 			if (ImGui::BeginPopupModal("StartupUI.EnterPassword"_lc, NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
 				ImGui::TextUnformatted("StartupUI.PasswordPopupHint"_lc);
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 				float inputWidth = ImGui::GetContentRegionAvail().x - padding * 2;
 				ImGui::PushItemWidth(inputWidth);
 #endif
 
 				ImGui::InputText("##password", password, IM_ARRAYSIZE(password), ImGuiInputTextFlags_Password);
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 				ImGui::PopItemWidth();
 #endif
 
@@ -1533,7 +1533,7 @@ namespace casioemu {
 					ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "Password incorrect. Please try again.");
 				}
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 				ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(padding, buttonHeight * 0.25f));
 #endif
 				if (ImGui::Button("Button.Positive"_lc)) {
@@ -1565,7 +1565,7 @@ namespace casioemu {
 					ImGui::CloseCurrentPopup();
 				}
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 				ImGui::PopStyleVar();
 #endif
 
@@ -1573,7 +1573,7 @@ namespace casioemu {
 			}
 
 			if (loading) {
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 				ImGui::PopStyleVar(3);
 #endif
 				ImGui::End();
@@ -1701,7 +1701,7 @@ namespace casioemu {
 				ImGui::EndPopup();
 			}
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 			ImGui::PopStyleVar(3);
 #endif
 			ImGui::End();
@@ -1983,7 +1983,7 @@ public:
 };
 
 void HandleStartupEvent(const SDL_Event& event) {
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 	if (event.type == SDL_TEXTINPUT) {
 		ThemeManager::Instance().RegisterInputGlyphs(event.text.text);
 	}
@@ -2045,7 +2045,7 @@ StartupSelection sui_loop() {
 	io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 	ThemeManager::Instance().ApplyDefaultTheme();
 	ImGui::GetStyle().Colors[ImGuiCol_WindowBg].w = 1.0f;
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 	windows2->push_back(new CopyrightWatermark(windows2));
 #endif
 	ImGui_ImplSDL2_InitForSDLRenderer(window2, renderer2);

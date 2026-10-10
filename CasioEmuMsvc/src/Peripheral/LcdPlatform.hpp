@@ -2,7 +2,7 @@
 
 namespace casioemu::lcd_platform {
 
-#if !defined(CASIOEMU_CORE_WEB) && !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
+#if !defined(CASIOEMU_CORE_WEB) && !defined(__EMSCRIPTEN__) && !(defined(__ANDROID__) || defined(IOS))
 inline constexpr bool kNativeTemporalSupport = true;
 #else
 inline constexpr bool kNativeTemporalSupport = false;
@@ -12,7 +12,7 @@ inline constexpr bool kNativeTemporalSupport = false;
 constexpr float LegacyBlendRatio(float normal_ratio, bool low_performance = false) {
 #if defined(CASIOEMU_CORE_WEB) || defined(__EMSCRIPTEN__)
 	return 0.0f;
-#elif defined(__ANDROID__)
+#elif (defined(__ANDROID__) || defined(IOS))
 	return 0.80f;
 #else
 	return low_performance ? 0.80f : normal_ratio;

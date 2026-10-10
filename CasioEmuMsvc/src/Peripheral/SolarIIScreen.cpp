@@ -8,7 +8,7 @@
 #include "Chipset/MMURegion.hpp"
 #include "Emulator.hpp"
 #include "Gui/HwController.h"
-#if !defined(CASIOEMU_CORE_WEB) && !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
+#if !defined(CASIOEMU_CORE_WEB) && !defined(__EMSCRIPTEN__) && !(defined(__ANDROID__) || defined(IOS))
 #include "Gui/ThemeManager.h"
 #endif
 
@@ -292,7 +292,7 @@ namespace casioemu {
             const double elapsed_ms = last_response_tick == std::chrono::steady_clock::time_point{} ? 0.0 :
                 std::chrono::duration<double, std::milli>(now - last_response_tick).count();
             last_response_tick = now;
-#if !defined(CASIOEMU_CORE_WEB) && !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
+#if !defined(CASIOEMU_CORE_WEB) && !defined(__EMSCRIPTEN__) && !(defined(__ANDROID__) || defined(IOS))
             const bool low_performance = ThemeManager::Instance().Settings().lowPerformanceMode || low_perf_ext;
 #else
             constexpr bool low_performance = false;

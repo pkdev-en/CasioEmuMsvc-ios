@@ -4,7 +4,7 @@
 
 namespace casioemu {
 	inline const char* PreferredAcceleratedRendererDriver() {
-#if defined(__ANDROID__) || defined(__EMSCRIPTEN__)
+#if (defined(__ANDROID__) || defined(IOS)) || defined(__EMSCRIPTEN__)
 		return "opengles2";
 #else
 		return "opengl";

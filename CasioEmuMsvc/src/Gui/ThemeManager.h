@@ -13,7 +13,7 @@
 #define THEME_DEFAULT_INJECTION_FILE_PATH "./hc-inj.txt"
 #endif
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 #define THEME_DEFAULT_SCALE 3.0f
 #else
 #define THEME_DEFAULT_SCALE 1.0f
@@ -230,7 +230,7 @@ public:
 
 	// —— 字体重建 ——
 	void RequestFontRebuild();
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 	void RegisterInputGlyphs(const char* utf8_text);
 #endif
 	void SetFontScale(float scale);

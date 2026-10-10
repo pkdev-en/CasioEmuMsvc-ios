@@ -266,7 +266,7 @@ namespace casioemu {
 		return true;
 	}
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 	inline uint8_t ClampByte(int value) {
 		return static_cast<uint8_t>(std::clamp(value, 0, 255));
 	}
@@ -530,7 +530,7 @@ namespace casioemu {
 	};
 #endif
 
-#ifndef __ANDROID__
+#if !defined(__ANDROID__) && !defined(IOS)
 	class RawVideoPipe {
 	public:
 		~RawVideoPipe() {
@@ -923,7 +923,7 @@ namespace casioemu {
 
 			const std::string stem = MakeTimestampedName("recording-", "");
 			outputPath = GetRecordingOutputPath(stem + ".mp4");
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 			if (encoder.Start(outputPath, outputWidth, outputHeight, fps)) {
 				frameSequence = false;
 				recording = true;
@@ -952,7 +952,7 @@ namespace casioemu {
 			}
 
 			recording = true;
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 			SDL_Log("Android video encoder was not available; recording PNG frames to %s", frameDirectory.string().c_str());
 #else
 			SDL_Log("ffmpeg was not available; recording PNG frames to %s", frameDirectory.string().c_str());
@@ -1000,7 +1000,7 @@ namespace casioemu {
 
 			bool success = frameSequence
 				? SaveFrameAsPng()
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 				: encoder.WriteRgbaFrame(framePixels.data(), frameSurface->pitch);
 #else
 				: encoder.Write(framePixels.data(), framePixels.size());
@@ -1077,7 +1077,7 @@ namespace casioemu {
 			return true;
 		}
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 		AndroidVideoEncoder encoder;
 #else
 		RawVideoPipe encoder;

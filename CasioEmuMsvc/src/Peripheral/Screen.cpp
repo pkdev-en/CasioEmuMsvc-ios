@@ -62,7 +62,7 @@
 
 extern bool low_perf_ext;
 
-#if !defined(__ANDROID__) && !defined(__EMSCRIPTEN__)
+#if !(defined(__ANDROID__) || defined(IOS)) && !defined(__EMSCRIPTEN__)
 #include "Theme.h"
 #endif
 
@@ -265,7 +265,7 @@ namespace casioemu {
 				hardware_id == HW_TI_MATH_PRINT)) {
 				return false;
 			}
-#if defined(CASIOEMU_CORE_WEB) || defined(__EMSCRIPTEN__) || defined(__ANDROID__)
+#if defined(CASIOEMU_CORE_WEB) || defined(__EMSCRIPTEN__) || (defined(__ANDROID__) || defined(IOS))
 			return false;
 #else
 			return !ThemeManager::Instance().Settings().lowPerformanceMode && !low_perf_ext;
@@ -304,7 +304,7 @@ namespace casioemu {
 			if constexpr (!IsEpsFamily(hardware_id)) {
 				return {};
 			}
-#if defined(CASIOEMU_CORE_WEB) || defined(__EMSCRIPTEN__) || defined(__ANDROID__)
+#if defined(CASIOEMU_CORE_WEB) || defined(__EMSCRIPTEN__) || (defined(__ANDROID__) || defined(IOS))
 			eps_lcd_response_active = false;
 			return {};
 #else
@@ -781,7 +781,7 @@ namespace casioemu {
 				ratio = 1 - 1e-4;
 			else
 				ratio = 1 - 5e-4;
-#if !defined(CASIOEMU_CORE_WEB) && !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
+#if !defined(CASIOEMU_CORE_WEB) && !defined(__EMSCRIPTEN__) && !(defined(__ANDROID__) || defined(IOS))
 			const bool low_performance = ThemeManager::Instance().Settings().lowPerformanceMode || low_perf_ext;
 #else
 			constexpr bool low_performance = false;
@@ -1215,7 +1215,7 @@ namespace casioemu {
 			if constexpr (IsEpsFamily(hardware_id) || hardware_id == HW_TI_MATH_PRINT) {
 				SDL_Delay(10);
 				}
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 				else {
 					SDL_Delay(10);
 				}

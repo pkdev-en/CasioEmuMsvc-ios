@@ -204,7 +204,7 @@ namespace casioemu {
 				device_signature = SignOnlineDeviceRequest(*identity, proof);
 			}
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 			std::vector<std::string> android_headers{
 				"Accept: application/json, application/vnd.webcalcemu.model-encrypted", "Content-Type: application/json",
 				"X-CasioEmu-Key-Id: " + std::string(CASIOEMU_ONLINE_BUILD_KEY_ID), "X-CasioEmu-Timestamp: " + timestamp,
@@ -480,7 +480,7 @@ namespace casioemu {
 	}
 
 	bool OnlineTokenPersistenceAvailable() {
-#if defined(_WIN32) || defined(__ANDROID__) || defined(__APPLE__) || defined(CASIOEMU_HAS_LIBSECRET)
+#if defined(_WIN32) || (defined(__ANDROID__) || defined(IOS)) || defined(__APPLE__) || defined(CASIOEMU_HAS_LIBSECRET)
 		return true;
 #else
 		return false;

@@ -11,7 +11,7 @@
 #include "TiLcdTarget.hpp"
 #include "LcdResponse.hpp"
 #include "LcdPlatform.hpp"
-#if !defined(CASIOEMU_CORE_WEB) && !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
+#if !defined(CASIOEMU_CORE_WEB) && !defined(__EMSCRIPTEN__) && !(defined(__ANDROID__) || defined(IOS))
 #include "Gui/ThemeManager.h"
 #endif
 #include <algorithm>
@@ -110,7 +110,7 @@ namespace casioemu {
 				generation = history.current.generation;
 			}
 			bool temporal = lcd_platform::kNativeTemporalSupport;
-#if !defined(CASIOEMU_CORE_WEB) && !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
+#if !defined(CASIOEMU_CORE_WEB) && !defined(__EMSCRIPTEN__) && !(defined(__ANDROID__) || defined(IOS))
 			const bool low_performance = ThemeManager::Instance().Settings().lowPerformanceMode || low_perf_ext;
 			temporal = temporal && !low_performance;
 #else

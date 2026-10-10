@@ -12,7 +12,7 @@
 #include <android/log.h>
 #endif
 
-#ifndef __ANDROID__
+#if !defined(__ANDROID__) && !defined(IOS)
 inline const ImWchar* GetCJKRanges() {
 	static const ImWchar ranges[] = {
 		0x0020, 0x00FF,
@@ -55,7 +55,7 @@ inline std::string GetMonospaceFontPath() {
 		"C:\\Windows\\Fonts\\Consola.ttf",
 		// 3. Courier New (最后的兜底)
 		"C:\\Windows\\Fonts\\cour.ttf"};
-#elif defined(__ANDROID__)
+#elif (defined(__ANDROID__) || defined(IOS))
 	candidates = {
 		"/system/fonts/DroidSansMono.ttf",
 		"/system/fonts/NotoSansMono-Regular.ttf"};
@@ -117,7 +117,7 @@ inline std::string GetCJKFontPath(int* font_no = nullptr) {
 			"C:\\Windows\\Fonts\\simsun.ttc"  // 宋体 (最传统)
 		});
 	}
-#elif defined(__ANDROID__)
+#elif (defined(__ANDROID__) || defined(IOS))
 	if (auto system_font = FindAndroidSystemCJKFont(preference)) {
 		if (font_no) {
 			*font_no = system_font->collection_index;
@@ -173,7 +173,7 @@ inline void RebuildFont(float scale = 0.0f) {
 
 	io.Fonts->Clear();
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 	constexpr float defaultscale = 3.0f;
 #else
 	constexpr float defaultscale = 1.0f;
@@ -185,7 +185,7 @@ inline void RebuildFont(float scale = 0.0f) {
 	// 1. 加载等宽基础字体 (Monospace Base)
 	// 这是改动最大的地方，确保英文和代码符号绝对等宽
 	std::string mono_font_path = GetMonospaceFontPath();
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 	ImWchar extended_script_sample = 0;
 	const char* extended_script_name = nullptr;
 #endif

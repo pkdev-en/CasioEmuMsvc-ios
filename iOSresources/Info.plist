@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDisplayName</key>
+    <string>CasioEmuMsvc</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.pkdevvn.casioemu</string>
+    <key>CFBundleExecutable</key>
+    <string>CasioEmuMsvc</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>UILaunchStoryboardName</key>
+    <string>LaunchScreen</string>
+    <key>UIApplicationSupportsIndirectInputEvents</key>
+    <true/>
+    <key>UISupportedInterfaceOrientations</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>
+    </array>
+    <key>UIStatusBarHidden</key>
+    <true/>
+    <key>UIViewControllerBasedStatusBarAppearance</key>
+    <false/>
+
+    <!-- Icon: dÃÂ¹ng CFBundleIconFiles thay vÃÂ¬ xcassets -->
+    <key>CFBundleIcons</key>
+    <dict>
+        <key>CFBundlePrimaryIcon</key>
+        <dict>
+            <key>CFBundleIconFiles</key>
+            <array>
+                <string>20.png</string>
+                <string>29.png</string>
+                <string>40.png</string>
+                <string>58.png</string>
+                <string>60.png</string>
+                <string>80.png</string>
+                <string>87.png</string>
+                <string>120.png</string>
+                <string>180.png</string>
+                <string>1024.png</string>
+            </array>
+            <key>UIPrerenderedIcon</key>
+            <false/>
+        </dict>
+    </dict>
+
+    <!-- Hien thi thu muc app trong Files -->
+    <key>UIFileSharingEnabled</key>
+    <true/>
+    <key>LSSupportsOpeningDocumentsInPlace</key>
+    <true/>
+
+    <!-- LÆ°á»£c Äá» URL riÃªng, giá»¯ láº¡i Äá» tÆ°Æ¡ng thÃ­ch ngÆ°á»£c vá»i cÃ¡c lá»i táº¯t ÄÃ£
+         táº¡o báº±ng báº£n build cÅ© (kiá»u WebClip). CÆ¡ cháº¿ táº¡o lá»i táº¯t hiá»n táº¡i
+         dÃ¹ng Home Screen Quick Actions (UIApplication.shortcutItems, xem
+         IOSNativeBridge.mm) nÃªn khÃ´ng cÃ²n cáº§n Äáº¿n scheme nÃ y Äá» táº¡o lá»i táº¯t
+         má»i, nhÆ°ng váº«n cáº§n khai bÃ¡o Äá» cÃ¡c lá»i táº¯t cÅ© (náº¿u ngÆ°á»i dÃ¹ng ÄÃ£ táº¡o
+         tá»« trÆ°á»c) cÃ²n má» ÄÆ°á»£c app ÄÃºng cÃ¡ch thay vÃ¬ bÃ¡o lá»i "khÃ´ng má» ÄÆ°á»£c
+         trang". Xem CasioEmuAppDelegate.mm cho luá»ng Quick Action, vÃ 
+         HandlePotentialShortcutLaunch trong StartupUi.cpp / pháº§n kiá»m tra
+         há»£p nháº¥t trong casioemu.cpp cho luá»ng URL scheme cÅ©. -->
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>com.pkdevvn.casioemu.shortcut</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>casioemu</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>

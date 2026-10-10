@@ -38,7 +38,7 @@
 #include "sdl_win32_extra.h"
 #endif
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 #include <unistd.h>
 #endif
 #ifdef ENABLE_SENTRY
@@ -164,7 +164,7 @@ static Uint32 GetEventWindowId(const SDL_Event& event) {
 }
 
 static void ProcessImGuiEvent(const SDL_Event& event) {
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 	if (event.type == SDL_TEXTINPUT) {
 		ThemeManager::Instance().RegisterInputGlyphs(event.text.text);
 	}
@@ -218,7 +218,7 @@ int main(int argc, char* argv[]) {
 	DiscordRPC::Init();
   DiscordRPC::UpdatePresence("");
 
-#ifndef __ANDROID__
+#if !defined(__ANDROID__) && !defined(IOS)
 	std::string rendererDriver = ReadRendererHint();
 	bool previouslyCrashed = std::filesystem::exists(kCrashLockFile);
 	if (previouslyCrashed) {
@@ -286,7 +286,7 @@ int main(int argc, char* argv[]) {
 
 	// After startupui has done its job:
 	// startupui doesn't need that.
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 	SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
 	SDL_SetHint(SDL_HINT_MOUSE_TOUCH_EVENTS, "0");
 #endif
@@ -300,7 +300,7 @@ int main(int argc, char* argv[]) {
 	
 	DiscordRPC::UpdatePresence(emulator.ModelDefinition.model_name);
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 	TouchMouseTranslator touchTranslator(
 		SDL_GetWindowID(emulator.window),
 
@@ -338,7 +338,7 @@ int main(int argc, char* argv[]) {
 		while (running) {
 			if (!busy)
 				SDL_PushEvent(&se);
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 			SDL_Delay(40);
 #else
 			if (ThemeManager::Instance().Settings().lowPerformanceMode || low_perf_ext)
@@ -366,7 +366,7 @@ int main(int argc, char* argv[]) {
 	SDL_ShowWindow(emulator.window);
 	SDL_RaiseWindow(emulator.window);
 
-#if defined(_WIN32) || defined(__ANDROID__)
+#if defined(_WIN32) || (defined(__ANDROID__) || defined(IOS))
 	LoadPlugins();
 #endif
 	while (emulator.Running()) {
@@ -411,7 +411,7 @@ int main(int argc, char* argv[]) {
 			emulator.Frame();
 			gui_loop();
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 			touchTranslator.RenderDebug(renderer);
 #endif
 
@@ -473,7 +473,7 @@ int main(int argc, char* argv[]) {
 				break;
 			}
 			break;
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 		case SDL_FINGERDOWN:
 		case SDL_FINGERUP:
 		case SDL_FINGERMOTION:

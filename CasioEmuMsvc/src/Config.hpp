@@ -1,4 +1,19 @@
 ﻿#pragma once
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#if TARGET_OS_IPHONE
+#ifndef IOS
+#define IOS
+#endif
+#ifndef __IOS__
+#define __IOS__
+#endif
+#elif TARGET_OS_MAC
+#ifndef MACOS
+#define MACOS
+#endif
+#endif
+#endif
 #include "Containers/ConcurrentObject.h"
 #include <cstdint>
 #include <cstdio>
@@ -56,7 +71,7 @@
 #endif 
 
 // #define SINGLE_WINDOW
-#if !defined(SINGLE_WINDOW) && defined(__ANDROID__)
+#if !defined(SINGLE_WINDOW) && (defined(__ANDROID__) || defined(IOS))
 #define SINGLE_WINDOW
 #endif
 
@@ -85,7 +100,7 @@ public:                       \
 
 #define EMULATOR_VERSION GIT_COMMIT_HASH
 
-#if !defined(__ANDROID__) && !defined(__EMSCRIPTEN__) && !defined(DISABLE_SENTRY)
+#if !defined(__ANDROID__) && !defined(IOS) && !defined(__EMSCRIPTEN__) && !defined(DISABLE_SENTRY)
 #define ENABLE_SENTRY
 #define SENTRY_BUILD_STATIC 1
 #endif

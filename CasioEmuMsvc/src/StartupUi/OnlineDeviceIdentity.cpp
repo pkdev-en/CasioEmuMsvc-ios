@@ -25,10 +25,10 @@
 #include <jni.h>
 #include <SDL_system.h>
 #endif
-#if !defined(_WIN32) && !defined(__APPLE__) && !defined(__ANDROID__)
+#if !defined(_WIN32) && !defined(__APPLE__) && !(defined(__ANDROID__) || defined(IOS))
 #include <sys/random.h>
 #endif
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 #include <cstdlib>
 #endif
 
@@ -242,7 +242,7 @@ namespace casioemu {
 #elif defined(__APPLE__)
 		if (SecRandomCopyBytes(kSecRandomDefault, size, data) != errSecSuccess)
 			throw std::runtime_error("Failed to obtain secure random bytes.");
-#elif defined(__ANDROID__)
+#elif (defined(__ANDROID__) || defined(IOS))
 		arc4random_buf(data, size);
 #else
 		std::size_t offset = 0;

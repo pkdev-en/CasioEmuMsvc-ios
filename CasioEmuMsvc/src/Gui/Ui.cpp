@@ -152,11 +152,11 @@ static ImGuiID RenderDockSpace(float reservedBottom) {
 }
 
 static void RenderDebuggerGuiWindows() {
-#ifndef __ANDROID__
+#if !defined(__ANDROID__) && !defined(IOS)
 	ImGuiID dockspace_id = RenderDockSpace(GetStatusBarHeight());
 #endif
 	for (auto win : windows) {
-#ifndef __ANDROID__
+#if !defined(__ANDROID__) && !defined(IOS)
 		if (dockspace_id != 0) {
 			ImGui::SetNextWindowDockID(dockspace_id, ImGuiCond_FirstUseEver);
 		}
@@ -164,7 +164,7 @@ static void RenderDebuggerGuiWindows() {
 		win->Render();
 	}
 
-#ifndef __ANDROID__
+#if !defined(__ANDROID__) && !defined(IOS)
 	RenderStatusBar();
 #endif
 
@@ -279,7 +279,7 @@ void gui_loop() {
 
 	ImGuiIO& io = ImGui::GetIO();
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 	ThemeManager::Instance().UpdateUIScale();
 #endif
 
@@ -355,7 +355,7 @@ static CodeViewer* CreateDebuggerGuiWindows() {
 		windows.push_back(item);
 	}
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 	for (auto item : windows) {
 		item->open = false;
 	}
@@ -372,7 +372,7 @@ CodeViewer* test_gui(bool* guiCreated, SDL_Window* wnd, SDL_Renderer* rnd) {
 	window = wnd;
 	renderer = rnd;
 #else
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 	window = SDL_CreateWindow("CasioEmuMsvc Debugger",
 		SDL_WINDOWPOS_CENTERED,
 		SDL_WINDOWPOS_CENTERED,
@@ -423,7 +423,7 @@ CodeViewer* test_gui(bool* guiCreated, SDL_Window* wnd, SDL_Renderer* rnd) {
 	ImGui::CreateContext();
 	ImGuiIO& io = ImGui::GetIO();
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(IOS)
 	ThemeManager::Instance().UpdateUIScale();
 #endif
 
@@ -574,7 +574,7 @@ namespace UIHelpers {
 
 void gui_cleanup() {
 #ifndef CASIOEMU_CORE_WEB
-#ifndef __ANDROID__
+#if !defined(__ANDROID__) && !defined(IOS)
 #ifndef SINGLE_WINDOW
 	if (window) {
 		int x, y, w, h;

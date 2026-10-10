@@ -358,7 +358,7 @@ extern "C" {
 }
 #endif
 
-#if !defined(_WIN32) && !defined(__ANDROID__) && !defined(__APPLE__)
+#if !defined(_WIN32) && !(defined(__ANDROID__) || defined(IOS)) && !defined(__APPLE__)
 #include <iostream>
 #include <cstdio>
 #include <memory>
