@@ -861,6 +861,12 @@ namespace casioemu {
 		}
 #endif
 
+		// 'tx' is a fresh SDL_CreateTexture() every call (line ~801 above),
+		// created, drawn once, and otherwise never referenced again —
+		// without this it leaked one full-size render-target texture's
+		// worth of GPU memory on every single frame, unconditionally.
+		SDL_DestroyTexture(tx);
+
 		Repaint();
 	}
 
