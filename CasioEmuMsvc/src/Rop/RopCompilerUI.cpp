@@ -2,7 +2,6 @@
 #include "Compiler.h"
 #include "Localization.h"
 #include "Models.h"
-#include <SDL.h> // Them de dung SDL_StartTextInput / SDL_StopTextInput tren iOS
 #ifdef CASIOEMU_CORE_WEB
 #include "WebDebuggerGui.h"
 #else

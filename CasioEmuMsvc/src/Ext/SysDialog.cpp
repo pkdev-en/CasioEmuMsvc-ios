@@ -162,8 +162,8 @@ void SystemDialogs::OpenFileDialog(std::function<void(std::filesystem::path)> ca
         env->DeleteLocalRef(activity);
         return;
     }
-
-    jmethodID openFileMethod = env->GetStaticMethodID(systemDialogsClass, "openFileDialog", "(Landroid/app/Activity;)V");
+    jmethodID openFileMethod = env->GetStaticMethodID(systemDialogsClass, "openFileDialog",
+        "(Landroid/app/Activity;)V");
     if (!openFileMethod) {
         env->DeleteLocalRef(systemDialogsClass);
         env->DeleteLocalRef(activity);
@@ -188,7 +188,8 @@ void SystemDialogs::SaveFileDialog(std::string preferred_name, std::function<voi
         return;
     }
 
-    jmethodID saveFileMethod = env->GetStaticMethodID(systemDialogsClass, "saveFileDialog", "(Landroid/app/Activity;Ljava/lang/String;)V");
+    jmethodID saveFileMethod = env->GetStaticMethodID(systemDialogsClass, "saveFileDialog",
+        "(Landroid/app/Activity;Ljava/lang/String;)V");
     if (!saveFileMethod) {
         env->DeleteLocalRef(systemDialogsClass);
         env->DeleteLocalRef(activity);
@@ -216,7 +217,8 @@ void SystemDialogs::OpenFolderDialog(std::function<void(std::filesystem::path)> 
         return;
     }
 
-    jmethodID openFolderMethod = env->GetStaticMethodID(systemDialogsClass, "openFolderDialog", "(Landroid/app/Activity;)V");
+    jmethodID openFolderMethod = env->GetStaticMethodID(systemDialogsClass, "openFolderDialog",
+        "(Landroid/app/Activity;)V");
     if (!openFolderMethod) {
         env->DeleteLocalRef(systemDialogsClass);
         env->DeleteLocalRef(activity);
@@ -242,7 +244,8 @@ void SystemDialogs::SaveFolderDialog(std::function<void(std::filesystem::path)> 
         return;
     }
 
-    jmethodID saveFolderMethod = env->GetStaticMethodID(systemDialogsClass, "saveFolderDialog", "(Landroid/app/Activity;)V");
+    jmethodID saveFolderMethod = env->GetStaticMethodID(systemDialogsClass, "saveFolderDialog",
+        "(Landroid/app/Activity;)V");
     if (!saveFolderMethod) {
         env->DeleteLocalRef(systemDialogsClass);
         env->DeleteLocalRef(activity);

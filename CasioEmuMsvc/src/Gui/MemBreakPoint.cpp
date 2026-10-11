@@ -2,6 +2,7 @@
 #include "Chipset/CPU.hpp"
 #include "Chipset/Chipset.hpp"
 #include "Chipset/ePSCpu.h"
+#include "Chipset/T4xCore.hpp"
 #include "Emulator.hpp"
 #include "Gui/Hooks.h"
 #include "Ui.hpp"
@@ -119,17 +120,17 @@ void Breakpoints::DrawContent() {
 					target_addr = i;
 					data.enableWrite = 0;
 					data.records.clear();
-					SyncEpsBreakpoints();
+					SyncCoreBreakpoints();
 					ImGui::CloseCurrentPopup();
 				}
 				if (ImGui::Button("HexEditors.ContextMenu.MonitorWrite"_lc)) {
 					data.enableWrite = true;
 					target_addr = i;
 					data.records.clear();
-					SyncEpsBreakpoints();
+					SyncCoreBreakpoints();
 					ImGui::CloseCurrentPopup();
 				}
-				if (m_emu && m_emu->chipset.epscpu) {
+				if (m_emu && (m_emu->chipset.epscpu || m_emu->chipset.t4x)) {
 					bool configuration_changed = false;
 					configuration_changed |= ImGui::Checkbox("Enabled", &data.enabled);
 					configuration_changed |= ImGui::Checkbox("Compare data", &data.compareData);
@@ -153,7 +154,7 @@ void Breakpoints::DrawContent() {
 						}
 					}
 					if (configuration_changed)
-						SyncEpsBreakpoints();
+						SyncCoreBreakpoints();
 				}
 				ImGui::Separator();
 				if (ImGui::Button("MemBP.Delete"_lc)) {
@@ -162,7 +163,7 @@ void Breakpoints::DrawContent() {
 						target_addr = -1;
 					}
 					break_point_hash.erase(break_point_hash.begin() + i);
-					SyncEpsBreakpoints();
+					SyncCoreBreakpoints();
 					ImGui::CloseCurrentPopup();
 				}
 				ImGui::EndPopup();
@@ -191,9 +192,10 @@ void Breakpoints::DrawFindContent() {
 		ImGui::TableSetupColumn("");
 		ImGui::TableHeadersRow();
 		int i = 0;
-		if (m_emu && m_emu->chipset.epscpu) {
-			for (const auto& hit : m_emu->chipset.epscpu->MemoryBreakpointHits(
-				break_point_hash[target_addr].addr, write != 0)) {
+		if (m_emu && (m_emu->chipset.epscpu || m_emu->chipset.t4x)) {
+			auto hits = m_emu->chipset.t4x ? m_emu->chipset.t4x->MemoryBreakpointHits(break_point_hash[target_addr].addr, write != 0) :
+				m_emu->chipset.epscpu->MemoryBreakpointHits(break_point_hash[target_addr].addr, write != 0);
+			for (const auto& hit : hits) {
 				ImGui::TableNextRow();
 				ImGui::TableSetColumnIndex(0);
 				UIHelpers::ClickableAddress(hit.program_counter, UIHelpers::JumpTarget::Code);
@@ -230,42 +232,6 @@ void Breakpoints::SetupHooks() {
 	SetupHook(on_instruction, [&](casioemu::CPU& sender, InstructionEventArgs& iea) {
 		if (RegisterBreakpointTriggered(sender.reg_sp.raw))
 			SetDebugbreak();
-
-		// ===== REGISTER BREAKPOINT (multi-register watch list) =====
-		for (auto& bp : reg_bps) {
-			if (!bp.enabled) continue;
-
-			uint32_t cur = GetRegisterValue(sender, bp.reg);
-
-			if (reg_first_run) {
-				last_reg_value[bp.reg] = cur;
-				continue;
-			}
-
-			bool trig = false;
-
-			switch (bp.mode) {
-			case 1: trig = cur == bp.value; break;
-			case 2: trig = cur != bp.value; break;
-			case 3: trig = cur > bp.value; break;
-			case 4: trig = cur < bp.value; break;
-			case 5: trig = cur >= bp.value; break;
-			case 6: trig = cur <= bp.value; break;
-			}
-			
-
-			if (trig and !last_break_regs[bp.reg]) {
-				printf("Reg %d hit BP: %X\n", bp.reg, cur);
-				last_break_regs[bp.reg] = true;
-				SetDebugbreak();
-			} else if (!trig and last_break_regs[bp.reg]) {
-				last_break_regs[bp.reg] = false;
-			}
-			last_reg_value[bp.reg] = cur;
-		}
-
-		reg_first_run = false;
-		membp_cv = this;
 	});
 	SetupHook(on_eps_instruction, [&](InstructionEventArgs& iea) {
 		if (RegisterBreakpointTriggered(iea.stack_pointer))
@@ -322,11 +288,11 @@ void Breakpoints::TryTrigBp(uint32_t addr, bool write) {
 
 void Breakpoints::RenderCore() {
 	std::lock_guard lock(breakpoints_mutex);
-	if (m_emu && m_emu->chipset.epscpu) {
-		const uint64_t version = m_emu->chipset.epscpu->MemoryBreakpointsVersion();
-		if (version != last_eps_breakpoint_version) {
-			RefreshEpsBreakpoints();
-			last_eps_breakpoint_version = version;
+	if (m_emu && (m_emu->chipset.epscpu || m_emu->chipset.t4x)) {
+		const uint64_t version = m_emu->chipset.t4x ? m_emu->chipset.t4x->MemoryBreakpointsVersion() : m_emu->chipset.epscpu->MemoryBreakpointsVersion();
+		if (version != last_core_breakpoint_version) {
+			RefreshCoreBreakpoints();
+			last_core_breakpoint_version = version;
 		}
 	}
 	if (ImGui::BeginTabBar("Breakpoints")) {
@@ -342,14 +308,14 @@ void Breakpoints::RenderCore() {
 			ImGui::SameLine();
 			if (ImGui::Button("MemBP.AddAddr"_lc)) {
 				break_point_hash.push_back({.addr = (uint32_t)strtol(buf, nullptr, 16)});
-				SyncEpsBreakpoints();
+				SyncCoreBreakpoints();
 			}
 			ImGui::Checkbox("MemBP.BreakWhenHit"_lc,
 				&break_on_cv);
 			if (target_addr >= 0 && static_cast<size_t>(target_addr) < break_point_hash.size() &&
 				break_point_hash[target_addr].breakWhenHit != break_on_cv) {
 				break_point_hash[target_addr].breakWhenHit = break_on_cv;
-				SyncEpsBreakpoints();
+				SyncCoreBreakpoints();
 			}
 			if (!break_on_cv) {
 				ImGui::BeginChild("##findoutput");
@@ -358,7 +324,7 @@ void Breakpoints::RenderCore() {
 			}
 			ImGui::EndTabItem();
 		}
-		if (ImGui::BeginTabItem("Register")) {
+		if (!m_emu->chipset.t4x && ImGui::BeginTabItem("Register")) {
 			const bool eps6800 = m_emu && m_emu->chipset.epscpu;
 			static char buf[10] = {0};
 			ImGui::Combo("BP.RegCmpMode"_lc, &reg_compare_mode, "Disabled\0Equal\0Not Equal\0Greater\0Less\0Greater or Equal\0Less or Equal\0");
@@ -376,77 +342,21 @@ void Breakpoints::RenderCore() {
 			ImGui::SameLine();
 			ImGui::Checkbox(eps6800 ? "STKPTR" : "BP.SPHint"_lc, &break_on_sp);
 			UpdateRegisterBreakpointConfig();
-			
-			// ===== REGISTER BREAKPOINT UI =====
-			ImGui::Separator();
-			ImGui::Text("Register Breakpoints");
-
-			static int selected_reg = 0;
-			static int selected_mode = 0;
-			static int value = 0;
-
-			const char* reg_names[] = {
-				"SP","ER0","ER2","ER4","ER6","ER8","ER10","ER12","ER14","EA","LR","PC"
-			};
-
-			ImGui::Combo("Register", &selected_reg, reg_names, IM_ARRAYSIZE(reg_names));
-
-			ImGui::Combo("Mode", &selected_mode,
-				"Equal\0Not Equal\0Greater\0Less\0GreaterEq\0LessEq\0");
-
-			//ImGui::InputInt("Value", &value);
-			ImGui::InputScalar("ValueHex", ImGuiDataType_U32, &value, NULL, NULL, "%X");
-
-			if (ImGui::Button("Add Reg BP")) {
-				reg_bps.push_back({
-					selected_reg,
-					selected_mode + 1, // lệch index -> fix
-					(uint32_t)value,
-					true
-				});
-			}
-
-			ImGui::Separator();
-
-			for (int i = 0; i < (int)reg_bps.size(); i++) {
-				auto& bp = reg_bps[i];
-
-				ImGui::PushID(i);
-
-				ImGui::Checkbox("##en", &bp.enabled);
-				ImGui::SameLine();
-
-				ImGui::Text("Reg %s | Mode %d | Val %X",
-					reg_names[bp.reg],
-					bp.mode,
-					bp.value
-				);
-
-				ImGui::SameLine();
-				if (ImGui::Button("Delete")) {
-					reg_bps.erase(reg_bps.begin() + i);
-					ImGui::PopID();
-					break;
-				}
-
-				ImGui::PopID();
-			}
-
 			ImGui::EndTabItem();
 		}
 		ImGui::EndTabBar();
 	}
 }
 
-void Breakpoints::RefreshEpsBreakpoints() {
-	if (!m_emu || !m_emu->chipset.epscpu)
+void Breakpoints::RefreshCoreBreakpoints() {
+	if (!m_emu || (!m_emu->chipset.epscpu && !m_emu->chipset.t4x))
 		return;
 	/* Track the selected breakpoint by (address, write) instead of by index so
 	 * a core reorder or length change cannot silently retarget the checkbox. */
 	bool have_selected = target_addr >= 0 && static_cast<size_t>(target_addr) < break_point_hash.size();
 	const uint32_t selected_addr = have_selected ? break_point_hash[target_addr].addr : 0;
 	const bool selected_write = have_selected ? break_point_hash[target_addr].enableWrite : false;
-	const auto core_breakpoints = m_emu->chipset.epscpu->MemoryBreakpoints();
+	const auto core_breakpoints = m_emu->chipset.t4x ? m_emu->chipset.t4x->MemoryBreakpoints() : m_emu->chipset.epscpu->MemoryBreakpoints();
 	std::vector<MemBPData_t> refreshed;
 	refreshed.reserve(core_breakpoints.size());
 	for (const auto& item : core_breakpoints) {
@@ -487,7 +397,7 @@ void Breakpoints::ExternalAddBp(uint32_t addr, bool write, bool breakWhenHit,
 		.skipCount = skipCount, .addr = addr});
 	target_addr = break_point_hash.size() - 1;
 	break_on_cv = breakWhenHit;
-	SyncEpsBreakpoints();
+	SyncCoreBreakpoints();
 }
 
 bool Breakpoints::ExternalRemoveBp(uint32_t addr, bool write) {
@@ -503,7 +413,7 @@ bool Breakpoints::ExternalRemoveBp(uint32_t addr, bool write) {
 		target_addr = -1;
 	else if (target_addr > removed)
 		--target_addr;
-	SyncEpsBreakpoints();
+	SyncCoreBreakpoints();
 	return true;
 }
 
@@ -512,14 +422,14 @@ void Breakpoints::ExternalClearBps() {
 	break_point_hash.clear();
 	target_addr = -1;
 	break_on_cv = false;
-	SyncEpsBreakpoints();
+	SyncCoreBreakpoints();
 }
 
-void Breakpoints::SyncEpsBreakpoints() {
-	if (!m_emu || !m_emu->chipset.epscpu)
+void Breakpoints::SyncCoreBreakpoints() {
+	if (!m_emu || (!m_emu->chipset.epscpu && !m_emu->chipset.t4x))
 		return;
-	auto* eps = m_emu->chipset.epscpu;
-	const auto core_breakpoints = eps->MemoryBreakpoints();
+	auto sync = [&](auto* core) {
+	const auto core_breakpoints = core->MemoryBreakpoints();
 	for (const auto& item : break_point_hash) {
 		casioemu::Eps6800MemoryBreakpoint breakpoint{};
 		breakpoint.address = item.addr;
@@ -530,7 +440,7 @@ void Breakpoints::SyncEpsBreakpoints() {
 		breakpoint.data = item.data;
 		breakpoint.mask = item.mask;
 		breakpoint.skip_count = item.skipCount;
-		eps->AddMemoryBreakpoint(breakpoint);
+		core->AddMemoryBreakpoint(breakpoint);
 	}
 	/* Reconcile removals without clearing the whole core list, so retained
 	 * breakpoints keep their hit_count and skip-pending state. */
@@ -539,8 +449,10 @@ void Breakpoints::SyncEpsBreakpoints() {
 			return bp.addr == core_bp.address && bp.enableWrite == core_bp.write;
 		});
 		if (it == break_point_hash.end())
-			eps->RemoveMemoryBreakpoint(core_bp.address, core_bp.write);
+			core->RemoveMemoryBreakpoint(core_bp.address, core_bp.write);
 	}
+	};
+	if (m_emu->chipset.t4x) sync(m_emu->chipset.t4x); else sync(m_emu->chipset.epscpu);
 }
 
 std::vector<MemBPData_t> Breakpoints::ExternalListBps() const {

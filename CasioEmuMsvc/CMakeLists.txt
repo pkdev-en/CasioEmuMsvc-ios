@@ -255,16 +255,16 @@ set(PROJECT_INCLUDE_DIRS
 file(GLOB MAIN_SOURCES_ROOT "${SOURCE_DIR}/*.cpp")
 file(GLOB MAIN_SOURCES_MINIZ "${MINIZ_DIR}/*.c")
 file(GLOB MAIN_SOURCES_TINYXML2 "${TINYXML2_DIR}/*.cpp")
-file(GLOB MAIN_SOURCES_CHIPSET "${SOURCE_DIR}/Chipset/*.cpp")
+file(GLOB MAIN_SOURCES_CHIPSET CONFIGURE_DEPENDS "${SOURCE_DIR}/Chipset/*.cpp")
 file(GLOB MAIN_SOURCES_EPS6800_CORE "${SOURCE_DIR}/Chipset/EPS6800Core/*.c")
 file(GLOB MAIN_SOURCES_CRASH "${SOURCE_DIR}/CrashHandler/*.cpp")
-file(GLOB MAIN_SOURCES_EXT "${SOURCE_DIR}/Ext/*.cpp")
+file(GLOB MAIN_SOURCES_EXT "${SOURCE_DIR}/Ext/*.cpp" "${SOURCE_DIR}/Ext/*.mm")
 file(GLOB MAIN_SOURCES_EXT_CAM "${SOURCE_DIR}/Ext/cam/*.cc")
 file(GLOB MAIN_SOURCES_ROP "${SOURCE_DIR}/Rop/*.cpp")
 file(GLOB MAIN_SOURCES_GUI "${SOURCE_DIR}/Gui/*.cpp")
 file(GLOB MAIN_SOURCES_IMGUI "${SOURCE_DIR}/Gui/imgui/*.cpp")
 file(GLOB MAIN_SOURCES_JIT "${SOURCE_DIR}/JitU8/*.cpp")
-file(GLOB MAIN_SOURCES_PERIPHERAL "${SOURCE_DIR}/Peripheral/*.cpp")
+file(GLOB MAIN_SOURCES_PERIPHERAL CONFIGURE_DEPENDS "${SOURCE_DIR}/Peripheral/*.cpp")
 file(GLOB MAIN_SOURCES_PLUGIN "${SOURCE_DIR}/Plugin/*.cpp")
 file(GLOB MAIN_SOURCES_STARTUP CONFIGURE_DEPENDS "${SOURCE_DIR}/StartupUi/*.cpp")
 file(GLOB MAIN_SOURCES_WEB "${SOURCE_DIR}/Web/*.cpp")
@@ -493,8 +493,23 @@ if(BUILD_EXECUTABLE)
         )
     endif()
 
-
-
+    if(APPLE)
+        set(MAC_RESOURCES ${CMAKE_CURRENT_SOURCE_DIR}/icon.icns)
+        set_source_files_properties(${MAC_RESOURCES} PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+        add_executable(${TARGET_NAME} MACOSX_BUNDLE ${MAIN_SOURCES} ${WIN_RESOURCES} ${MAC_RESOURCES})
+        set_target_properties(${TARGET_NAME} PROPERTIES
+            MACOSX_BUNDLE_INFO_STRING "Casio nX-U8/100 & nX-U16/100 Emulator"
+            MACOSX_BUNDLE_BUNDLE_NAME "CasioEmuMsvc"
+            MACOSX_BUNDLE_IDENTIFIER "com.telecomadm1145.casioemumsvc"
+            MACOSX_BUNDLE_GUI_IDENTIFIER "com.telecomadm1145.casioemumsvc"
+            MACOSX_BUNDLE_BUNDLE_VERSION "1.0.0"
+            MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0.0"
+            MACOSX_BUNDLE_COPYRIGHT "Copyright (C) 2024-2026 telecomadm1145"
+            MACOSX_BUNDLE_ICON_FILE "icon.icns"
+        )
+    else()
+        add_executable(${TARGET_NAME} ${MAIN_SOURCES} ${WIN_RESOURCES})
+    endif()
 else()
     message(STATUS "Building shared library")
     set(TARGET_NAME "main")
@@ -578,6 +593,22 @@ if(NOT CASIOEMU_WEB)
     )
 endif()
 
+if(NOT CASIOEMU_WEB)
+    FetchContent_Declare(monocypher
+        GIT_REPOSITORY https://github.com/LoupVaillant/Monocypher.git
+        GIT_TAG ab2b16dd619ad5f6979a4fbe69cfa324a6fcc35f
+    )
+    FetchContent_MakeAvailable(monocypher)
+    target_sources(${TARGET_NAME} PRIVATE
+        "${monocypher_SOURCE_DIR}/src/monocypher.c"
+        "${monocypher_SOURCE_DIR}/src/optional/monocypher-ed25519.c"
+    )
+    target_include_directories(${TARGET_NAME} PRIVATE
+        "${monocypher_SOURCE_DIR}/src"
+        "${monocypher_SOURCE_DIR}/src/optional"
+    )
+endif()
+
 if(CASIOEMU_WEB OR IOS)
     target_compile_definitions(${TARGET_NAME} PRIVATE DISABLE_SENTRY ASMJIT_NO_JIT)
     if(CASIOEMU_WEB)
@@ -638,7 +669,7 @@ if(CASIOEMU_WEB)
             -sMODULARIZE=1
             -sEXPORT_NAME=CasioEmuCoreModule
             "SHELL:-sEXPORTED_RUNTIME_METHODS=['FS','IDBFS','ccall','cwrap','HEAPU8']"
-            "SHELL:-sEXPORTED_FUNCTIONS=['_main','_malloc','_free','_casioemu_core_set_model_id','_casioemu_core_init_real_rom','_casioemu_core_init_real_rom_with_flash','_casioemu_core_init_sim_rom','_casioemu_core_shutdown','_casioemu_core_start','_casioemu_core_stop','_casioemu_core_reset','_casioemu_core_is_running','_casioemu_core_cpu_time','_casioemu_core_qr_update','_casioemu_core_qr_active','_casioemu_core_qr_version','_casioemu_core_qr_revision','_casioemu_core_qr_data','_casioemu_core_button_event','_casioemu_core_sdl_key_event','_casioemu_core_bind_sdl_key','_casioemu_core_set_display_color','_casioemu_core_set_screen_shadow','_casioemu_core_update_frame','_casioemu_core_frame_ptr','_casioemu_core_frame_width','_casioemu_core_frame_height','_casioemu_core_status_alpha_ptr','_casioemu_core_status_alpha_len','_casioemu_core_set_solar_voltage','_casioemu_core_set_battery_voltage','_casioemu_core_persistent_ram_size','_casioemu_core_save_persistent_ram','_casioemu_core_load_persistent_ram','_casioemu_core_snapshot_ptr','_casioemu_core_snapshot_len','_casioemu_core_save_snapshot','_casioemu_core_load_snapshot','_casioemu_core_rom_version','_casioemu_core_gui_supported','_casioemu_core_gui_attach','_casioemu_core_gui_detach','_casioemu_core_gui_is_attached','_casioemu_core_gui_frame','_casioemu_core_gui_frame_ptr','_casioemu_core_gui_frame_len','_casioemu_core_gui_width','_casioemu_core_gui_height','_casioemu_core_gui_set_locale','_casioemu_core_gui_pointer','_casioemu_core_gui_wheel','_casioemu_core_gui_key','_casioemu_core_gui_text','_casioemu_core_gui_want_text_input','_casioemu_core_gui_ime_visible','_casioemu_core_gui_ime_x','_casioemu_core_gui_ime_y','_casioemu_core_gui_ime_line_height','_casioemu_core_gui_set_clipboard_text','_casioemu_core_gui_clipboard_write_pending','_casioemu_core_gui_clipboard_write_text','_casioemu_core_gui_clipboard_write_revision','_casioemu_core_gui_clipboard_write_ack','_casioemu_core_gui_file_request_pending','_casioemu_core_gui_file_request_kind','_casioemu_core_gui_file_request_path','_casioemu_core_gui_file_request_name','_casioemu_core_gui_file_request_ack','_casioemu_core_gui_file_request_complete']"
+            "SHELL:-sEXPORTED_FUNCTIONS=['_main','_malloc','_free','_casioemu_core_set_status_indicators','_casioemu_core_set_eps_config','_casioemu_core_set_model_id','_casioemu_core_init_real_rom','_casioemu_core_init_real_rom_with_flash','_casioemu_core_init_sim_rom','_casioemu_core_shutdown','_casioemu_core_start','_casioemu_core_stop','_casioemu_core_reset','_casioemu_core_is_running','_casioemu_core_cpu_time','_casioemu_core_qr_update','_casioemu_core_qr_active','_casioemu_core_qr_version','_casioemu_core_qr_revision','_casioemu_core_qr_data','_casioemu_core_button_event','_casioemu_core_sdl_key_event','_casioemu_core_bind_sdl_key','_casioemu_core_set_display_color','_casioemu_core_set_screen_shadow','_casioemu_core_update_frame','_casioemu_core_frame_ptr','_casioemu_core_frame_width','_casioemu_core_frame_height','_casioemu_core_status_alpha_ptr','_casioemu_core_status_alpha_len','_casioemu_core_set_solar_voltage','_casioemu_core_set_battery_voltage','_casioemu_core_persistent_ram_size','_casioemu_core_save_persistent_ram','_casioemu_core_load_persistent_ram','_casioemu_core_snapshot_ptr','_casioemu_core_snapshot_len','_casioemu_core_save_snapshot','_casioemu_core_load_snapshot','_casioemu_core_rom_version','_casioemu_core_gui_supported','_casioemu_core_gui_attach','_casioemu_core_gui_detach','_casioemu_core_gui_is_attached','_casioemu_core_gui_frame','_casioemu_core_gui_frame_ptr','_casioemu_core_gui_frame_len','_casioemu_core_gui_width','_casioemu_core_gui_height','_casioemu_core_gui_set_locale','_casioemu_core_gui_pointer','_casioemu_core_gui_wheel','_casioemu_core_gui_key','_casioemu_core_gui_text','_casioemu_core_gui_want_text_input','_casioemu_core_gui_ime_visible','_casioemu_core_gui_ime_x','_casioemu_core_gui_ime_y','_casioemu_core_gui_ime_line_height','_casioemu_core_gui_set_clipboard_text','_casioemu_core_gui_clipboard_write_pending','_casioemu_core_gui_clipboard_write_text','_casioemu_core_gui_clipboard_write_revision','_casioemu_core_gui_clipboard_write_ack','_casioemu_core_gui_file_request_pending','_casioemu_core_gui_file_request_kind','_casioemu_core_gui_file_request_path','_casioemu_core_gui_file_request_name','_casioemu_core_gui_file_request_ack','_casioemu_core_gui_file_request_complete']"
             "SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/locales@/locales"
             "SHELL:--preload-file ${GUI_FONT_SUBSET}@/fonts/CasioEmuGuiCJKSubset.otf"
             "SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/roms.db@/roms.db"
@@ -774,38 +805,15 @@ elseif(BUILD_EXECUTABLE)
             ws2_32
         )
         set_target_properties(${TARGET_NAME} PROPERTIES PREFIX "")
-    elseif(APPLE AND NOT IOS)
+    elseif(APPLE)
         find_library(APPKIT_FRAMEWORK AppKit)
         find_library(SECURITY_FRAMEWORK Security REQUIRED)
         target_link_libraries(${TARGET_NAME} PRIVATE
-            "-framework Cocoa"
-            "-framework OpenGL"
             -lpthread
             -ldl
             -lm
             ${APPKIT_FRAMEWORK}
             ${SECURITY_FRAMEWORK}
-        )
-    elseif(IOS)
-        target_link_libraries(${TARGET_NAME} PRIVATE
-            "-framework Foundation"
-            "-framework UIKit"
-            "-framework CoreGraphics"
-            "-framework QuartzCore"
-            "-framework Metal"
-            "-framework ImageIO"
-            "-framework MobileCoreServices"
-            "-framework UniformTypeIdentifiers"
-            "-framework SafariServices"
-        )
-
-        # NOTE: SysDialog.cpp is compiled for iOS from a generated .mm copy
-        # (see SYSDIALOG_IOS_MM above), not via a source-file-property
-        # override on the .cpp -- see the comment at APPLE_MM_SOURCES for
-        # why those overrides don't take effect under this generator.
-
-        set_target_properties(${TARGET_NAME} PROPERTIES
-            XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
         )
     else()
         find_package(PkgConfig QUIET)
@@ -886,7 +894,7 @@ add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
     ${ASSET_DIR}/locales
 )
 
-if(NOT WIN32 AND NOT ANDROID AND NOT IOS AND NOT APPLE AND NOT CASIOEMU_WEB)
+if(NOT WIN32 AND NOT ANDROID AND NOT IOS AND NOT CASIOEMU_WEB AND NOT APPLE)
     if(BUILD_EXECUTABLE)
         target_link_options(${TARGET_NAME} PRIVATE "-static-libgcc" "-static-libstdc++")
     endif()

@@ -38,29 +38,25 @@ public:
 #else
         inital_size = ImVec2(800, 800);
 #endif
-    }
-    const char* name{};
-    bool open = false;
-    bool bring_to_front_requested = false;
-    ImVec2 inital_size;
-    ImGuiWindowFlags flags{};
+	}
+	const char* name{};
+	bool open = true;
+	bool bring_to_front_requested = false;
+	ImVec2 inital_size;
+	ImGuiWindowFlags flags{};
 
-    virtual void Render() {
-        if (!open && !bring_to_front_requested)
-            return;
-        #if defined(__ANDROID__) || defined(IOS)
-        ImGui::PushStyleVar(
-            ImGuiStyleVar_WindowPadding,
-            ImVec2(ThemeManager::Instance().padding,
-                   ThemeManager::Instance().padding));
-        #endif
-
-        ImGui::SetNextWindowSize(inital_size, ImGuiCond_FirstUseEver);
-
-        if (bring_to_front_requested) {
-            ImGui::SetNextWindowFocus();
-            bring_to_front_requested = false;
-        }
+	virtual void Render() {
+		if (!open)
+			return;
+#ifdef __ANDROID__
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+			ImVec2(ThemeManager::Instance().padding, ThemeManager::Instance().padding));
+#endif
+		if (bring_to_front_requested) {
+			ImGui::SetNextWindowFocus();
+			bring_to_front_requested = false;
+		}
+		ImGui::SetNextWindowSize(inital_size, ImGuiCond_FirstUseEver);
 #ifdef CASIOEMU_CORE_WEB
 		if (ImGui::Begin(name, nullptr, flags)) {
 #else
