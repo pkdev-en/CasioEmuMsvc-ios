@@ -885,6 +885,10 @@ static bool CreateDesktopShortcutWebClip(const std::filesystem::path& model_path
 		return false;
 	}
 	return presentCreateHomeScreenWebClip(modelId.c_str(), shortcut_name.c_str());
+#elif defined(__APPLE__)
+static bool CreateDesktopShortcut(const std::filesystem::path& model_path, const std::string& shortcut_name, const std::string& icon_path_str) {
+	std::cerr << "[Shortcut] macOS shortcut creation not implemented yet\n";
+	return false;
 }
 #endif
 
@@ -950,21 +954,11 @@ namespace casioemu {
 				std::getline(api_settings, value);
 				if (!value.empty()) std::snprintf(online_api, sizeof(online_api), "%s", value.c_str());
 			}
-			// OnlineModelClient's constructor throws when the API address is
-			// empty, and online_api starts empty unless online_api.cfg exists
-			// (it doesn't on a fresh install). Don't construct it at all in
-			// that case — there's no online API configured, so there's no
-			// token to load either.
-			if (online_api[0] != '\0') {
-				try {
-					OnlineModelClient client{online_api};
-					online_access_token = LoadOnlineToken(client.ApiBase());
-				}
-				catch (...) {
-					online_access_token.clear();
-				}
+			try {
+				OnlineModelClient client{online_api};
+				online_access_token = LoadOnlineToken(client.ApiBase());
 			}
-			else {
+			catch (...) {
 				online_access_token.clear();
 			}
 			std::ifstream ifs2{"roms.db", std::ifstream::binary};
@@ -992,17 +986,29 @@ namespace casioemu {
 			}
 			std::thread thd([&]() {
 				models.clear();
-				try {
-					for (auto& dir : std::filesystem::directory_iterator("models")) {
-						if (dir.path().filename() == ".online") continue;
-						if (dir.is_directory()) {
-							try {
-								printf("[StartupUI][Info] Checking %s\n", dir.path().string().c_str());
-								std::error_code ec;
-								std::string load_error;
-								ModelInfo mi{};
-								if (!LoadModelInfoFromFolder(dir.path(), mi, nullptr, &load_error)) {
-									printf("[StartupUI][Info] Unable to load model configuration for %s: %s\n", dir.path().string().c_str(), load_error.c_str());
+				for (auto& dir : std::filesystem::directory_iterator("models")) {
+					if (dir.path().filename() == ".online") continue;
+					if (dir.is_directory()) {
+						try {
+							printf("[StartupUI][Info] Checking %s\n", dir.path().string().c_str());
+							std::error_code ec;
+							std::string load_error;
+							ModelInfo mi{};
+							if (!LoadModelInfoFromFolder(dir.path(), mi, nullptr, &load_error)) {
+								printf("[StartupUI][Info] Unable to load model configuration for %s: %s\n", dir.path().string().c_str(), load_error.c_str());
+								continue;
+							}
+							Model mod{};
+							mod.path = dir;
+							mod.name = mi.model_name;
+							mod.realhw = mi.real_hardware;
+							mod.type = HardwareStartupFilter(mi.hardware_id);
+							{
+								std::filesystem::path romPath = dir.path() / mi.rom_path;
+								if (mi.rom_path.empty() || !std::filesystem::exists(romPath) || !std::filesystem::is_regular_file(romPath, ec))
+									continue;
+								std::ifstream ifs2(romPath, std::ios::in | std::ios::binary);
+								if (!ifs2)
 									continue;
 								}
 								Model mod{};
@@ -1170,10 +1176,7 @@ namespace casioemu {
 
 		void InvalidateOnlineLogin() {
 			ClearOnlineSessionState();
-			if (online_api[0] != '\0') {
-				try { ClearOnlineToken(OnlineModelClient{online_api}.ApiBase()); }
-				catch (...) {}
-			}
+			ClearOnlineToken(OnlineModelClient{online_api}.ApiBase());
 			online_status = "StartupUI.OnlineLoginExpired"_lc;
 		}
 
@@ -1333,20 +1336,14 @@ namespace casioemu {
 				online_authorization_pending = false;
 				online_authorization_deadline = 0;
 				if (online_loopback) { online_loopback->Stop(); online_loopback.reset(); }
-				if (online_api[0] != '\0') {
-					try { SaveOnlineToken(OnlineModelClient{online_api}.ApiBase(), online_access_token); }
-					catch (...) {}
-				}
+				SaveOnlineToken(OnlineModelClient{online_api}.ApiBase(), online_access_token);
 				online_status = OnlineTokenPersistenceAvailable()
 					? std::string("StartupUI.OnlineLoginSuccess"_lc)
 					: std::string("StartupUI.OnlineLoginSessionOnly"_lc);
 				BeginLoadOnlineModels();
 				break;
 			case OnlineOperation::Logout:
-				if (online_api[0] != '\0') {
-					try { ClearOnlineToken(OnlineModelClient{online_api}.ApiBase()); }
-					catch (...) {}
-				}
+				ClearOnlineToken(OnlineModelClient{online_api}.ApiBase());
 				ClearOnlineSessionState();
 				online_status = "StartupUI.OnlineLoggedOut"_lc;
 				break;

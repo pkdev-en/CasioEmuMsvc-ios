@@ -1,9 +1,9 @@
 #include "UpdateChecker.h"
 #include "Config.hpp"
 #include "../../../McpPlugin/json.hpp"
-#if !defined(__ANDROID__) && !defined(__IOS__)
+#ifndef __ANDROID__
 #include <curl/curl.h>
-#elif defined(__ANDROID__)
+#else
 #include <jni.h>
 #include <SDL_system.h>
 #endif
@@ -152,8 +152,6 @@ UpdateInfo Check() {
 	env->DeleteLocalRef(url); if (!bytes) throw std::runtime_error("release request failed");
 	const jsize len = env->GetArrayLength(bytes); body.assign(static_cast<size_t>(len), '\0');
 	env->GetByteArrayRegion(bytes, 0, len, reinterpret_cast<jbyte*>(body.data())); env->DeleteLocalRef(bytes);
-#elif defined(__IOS__)
-	throw std::runtime_error("update check not supported on iOS");
 #else
 	CURL* c = curl_easy_init(); if (!c) throw std::runtime_error("curl init failed");
 	curl_slist* h = nullptr;
@@ -199,5 +197,8 @@ void UpdateChecker::Start() {
 }
 bool UpdateChecker::Ready() const { return state_->ready.load(std::memory_order_acquire); }
 UpdateInfo UpdateChecker::TakeResult() { std::lock_guard lock(state_->mutex); return state_->result; }
+void UpdateChecker::DismissForToday(const std::string& tag) const { SaveDismissal(tag); }
+}
+k(state_->mutex); return state_->result; }
 void UpdateChecker::DismissForToday(const std::string& tag) const { SaveDismissal(tag); }
 }

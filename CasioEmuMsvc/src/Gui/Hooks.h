@@ -30,6 +30,15 @@ struct EpsFunctionEventArgs {
 	uint32_t accumulator{};
 	std::string backtrace;
 };
+struct StandaloneFunctionEventArgs {
+	FunctionEventArgs function{};
+	uint32_t accumulator{};
+	std::string backtrace;
+};
+
+using EpsFunctionEventArgs = StandaloneFunctionEventArgs;
+extern std::function<void(const StandaloneFunctionEventArgs&)> on_t4x_call_function;
+extern std::function<void(const StandaloneFunctionEventArgs&)> on_t4x_function_return;
 
 extern std::function<void(casioemu::CPU&, InstructionEventArgs&)> on_instruction;
 

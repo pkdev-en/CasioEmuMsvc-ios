@@ -200,9 +200,7 @@ namespace __temp_namesp_1456456 {
 		return digits;
 	}
 	inline std::string BCD2Str(const char* p) {
-		if (!p)
-			return "?";
-		if (m_emu->hardware_id == casioemu::HW_TI) {
+		if (m_emu->hardware_id == casioemu::HW_TI_MATH_PRINT) {
 			return TiBCD2Str(p);
 		}
 		auto sz = casioemu::GetVariableSize(m_emu->hardware_id);
@@ -401,4 +399,5 @@ namespace casioemu {
 	using __temp_namesp_1456456::TiBCD2Str;
 	using __temp_namesp_1456456::BCD2Str;
 	using __temp_namesp_1456456::ConvHex;
+}56::ConvHex;
 }

@@ -1,36 +1,28 @@
-#pragma once
+﻿#pragma once
 #include <SDL.h>
-#include "Ui.hpp"
-#include "imgui/imgui.h"
 #include "RendererBackend.h"
 
 inline constexpr const char* SCREEN_MIRROR_WINDOW_DATA_KEY = "CasioEmu.ScreenMirror";
 
-class ScreenMirror;
-extern ScreenMirror* g_mirror;
-class ScreenMirror : public UIWindow {
-public:
-	bool is_tab;
+class ScreenMirror {
 private:
-	SDL_Window* mirrorWindow = nullptr;
-	SDL_Renderer* mirrorRenderer = nullptr;
-	SDL_Texture* mirrorTexture = nullptr;
+	SDL_Window* mirrorWindow;
+	SDL_Renderer* mirrorRenderer;
 	int captureWidth;
 	int captureHeight;
 	Uint32 windowId;
 	SDL_Rect displayRect;
-	int lastWindowWidth = 0;
-	int lastWindowHeight = 0;
-	bool watchingEvents = false;
+	bool isOpen;
+	bool watchingEvents;
 
 	static int SDLCALL eventWatch(void* userdata, SDL_Event* event) {
 		auto* self = static_cast<ScreenMirror*>(userdata);
-		if (!self || !event || !self->open || event->type != SDL_WINDOWEVENT || event->window.windowID != self->windowId) {
+		if (!self || !event || !self->isOpen || event->type != SDL_WINDOWEVENT || event->window.windowID != self->windowId) {
 			return 0;
 		}
 
 		if (event->window.event == SDL_WINDOWEVENT_CLOSE) {
-			self->open = false;
+			self->isOpen = false;
 		}
 		else if (event->window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
 			self->updateDisplayRect(event->window.data1, event->window.data2);
@@ -59,8 +51,8 @@ private:
 	}
 
 public:
-	ScreenMirror(int captureWidth, int captureHeight, bool is_tab = false)
-		: UIWindow("Screen Mirror"), is_tab(is_tab), captureWidth(captureWidth), captureHeight(captureHeight), windowId(0), watchingEvents(false) {
+	ScreenMirror(int captureWidth, int captureHeight)
+		: mirrorWindow(nullptr), mirrorRenderer(nullptr), captureWidth(captureWidth), captureHeight(captureHeight), windowId(0), isOpen(false), watchingEvents(false) {
 	}
 
 	~ScreenMirror() override {
@@ -74,60 +66,33 @@ public:
 				SDL_TEXTUREACCESS_STREAMING,
 				captureWidth, captureHeight);
 
-			if (!mirrorTexture) {
-				SDL_Log("Error creating mirror texture: %s", SDL_GetError());
-				return false;
-			}
-
-			open = true;
-			bring_to_front_requested = true;
-			return true;
-		} else {
-			mirrorWindow = SDL_CreateWindow("Live Mirror",
-				SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-				captureWidth, captureHeight,
-				SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
-
-			if (!mirrorWindow) {
-				SDL_Log("Error creating mirror window: %s", SDL_GetError());
-				return false;
-			}
-
-			windowId = SDL_GetWindowID(mirrorWindow);
-			SDL_SetWindowData(mirrorWindow, SCREEN_MIRROR_WINDOW_DATA_KEY, this);
-
-			casioemu::SetPreferredRendererDriverHint();
-			mirrorRenderer = SDL_CreateRenderer(mirrorWindow, -1,
-				SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-
-			if (!mirrorRenderer) {
-				SDL_Log("Error creating mirror renderer: %s", SDL_GetError());
-				SDL_SetWindowData(mirrorWindow, SCREEN_MIRROR_WINDOW_DATA_KEY, nullptr);
-				SDL_DestroyWindow(mirrorWindow);
-				mirrorWindow = nullptr;
-				return false;
-			}
-
-			mirrorTexture = SDL_CreateTexture(mirrorRenderer,
-				SDL_PIXELFORMAT_RGBA32,
-				SDL_TEXTUREACCESS_STREAMING,
-				captureWidth, captureHeight);
-
-			if (!mirrorTexture) {
-				SDL_DestroyRenderer(mirrorRenderer);
-				SDL_DestroyWindow(mirrorWindow);
-				mirrorRenderer = nullptr;
-				mirrorWindow = nullptr;
-				return false;
-			}
-
-			updateDisplayRect(captureWidth, captureHeight);
-
-			open = true;
-			SDL_AddEventWatch(eventWatch, this);
-			watchingEvents = true;
-			return true;
+		if (!mirrorWindow) {
+			SDL_Log("Error creating mirror window: %s", SDL_GetError());
+			return false;
 		}
+		windowId = SDL_GetWindowID(mirrorWindow);
+		SDL_SetWindowData(mirrorWindow, SCREEN_MIRROR_WINDOW_DATA_KEY, this);
+
+		casioemu::SetPreferredRendererDriverHint();
+		mirrorRenderer = SDL_CreateRenderer(mirrorWindow, -1,
+			SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+
+		if (!mirrorRenderer) {
+			SDL_Log("Error creating mirror renderer: %s", SDL_GetError());
+			SDL_SetWindowData(mirrorWindow, SCREEN_MIRROR_WINDOW_DATA_KEY, nullptr);
+			SDL_DestroyWindow(mirrorWindow);
+			mirrorWindow = nullptr;
+			return false;
+		}
+
+		int windowWidth = captureWidth;
+		int windowHeight = captureHeight;
+		updateDisplayRect(windowWidth, windowHeight);
+
+		isOpen = true;
+		SDL_AddEventWatch(eventWatch, this);
+		watchingEvents = true;
+		return true;
 	}
 
 	void destroy() {
@@ -137,6 +102,49 @@ public:
 		}
 		if (mirrorRenderer) {
 			SDL_DestroyRenderer(mirrorRenderer);
+			mirrorRenderer = nullptr;
+		}
+		if (mirrorWindow) {
+			SDL_SetWindowData(mirrorWindow, SCREEN_MIRROR_WINDOW_DATA_KEY, nullptr);
+			SDL_DestroyWindow(mirrorWindow);
+			mirrorWindow = nullptr;
+		}
+		windowId = 0;
+		isOpen = false;
+	}
+
+	bool handleEvents() {
+		return isOpen;
+	}
+
+	SDL_Renderer* renderer() const {
+		return mirrorRenderer;
+	}
+
+	SDL_Rect contentRect() {
+		int windowWidth = 0, windowHeight = 0;
+		SDL_GetWindowSize(mirrorWindow, &windowWidth, &windowHeight);
+		updateDisplayRect(windowWidth, windowHeight);
+		return displayRect;
+	}
+
+	void clear(const SDL_Color& colour) {
+		if (!isOpen)
+			return;
+
+		SDL_SetRenderDrawColor(mirrorRenderer, colour.r, colour.g, colour.b, colour.a);
+		SDL_RenderClear(mirrorRenderer);
+	}
+
+	void present() {
+		if (!isOpen)
+			return;
+		SDL_RenderPresent(mirrorRenderer);
+	}
+
+	bool isAlive() const { return isOpen; }
+};
+DL_DestroyRenderer(mirrorRenderer);
 			mirrorRenderer = nullptr;
 		}
 		if (mirrorWindow) {

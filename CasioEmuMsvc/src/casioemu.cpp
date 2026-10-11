@@ -491,6 +491,10 @@ int main(int argc, char* argv[]) {
 	}
 	while (true) {
 #ifdef __IOS__
+	if (argv_map["model"].empty()) {
+		auto selection = sui_loop();
+		argv_map["model"] = std::move(selection.model_path);
+		startup_resources = std::move(selection.resources);
 		if (argv_map["model"].empty()) {
 			// A Quick Action may have requested a specific model before
 			// this process's C++ main() even started running (see
@@ -710,6 +714,9 @@ int main(int argc, char* argv[]) {
 
 			SDL_RenderPresent(emulator.renderer);
 #else
+			if (!no_dbg) {
+				gui_loop();
+			}
 			emulator.Frame();
 			if (!no_dbg) {
 				gui_loop();
@@ -753,19 +760,17 @@ int main(int argc, char* argv[]) {
 		switch (event.type) {
 		case SDL_WINDOWEVENT:
 			switch (event.window.event) {
-			case SDL_WINDOWEVENT_CLOSE: {
-				if (SDL_Window* closedWindow = SDL_GetWindowFromID(eventWindowId)) {
-					if (SDL_GetWindowData(closedWindow, SCREEN_MIRROR_WINDOW_DATA_KEY)) {
-						break;
-					}
+			case SDL_WINDOWEVENT_CLOSE:
+				// The mirror event watcher can destroy its window before this queued
+				// close event reaches the main loop. In that case SDL_GetWindowFromID
+				// can no longer identify it, so only close the application for one of
+				// the two actual application windows.
+				if ((!emulator.window || eventWindowId != SDL_GetWindowID(emulator.window)) &&
+					(!window || eventWindowId != SDL_GetWindowID(window))) {
+					break;
 				}
-				extern SDL_Window* window; // This is the debugger window
-				if (event.window.windowID == SDL_GetWindowID(emulator.window)) {
-					emulator.Shutdown();
-					std::exit(0);
-				} else if (window && event.window.windowID == SDL_GetWindowID(window)) {
-					std::exit(0);
-				}
+				emulator.Shutdown();
+				std::exit(0);
 				break;
 			}
 			case SDL_WINDOWEVENT_RESIZED:

@@ -154,6 +154,17 @@ void RenderStatusBar() {
 #endif
 	ImGui::PushStyleColor(ImGuiCol_WindowBg, statusBg);
 	
+	ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x, viewport->Pos.y + viewport->Size.y - barHeight));
+	ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, barHeight));
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 2.0f));
+#ifdef CASIOEMU_CORE_WEB
+	ImVec4 statusBg = ImGui::GetStyle().Colors[ImGuiCol_WindowBg];
+	statusBg.w = std::max(statusBg.w, 0.82f);
+	ImGui::PushStyleColor(ImGuiCol_WindowBg, statusBg);
+#else
+	ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.08f, 0.08f, 0.12f, 1.0f));
+#endif
+	
 	if (ImGui::Begin("##StatusBar", nullptr, 
 		ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | 
 		ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
@@ -243,6 +254,15 @@ static void RenderDebuggerGuiWindows() {
 	RenderDockSpace(GetStatusBarHeight());
 #endif
 	for (auto win : windows) {
+#ifndef __ANDROID__
+	ImGuiID dockspace_id = RenderDockSpace(GetStatusBarHeight());
+#endif
+	for (auto win : windows) {
+#ifndef __ANDROID__
+		if (dockspace_id != 0) {
+			ImGui::SetNextWindowDockID(dockspace_id, ImGuiCond_FirstUseEver);
+		}
+#endif
 		win->Render();
 	}
 }
@@ -327,31 +347,32 @@ static void RenderDebuggerGuiWindows() {
             }
         }
 #endif
+}
 
-        if (ImGui::TabItemButton(ThemeManager::Instance().Settings().isDarkMode ? "Light Theme" : "Dark Theme")) {
-            if (ThemeManager::Instance().Settings().isDarkMode)
-                ThemeManager::Instance().SetLightMode();
-            else
-                ThemeManager::Instance().SetDarkMode();
-        }
+void gui_loop() {
+	if (!m_emu->Running())
+		return;
 
-        ImGui::EndTabBar();
-    }
+	ImGuiIO& io = ImGui::GetIO();
+
+#ifdef __ANDROID__
+	ThemeManager::Instance().UpdateUIScale();
+#endif
 
 #ifndef CASIOEMU_CORE_WEB
-    if (m_emu->screenshot_taken.exchange(false))
-        screenshot_toast_timer = 3.0f;
-
-    if (screenshot_toast_timer > 0.0f) {
-        ImGui::SameLine(ImGui::GetWindowWidth() - 250.0f);
-        ImGui::TextColored(ImVec4(0.2f,1.0f,0.2f,1.0f), "[C] Screenshot Saved!");
-        screenshot_toast_timer -= ImGui::GetIO().DeltaTime;
-    }
-
-    if (m_emu->recording_active.load()) {
-        ImGui::SameLine(ImGui::GetWindowWidth() - (screenshot_toast_timer > 0.0f ? 450.0f : 200.0f));
-        ImGui::TextColored(ImVec4(1.0f,0.2f,0.2f,1.0f), "[O] Recording: %u frames", m_emu->recording_frame_count.load());
-    }
+	ImGui_ImplSDLRenderer2_NewFrame();
+	ImGui_ImplSDL2_NewFrame();
+#endif
+	ImGui::NewFrame();
+	RenderDebuggerGuiWindows();
+	ImGui::Render();
+#ifndef CASIOEMU_CORE_WEB
+#ifdef SINGLE_WINDOW
+	ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData());
+#else
+	ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData());
+	SDL_RenderPresent(renderer);
+#endif
 #endif
 }
 
@@ -364,6 +385,73 @@ static float getSafeAreaTop() {
     return safeTop;
 }
 #endif
+static CodeViewer* CreateDebuggerGuiWindows() {
+	while (!me_mmu && !m_emu->chipset.t4x)
+		std::this_thread::sleep_for(std::chrono::microseconds(1));
+	const bool multiview = m_emu->chipset.t4x != nullptr;
+	const bool nx_tools = !casioemu::IsEpsFamily(m_emu->hardware_id) && !multiview;
+	std::filesystem::path label_file = m_emu->GetModelFilePath("labels.txt");
+	if (!label_file.empty() && std::filesystem::exists(label_file))
+		g_labels = parseFile(label_file.string());
+	else if (!m_emu->IsMemoryModel())
+		std::cout << "[Warning] " << label_file.string() << " doesn't exist. You can consider create one for better debugging experiences. Format: address(0x1234),func name(can be quoted)\n";
+
+	if (m_emu->hardware_id == casioemu::HW_FX_5800P) {
+		windows.push_back(CreateFx5800FileSystem());
+	}
+
+	if (m_emu->hardware_id != casioemu::HW_SOLARII && nx_tools) {
+		windows.push_back(new VariableWindow());
+	}
+
+	windows.push_back(new HwController());
+	if (!multiview) windows.push_back(new LabelViewer());
+	auto* watch_window = new WatchWindow();
+	windows.push_back(watch_window);
+	windows.push_back(CreateCallAnalysisWindow());
+	windows.push_back(code_viewer = new CodeViewer());
+	m_emu->chipset.on_rom_changed = [] { if (code_viewer) code_viewer->PrepareDisasm(); };
+	if (nx_tools)
+		windows.push_back(injector = new Injector());
+	membp = new Breakpoints();
+	windows.push_back(membp);
+	if (!multiview) windows.push_back(CreateAddressWindow());
+	if (nx_tools) {
+#if !defined(TEST_BUILD)
+		windows.push_back(CreateRopCompilerWindow());
+#endif
+	}
+#if !defined(TEST_BUILD) && !defined(CASIOEMU_CORE_WEB)
+	windows.push_back(new PluginLogWindow());
+#endif
+#if !defined(TEST_BUILD)
+	windows.push_back(snapshot_window = static_cast<SnapshotWindow*>(CreateSnapshotWindow()));
+#endif
+#ifndef CASIOEMU_CORE_WEB
+	if (nx_tools)
+		windows.push_back(new QrCodeWindow());
+#endif
+	windows.push_back(MakeThemeWindow());
+	if (!multiview) {
+		auto* bitmap_window = CreateBitmapViewer();
+		windows.push_back(bitmap_window);
+	}
+	for (auto item : GetEditors()) {
+		windows.push_back(item);
+	}
+
+#ifdef __ANDROID__
+	for (auto item : windows) {
+		item->open = false;
+	}
+#endif
+
+	return 0;
+}
+
+#ifndef CASIOEMU_CORE_WEB
+CodeViewer* test_gui(bool* guiCreated, SDL_Window* wnd, SDL_Renderer* rnd) {
+	SDL_SetHint(SDL_HINT_IME_SHOW_UI, "1");
 
 void RenderDebuggerToolbar() {
     bool isCustom = false;
@@ -505,29 +593,9 @@ void RenderDebuggerToolbar() {
 #ifdef __IOS__
             ImGui::PopStyleVar(3);
 #endif
-        }
-
-        ImGui::SameLine(0, spacingBetweenElements);
-        ImVec2 buttonSize(buttonWidth, tm.buttonHeight * 1.2f);
-        if (ImGui::Button("Open", buttonSize)) {
-            if (current_filter != nullptr) {
-                current_filter->open = true;
-                SaveUIState();
-            }
-        }
-
-        ImGui::SameLine(0, spacingBetweenElements);
-        if (ImGui::Button("Close all", buttonSize)) {
-            for (auto* w : windows) {
-                if (w) w->open = false;
-            }
-            SaveUIState();
-        }
-
-        top_bar_size = (int)ImGui::GetCursorPosY();
-        ImGuiWindow* toolbar_win = ImGui::FindWindowByName("Overlay");
-        if (toolbar_win) ImGui::BringWindowToDisplayFront(toolbar_win);
-        ImGui::End();
+	casioemu::SetPreferredRendererDriverHint();
+	renderer = SDL_CreateRenderer(window, -1,
+		SDL_RENDERER_PRESENTVSYNC | SDL_RENDERER_ACCELERATED);
 #endif
 
     } else {
@@ -591,6 +659,8 @@ void gui_loop() {
         }
     }
 #endif
+	// RebuildFont();
+	// SetupDefaultTheme();
 
     // NOTE: no SDL_PollEvent pump here. The main loop in casioemu.cpp owns
     // the event queue and already forwards everything to ImGui via
@@ -738,10 +808,24 @@ static CodeViewer* CreateDebuggerGuiWindows() {
 		g_labels = parseFile(label_file.string());
 	else if (!m_emu->IsMemoryModel())
 		std::cout << "[Warning] " << label_file.string() << " doesn't exist. You can consider create one for better debugging experiences. Format: address(0x1234),func name(can be quoted)\n";
+	ImGui_ImplSDL2_InitForSDLRenderer(window, renderer);
+	ImGui_ImplSDLRenderer2_Init(renderer);
 
-	if (m_emu->hardware_id == casioemu::HW_FX_5800P) {
-		windows.push_back(CreateFx5800FileSystem());
+	ThemeManager::Instance().RequestFontRebuild();
+	ThemeManager::Instance().ProcessFontRebuild();
+
+	if (guiCreated)
+		*guiCreated = true;
+	return CreateDebuggerGuiWindows();
+}
+#endif
+
+#ifdef CASIOEMU_CORE_WEB
+void InitWebDebuggerGuiWindows() {
+	if (windows.empty()) {
+		CreateDebuggerGuiWindows();
 	}
+}
 
 	if (m_emu->hardware_id != casioemu::HW_SOLARII && !casioemu::IsEpsFamily(m_emu->hardware_id)) {
 		windows.push_back(new VariableWindow());
@@ -788,11 +872,21 @@ static CodeViewer* CreateDebuggerGuiWindows() {
 		bool is_calculator = (item->name && strcmp(item->name, "Calculator") == 0);
 		item->open = is_calculator;
 		item->bring_to_front_requested = false;
-	}
-#endif
-
-	return 0;
+void RenderWebDebuggerGuiWindows() {
+	RenderDebuggerGuiWindows();
 }
+
+void CleanupWebDebuggerGuiWindows() {
+	for (auto* win : windows) {
+		delete win;
+	}
+	windows.clear();
+	code_viewer = nullptr;
+	injector = nullptr;
+	membp = nullptr;
+	g_labels.clear();
+}
+#endif
 
 CodeViewer* test_gui(bool* guiCreated, SDL_Window* wnd, SDL_Renderer* rnd) {
     SDL_SetHint(SDL_HINT_IME_SHOW_UI, "1");
@@ -919,6 +1013,15 @@ void CleanupWebDebuggerGuiWindows() {
 
 namespace UIHelpers {
 	void JumpToMemory(uint32_t addr) {
+		if (m_emu->chipset.t4x) {
+			const char* name = addr < 64 ? "T4x Registers (nibbles)" :
+				addr >= 0x100 && addr < 0x500 ? "T4x WRAM (nibbles)" :
+				addr >= 0x1000 && addr < 0x2000 ? "T4x DRAM (bytes)" : nullptr;
+			if (name) for (auto* win : windows) if (strcmp(win->name, name) == 0) {
+				win->GotoMemoryAddress(addr); return;
+			}
+			return;
+		}
 		// Prefer the "Ram" window; fall back to any window that overrides GotoMemoryAddress.
 		UIWindow* fallback = nullptr;
 		for (auto* win : windows) {
@@ -1012,6 +1115,7 @@ namespace UIHelpers {
 void gui_cleanup() {
 #ifndef CASIOEMU_CORE_WEB
 #if !defined(__ANDROID__) && !defined(__IOS__)
+#ifndef __ANDROID__
 #ifndef SINGLE_WINDOW
     if (window) {
         int x, y, w, h;
@@ -1035,6 +1139,16 @@ void gui_cleanup() {
     SDL_DestroyWindow(window);
     SDL_Quit();
 #endif
+#else
+	CleanupWebDebuggerGuiWindows();
+#endif
+	ImGui_ImplSDLRenderer2_Shutdown();
+	ImGui_ImplSDL2_Shutdown();
+	ImGui::DestroyContext();
+
+	SDL_DestroyRenderer(renderer);
+	SDL_DestroyWindow(window);
+	SDL_Quit();
 #else
 	CleanupWebDebuggerGuiWindows();
 #endif

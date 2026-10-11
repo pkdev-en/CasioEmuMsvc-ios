@@ -152,11 +152,13 @@ static bool GetJNIEnv(JNIEnv **env) {
 void SystemDialogs::OpenFileDialog(std::function<void(std::filesystem::path)> callback) {
     fileOpenCallback = callback;
     JNIEnv *env;
-    if (!GetJNIEnv(&env)) return;
-
+    if (!GetJNIEnv(&env)) {
+        return;
+    }
     jobject activity = (jobject)SDL_AndroidGetActivity();
-    if (!activity) return;
-
+    if (!activity) {
+        return;
+    }
     jclass systemDialogsClass = env->FindClass("com/tele/u8emulator/SystemDialogs");
     if (!systemDialogsClass) {
         env->DeleteLocalRef(activity);
@@ -484,6 +486,9 @@ static std::string exec_apple_script(const std::string& script) {
     if (!pipe) return "";
     while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
         result += buffer.data();
+
+    JNIEXPORT void JNICALL Java_com_tele_u8emulator_Game_onImportFailed(JNIEnv* env, jclass clazz) {
+        SDL_Log("Import failed");
     }
     // Xử lý xuống dòng thu được từ terminal mac
     result.erase(std::remove(result.begin(), result.end(), '\n'), result.end());

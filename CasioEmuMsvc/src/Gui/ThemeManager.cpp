@@ -1,3 +1,4 @@
+#include "Peripheral/OrdinaryLcdHistory.hpp"
 #include "ThemeManager.h"
 #ifndef TEST_BUILD
 
@@ -132,6 +133,7 @@ void ThemeManager::SaveSettings() {
 }
 
 void ThemeManager::LoadSettings() {
+	casioemu::ordinary_lcd_history::UntrackedChange lcd_change;
 	std::ifstream file(kThemeSettingsPath, std::ios::binary);
 	if (file.is_open()) {
 		m_settings.Read(file);
@@ -362,56 +364,12 @@ void ThemeManager::SetLightMode() {
 
 
 void ThemeManager::SetDarkMode() {
-	// Always initialize to ensure layout and color changes apply
-	ImGuiStyle base = ImGuiStyle();
-	ImGui::StyleColorsDark(&base);
-
-	// Apply Premium modern layout styles to base
-	base.WindowRounding = 8.0f;
-	base.FrameRounding = 6.0f;
-	base.TabRounding = 6.0f;
-	base.GrabRounding = 6.0f;
-	base.ScrollbarRounding = 6.0f;
-	base.ScrollbarSize = 12.0f;
-	base.WindowPadding = ImVec2(10.0f, 10.0f);
-	base.FramePadding = ImVec2(8.0f, 4.0f);
-	base.ItemSpacing = ImVec2(8.0f, 6.0f);
-
-	// Premium Dark Blue Palette overrides
-	base.Colors[ImGuiCol_WindowBg] = ImVec4(0.08f, 0.08f, 0.12f, 0.97f);
-	base.Colors[ImGuiCol_ChildBg] = ImVec4(0.05f, 0.05f, 0.07f, 1.0f);
-	base.Colors[ImGuiCol_PopupBg] = ImVec4(0.08f, 0.08f, 0.12f, 0.97f);
-	base.Colors[ImGuiCol_Border] = ImVec4(0.32f, 0.32f, 0.42f, 1.0f);
-	base.Colors[ImGuiCol_FrameBg] = ImVec4(0.12f, 0.12f, 0.18f, 1.0f);
-	base.Colors[ImGuiCol_FrameBgHovered] = ImVec4(0.18f, 0.18f, 0.26f, 1.0f);
-	base.Colors[ImGuiCol_FrameBgActive] = ImVec4(0.24f, 0.24f, 0.36f, 1.0f);
-	base.Colors[ImGuiCol_TitleBg] = ImVec4(0.06f, 0.06f, 0.09f, 1.0f);
-	base.Colors[ImGuiCol_TitleBgActive] = ImVec4(0.10f, 0.10f, 0.15f, 1.0f);
-	base.Colors[ImGuiCol_MenuBarBg] = ImVec4(0.06f, 0.06f, 0.09f, 1.0f);
-	base.Colors[ImGuiCol_CheckMark] = ImVec4(0.40f, 0.50f, 0.90f, 1.0f);
-	base.Colors[ImGuiCol_SliderGrab] = ImVec4(0.35f, 0.45f, 0.80f, 1.0f);
-	base.Colors[ImGuiCol_SliderGrabActive] = ImVec4(0.45f, 0.55f, 0.95f, 1.0f);
-	base.Colors[ImGuiCol_Button] = ImVec4(0.16f, 0.20f, 0.35f, 1.0f);
-	base.Colors[ImGuiCol_ButtonHovered] = ImVec4(0.24f, 0.30f, 0.50f, 1.0f);
-	base.Colors[ImGuiCol_ButtonActive] = ImVec4(0.30f, 0.38f, 0.65f, 1.0f);
-	base.Colors[ImGuiCol_Header] = ImVec4(0.16f, 0.20f, 0.35f, 0.8f);
-	base.Colors[ImGuiCol_HeaderHovered] = ImVec4(0.24f, 0.30f, 0.50f, 0.8f);
-	base.Colors[ImGuiCol_HeaderActive] = ImVec4(0.30f, 0.38f, 0.65f, 1.0f);
-	base.Colors[ImGuiCol_Tab] = ImVec4(0.12f, 0.14f, 0.22f, 1.0f);
-	base.Colors[ImGuiCol_TabHovered] = ImVec4(0.24f, 0.30f, 0.50f, 1.0f);
-	base.Colors[ImGuiCol_TabActive] = ImVec4(0.18f, 0.24f, 0.42f, 1.0f);
-	base.Colors[ImGuiCol_TabUnfocused] = ImVec4(0.08f, 0.10f, 0.15f, 1.0f);
-	base.Colors[ImGuiCol_TabUnfocusedActive] = ImVec4(0.12f, 0.16f, 0.26f, 1.0f);
-
-	m_settings.igs_dark = base;
-
-	// Apply the unscaled base, then scale it
-	ImGuiStyle styled = m_settings.igs_dark;
-	styled.ScaleAllSizes(m_fontScale);
-	if (ImGui::GetCurrentContext() != nullptr) {
+	EnsureThemeStyleInitialized(m_settings.igs_dark, true);
+	if (ImGui::GetCurrentContext()) {
+		ImGuiStyle styled = m_settings.igs_dark;
+		styled.ScaleAllSizes(m_fontScale);
 		ImGui::GetStyle() = styled;
 	}
-
 	m_settings.isDarkMode = true;
 	SaveSettings();
 }
@@ -777,6 +735,83 @@ void ThemeManager::ExtractAndApplyAutoTint(SDL_Texture* bgTexture, SDL_Renderer*
 	GenerateMonetPalette(dominantColor, base, m_settings.isDarkMode);
 
 	// Apply to current style
+	RequestFontRebuild();
+	SaveSettings();
+} // 小工具：把 (source_argb, factorKey) 合成一个 64bit key
+static inline uint64_t MakeHarmonizeKey(uint32_t src_argb, uint8_t factorKey) {
+	return (static_cast<uint64_t>(src_argb) << 8) | factorKey;
+}
+
+ImVec4 ThemeManager::Harmonize(const ImVec4& source, float factor) const {
+#ifndef TEST_BUILD
+	// 约束 factor 到 [0, 1]
+	factor = ImClamp(factor, 0.0f, 1.0f);
+
+	uint32_t src_argb = ImVec4ToArgb(source); // 工具函数前面已经给过
+	uint32_t seed_argb = ImVec4ToArgb(m_settings.seedColor);
+
+	// 把 factor 量化到 0~255 作为 key 的一部分
+	uint8_t fKey = static_cast<uint8_t>(factor * 255.0f + 0.5f);
+	uint64_t key = MakeHarmonizeKey(src_argb, fKey);
+
+	// 1. 先查缓存
+	auto it = m_harmonizeCache.find(key);
+	if (it != m_harmonizeCache.end()) {
+		ImVec4 cached = it->second;
+		// 使用调用者自己的 alpha
+		cached.w = source.w;
+		return cached;
+	}
+
+	// 2. 缓存未命中 -> 计算一次 HCT Harmonize
+	using namespace material_color_utilities;
+
+	Hct src_hct = Hct(src_argb);
+	Hct seed_hct = Hct(seed_argb);
+
+	double s_h = src_hct.get_hue();
+	double d_h = seed_hct.get_hue();
+
+	double diff = d_h - s_h;
+	if (diff > 180.0)
+		diff -= 360.0;
+	if (diff < -180.0)
+		diff += 360.0;
+
+	double new_h = s_h + diff * factor;
+	if (new_h < 0.0)
+		new_h += 360.0;
+	else if (new_h >= 360.0)
+		new_h -= 360.0;
+
+	// 保持原来的 chroma 和 tone，只改 hue
+	Hct out_hct(new_h, src_hct.get_chroma(), src_hct.get_tone() * 0.5 + (m_settings.isDarkMode ? 0 : 70) * 0.5);
+	uint32_t out_argb = static_cast<uint32_t>(out_hct.ToInt());
+
+	ImVec4 result = ArgbToImVec4(out_argb);
+	result.w = source.w;
+
+	// 3. 写入缓存
+	m_harmonizeCache.emplace(key, result);
+
+	return result;
+#else
+	return {};
+#endif // !TEST_BUILD
+}
+void ThemeManager::SetSeedColor(const ImVec4& color) {
+	m_settings.seedColor = color;
+
+	m_harmonizeCache.clear();
+
+	if (m_settings.enableAutoTint) {
+		ImGuiStyle& base = m_settings.isDarkMode ? m_settings.igs_dark : m_settings.igs_light;
+		GenerateMonetPalette(color, base, m_settings.isDarkMode);
+		RequestFontRebuild();
+		SaveSettings();
+	}
+}
+ly to current style
 	RequestFontRebuild();
 	SaveSettings();
 } // 小工具：把 (source_argb, factorKey) 合成一个 64bit key
