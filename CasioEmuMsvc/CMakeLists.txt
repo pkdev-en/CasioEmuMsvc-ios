@@ -713,6 +713,7 @@ if(CASIOEMU_WEB)
         )
         set_target_properties(${TARGET_NAME} PROPERTIES SUFFIX ".html")
     endif()
+endif()
 elseif(BUILD_EXECUTABLE)
     target_link_libraries(${TARGET_NAME} PRIVATE
         SDL2::SDL2main
