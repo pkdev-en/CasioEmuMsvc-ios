@@ -54,7 +54,7 @@ jobs:
     - name: Configure CMake
       if: matrix.platform == 'windows'
       working-directory: ${{env.GITHUB_WORKSPACE}}
-      run: cmake -S . -B build -A ${{ matrix.platform_arch == 'x86' && 'Win32' || 'x64' }} -DCMAKE_BUILD_TYPE=${{ env.BUILD_CONFIGURATION }} -DBUILD_EXECUTABLE=ON
+      run: cmake -S CasioEmuMsvc -B build -A ${{ matrix.platform_arch == 'x86' && 'Win32' || 'x64' }} -DCMAKE_BUILD_TYPE=${{ env.BUILD_CONFIGURATION }} -DBUILD_EXECUTABLE=ON
 
     - name: Build with CMake
       if: matrix.platform == 'windows'
@@ -95,12 +95,12 @@ jobs:
     
     # ================= MACOS =================
     - name: Install dependencies (macOS)
-      if: matrix.platform == 'mac'
+      if: matrix.platform == 'macos'
       run: |
         brew install cmake sdl2 sdl2_image ccache ninja
     
     - name: Build icons for macOS
-      if: matrix.platform == 'mac'
+      if: matrix.platform == 'macos'
       run: |
         set -e
     
@@ -141,11 +141,11 @@ jobs:
         key: mac-ccache-${{ runner.os }}-${{ hashFiles('**/CMakeLists.txt') }}
     
     - name: Build for macOS
-      if: matrix.platform == 'mac'
+      if: matrix.platform == 'macos'
       env:
         MACOSX_DEPLOYMENT_TARGET: 11.0
       run: |
-        cmake -S . -B build \
+        cmake -S CasioEmuMsvc -B build \
         -G Ninja \
         -DBUILD_EXECUTABLE=ON \
         -DCMAKE_BUILD_TYPE=Release \
@@ -158,13 +158,13 @@ jobs:
         cmake --build build --parallel 6
     
     - name: Show build tree
-      if: matrix.platform == 'mac'
+      if: matrix.platform == 'macos'
       run: |
         echo "---- BUILD TREE ----"
         ls -R build
     
     - name: Create DMG
-      if: matrix.platform == 'mac'
+      if: matrix.platform == 'macos'
       run: |
         cd build
         APP=$(find . -name "*.app" | head -n 1)
@@ -181,7 +181,7 @@ jobs:
           -format UDZO
     
     - name: Upload macOS Build Artifact
-      if: matrix.platform == 'mac'
+      if: matrix.platform == 'macos'
       uses: actions/upload-artifact@v7
       with:
         path: |
@@ -290,7 +290,7 @@ jobs:
 
         rm -rf build
 
-        cmake -S . -B build -G Xcode \
+        cmake -S CasioEmuMsvc -B build -G Xcode \
           -DCMAKE_SYSTEM_NAME=iOS \
           -DCMAKE_OSX_SYSROOT=iphoneos \
           -DCMAKE_OSX_ARCHITECTURES=arm64 \
@@ -363,33 +363,6 @@ jobs:
         find . -name "CMakeError.log" -exec cat {} \;
         find . -name "CMakeOutput.log" -exec cat {} \;
 
-    - name: Configure CMake
-      if: matrix.platform == 'macos'
-      working-directory: ${{env.GITHUB_WORKSPACE}}
-      run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ env.BUILD_CONFIGURATION }} -DBUILD_EXECUTABLE=ON -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64"
-
-    - name: Build with CMake
-      if: matrix.platform == 'macos'
-      working-directory: ${{env.GITHUB_WORKSPACE}}
-      run: cmake --build build --config ${{ env.BUILD_CONFIGURATION }} --parallel
-
-    - name: Code Sign App Bundle
-      if: matrix.platform == 'macos'
-      working-directory: ${{env.GITHUB_WORKSPACE}}
-      run: codesign --force --deep --sign - build/CasioEmuMsvc/CasioEmuMsvc.app # it may seem unnecessary but it is for precautionary purposes
-
-    - name: Package App Bundle
-      if: matrix.platform == 'macos'
-      working-directory: build/CasioEmuMsvc
-      run: ditto -c -k --sequesterRsrc --keepParent CasioEmuMsvc.app CasioEmuMsvc-macos.zip
-
-    - name: Upload macOS Build Artifact
-      if: matrix.platform == 'macos'
-      uses: actions/upload-artifact@v7
-      with:
-        path: build/CasioEmuMsvc/CasioEmuMsvc-macos.zip
-        if-no-files-found: error
-        archive: false
 
   web-build:
     runs-on: ubuntu-latest
