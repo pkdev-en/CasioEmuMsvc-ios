@@ -1,3 +1,4 @@
+#include "Peripheral/OrdinaryLcdHistory.hpp"
 #include "ThemeManager.h"
 #ifndef TEST_BUILD
 
@@ -132,6 +133,7 @@ void ThemeManager::SaveSettings() {
 }
 
 void ThemeManager::LoadSettings() {
+	casioemu::ordinary_lcd_history::UntrackedChange lcd_change;
 	std::ifstream file(kThemeSettingsPath, std::ios::binary);
 	if (file.is_open()) {
 		m_settings.Read(file);
@@ -301,9 +303,7 @@ void ThemeManager::UpdateUIScale() {
 
 	fontScale = baseScale * screenSizeAdjustment * sqrt(densityScale);
 	fontScale = std::clamp(fontScale, 0.5f, 1.5f);
-	// Keep a higher floor on mobile so body text never shrinks below a
-	// comfortably readable size, even on very dense/small screens.
-	io.FontGlobalScale = std::max(fontScale, 0.85f);
+	io.FontGlobalScale = std::max(fontScale, 0.75f);
 
 	float touchScale = std::max(fontScale, 1.0f);
 	padding = 9.5f * touchScale;
@@ -323,11 +323,6 @@ void ThemeManager::UpdateUIScale() {
 	style.GrabMinSize = 30.0f * touchScale;
 	style.WindowTitleAlign = ImVec2(0.5f, 0.5f);
 	style.MouseCursorScale = 1.2f * touchScale;
-
-	// Slightly thicker borders/separators on mobile improve contrast between
-	// rows, table headers, and grouped sections without changing the palette.
-	style.FrameBorderSize = 1.0f;
-	style.SeparatorTextBorderSize = 2.0f;
 
 	float rounding = 7.5f * std::min(touchScale, 1.3f);
 	style.WindowRounding = rounding;
@@ -362,56 +357,12 @@ void ThemeManager::SetLightMode() {
 
 
 void ThemeManager::SetDarkMode() {
-	// Always initialize to ensure layout and color changes apply
-	ImGuiStyle base = ImGuiStyle();
-	ImGui::StyleColorsDark(&base);
-
-	// Apply Premium modern layout styles to base
-	base.WindowRounding = 8.0f;
-	base.FrameRounding = 6.0f;
-	base.TabRounding = 6.0f;
-	base.GrabRounding = 6.0f;
-	base.ScrollbarRounding = 6.0f;
-	base.ScrollbarSize = 12.0f;
-	base.WindowPadding = ImVec2(10.0f, 10.0f);
-	base.FramePadding = ImVec2(8.0f, 4.0f);
-	base.ItemSpacing = ImVec2(8.0f, 6.0f);
-
-	// Premium Dark Blue Palette overrides
-	base.Colors[ImGuiCol_WindowBg] = ImVec4(0.08f, 0.08f, 0.12f, 0.97f);
-	base.Colors[ImGuiCol_ChildBg] = ImVec4(0.05f, 0.05f, 0.07f, 1.0f);
-	base.Colors[ImGuiCol_PopupBg] = ImVec4(0.08f, 0.08f, 0.12f, 0.97f);
-	base.Colors[ImGuiCol_Border] = ImVec4(0.32f, 0.32f, 0.42f, 1.0f);
-	base.Colors[ImGuiCol_FrameBg] = ImVec4(0.12f, 0.12f, 0.18f, 1.0f);
-	base.Colors[ImGuiCol_FrameBgHovered] = ImVec4(0.18f, 0.18f, 0.26f, 1.0f);
-	base.Colors[ImGuiCol_FrameBgActive] = ImVec4(0.24f, 0.24f, 0.36f, 1.0f);
-	base.Colors[ImGuiCol_TitleBg] = ImVec4(0.06f, 0.06f, 0.09f, 1.0f);
-	base.Colors[ImGuiCol_TitleBgActive] = ImVec4(0.10f, 0.10f, 0.15f, 1.0f);
-	base.Colors[ImGuiCol_MenuBarBg] = ImVec4(0.06f, 0.06f, 0.09f, 1.0f);
-	base.Colors[ImGuiCol_CheckMark] = ImVec4(0.40f, 0.50f, 0.90f, 1.0f);
-	base.Colors[ImGuiCol_SliderGrab] = ImVec4(0.35f, 0.45f, 0.80f, 1.0f);
-	base.Colors[ImGuiCol_SliderGrabActive] = ImVec4(0.45f, 0.55f, 0.95f, 1.0f);
-	base.Colors[ImGuiCol_Button] = ImVec4(0.16f, 0.20f, 0.35f, 1.0f);
-	base.Colors[ImGuiCol_ButtonHovered] = ImVec4(0.24f, 0.30f, 0.50f, 1.0f);
-	base.Colors[ImGuiCol_ButtonActive] = ImVec4(0.30f, 0.38f, 0.65f, 1.0f);
-	base.Colors[ImGuiCol_Header] = ImVec4(0.16f, 0.20f, 0.35f, 0.8f);
-	base.Colors[ImGuiCol_HeaderHovered] = ImVec4(0.24f, 0.30f, 0.50f, 0.8f);
-	base.Colors[ImGuiCol_HeaderActive] = ImVec4(0.30f, 0.38f, 0.65f, 1.0f);
-	base.Colors[ImGuiCol_Tab] = ImVec4(0.12f, 0.14f, 0.22f, 1.0f);
-	base.Colors[ImGuiCol_TabHovered] = ImVec4(0.24f, 0.30f, 0.50f, 1.0f);
-	base.Colors[ImGuiCol_TabActive] = ImVec4(0.18f, 0.24f, 0.42f, 1.0f);
-	base.Colors[ImGuiCol_TabUnfocused] = ImVec4(0.08f, 0.10f, 0.15f, 1.0f);
-	base.Colors[ImGuiCol_TabUnfocusedActive] = ImVec4(0.12f, 0.16f, 0.26f, 1.0f);
-
-	m_settings.igs_dark = base;
-
-	// Apply the unscaled base, then scale it
-	ImGuiStyle styled = m_settings.igs_dark;
-	styled.ScaleAllSizes(m_fontScale);
-	if (ImGui::GetCurrentContext() != nullptr) {
+	EnsureThemeStyleInitialized(m_settings.igs_dark, true);
+	if (ImGui::GetCurrentContext()) {
+		ImGuiStyle styled = m_settings.igs_dark;
+		styled.ScaleAllSizes(m_fontScale);
 		ImGui::GetStyle() = styled;
 	}
-
 	m_settings.isDarkMode = true;
 	SaveSettings();
 }
@@ -427,7 +378,7 @@ void ThemeManager::ApplyDefaultTheme() {
 	style.Colors[ImGuiCol_WindowBg] = ImVec4(0.08f, 0.08f, 0.12f, 0.97f);
 	style.Colors[ImGuiCol_ChildBg] = ImVec4(0.05f, 0.05f, 0.07f, 1.0f);
 	style.Colors[ImGuiCol_PopupBg] = ImVec4(0.08f, 0.08f, 0.12f, 0.97f);
-	style.Colors[ImGuiCol_Border] = ImVec4(0.32f, 0.32f, 0.42f, 1.0f);
+	style.Colors[ImGuiCol_Border] = ImVec4(0.18f, 0.18f, 0.24f, 1.0f);
 	style.Colors[ImGuiCol_FrameBg] = ImVec4(0.12f, 0.12f, 0.18f, 1.0f);
 	style.Colors[ImGuiCol_FrameBgHovered] = ImVec4(0.18f, 0.18f, 0.26f, 1.0f);
 	style.Colors[ImGuiCol_FrameBgActive] = ImVec4(0.24f, 0.24f, 0.36f, 1.0f);
