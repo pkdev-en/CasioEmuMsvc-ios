@@ -1,4 +1,5 @@
 #include "Emulator.hpp"
+#include "Chipset/T4xCore.hpp"
 #include "Chipset/Chipset.hpp"
 #include "Logger.hpp"
 #include "ModelConfig.h"
@@ -78,7 +79,7 @@ namespace casioemu {
 		}
 
 		bool ShouldLimitSpeed(const ModelInfo& model) {
-			return IsEpsFamily(model.hardware_id) || model.real_hardware ||
+			return model.hardware_id == HW_TI_MULTI_VIEW || IsEpsFamily(model.hardware_id) || model.real_hardware ||
 				model.extra.find("limit_spd") != model.extra.end();
 		}
 
@@ -129,7 +130,6 @@ namespace casioemu {
 				const char* label;
 			};
 			const RendererAttempt attempts[] = {
-				{SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE | SDL_RENDERER_PRESENTVSYNC, "accelerated target texture (vsync)"},
 				{SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE, "accelerated target texture"},
 				{SDL_RENDERER_TARGETTEXTURE, "target texture"},
 				{0, "default"}
@@ -225,6 +225,7 @@ namespace casioemu {
 			cycles_per_second = GetEpsCyclesPerSecond(ModelDefinition);
 			eps_timer1_source_hz = GetEpsTimer1SourceHz(ModelDefinition);
 		}
+		if (hardware_id == HW_TI_MULTI_VIEW) cycles_per_second = 1000000; // Microsecond scheduling, as in the reference JS.
 		timer_interval = GetTimerInterval(hardware_id);
 
 		cycles.Setup(cycles_per_second, timer_interval);
@@ -272,16 +273,6 @@ namespace casioemu {
 		if (!window)
 			PANIC("SDL_CreateWindow failed: %s\n", SDL_GetError());
 		SetPreferredRendererDriverHint();
-		// [Perf fix — 2026-09-03 13:44 GMT+7] VSYNC added: without it, SDL_RenderPresent() pushes frames out
-		// whenever the software timer in casioemu.cpp happens to fire,
-		// completely decoupled from the display's real refresh cycle.
-		// With it, the driver blocks Present() until the next actual
-		// vblank, so output cadence tracks whatever the panel/OS chooses
-		// (60Hz on older iPhones, up to 120Hz on ProMotion) rather than a
-		// hard-coded number — old and new devices each get paced at their
-		// own native rate instead of one being forced above/below it.
-		// (CreateRendererWithTargetTexture tries this combination first,
-		// falling back through non-vsync/software options only if needed.)
 		renderer = CreateRendererWithTargetTexture(window);
 		if (!renderer)
 			PANIC("SDL_CreateRenderer failed: %s\n", SDL_GetError());
@@ -301,23 +292,14 @@ namespace casioemu {
 		if (!interface_surface)
 			PANIC("IMG_Load failed: %s\n", IMG_GetError());
 		interface_texture = SDL_CreateTextureFromSurface(renderer, interface_surface);
-		
-		Uint32 format;
-		SDL_QueryTexture(interface_texture, &format, nullptr, nullptr, nullptr);
-		if (!interface_texture)
-			PANIC("interface_texture null");
-		this->tx = SDL_CreateTexture(renderer, format, SDL_TEXTUREACCESS_TARGET, interface_background.dest.w, interface_background.dest.h);
-		if (!tx)
-			PANIC("Failed to create tx: %s\n", SDL_GetError());
-
 
 		SetupInternals();
 		cycles.Reset();
 		// EPS reset clears CPU/SFR state but preserves its RAM image. Do this before
 		// the worker starts so firmware sees a clean reset with the restored RAM.
-		if (IsEpsFamily(hardware_id))
+		if (IsEpsFamily(hardware_id) || hardware_id == HW_TI_MULTI_VIEW)
 			chipset.Reset();
-		if (IsEpsFamily(hardware_id) && argv_map.find("paused") != argv_map.end())
+		if ((IsEpsFamily(hardware_id) || hardware_id == HW_TI_MULTI_VIEW) && argv_map.find("paused") != argv_map.end())
 			SetPaused(true);
 		#ifdef __EMSCRIPTEN__
 		tick_thread = nullptr;
@@ -347,6 +329,7 @@ namespace casioemu {
 			tick_thread = new std::thread([this] {
 				while (1) {
 					{
+						const std::lock_guard execution_lock(access_mx);
 						if (!Running())
 							break;
 						if (!Paused)
@@ -377,7 +360,7 @@ namespace casioemu {
 
 		RunStartupScript();
 
-		if (!IsEpsFamily(hardware_id))
+		if (!IsEpsFamily(hardware_id) && hardware_id != HW_TI_MULTI_VIEW)
 			chipset.Reset();
 
 		if (argv_map.find("paused") != argv_map.end())
@@ -407,6 +390,7 @@ namespace casioemu {
 			cycles_per_second = GetEpsCyclesPerSecond(ModelDefinition);
 			eps_timer1_source_hz = GetEpsTimer1SourceHz(ModelDefinition);
 		}
+		if (hardware_id == HW_TI_MULTI_VIEW) cycles_per_second = 1000000; // Microsecond scheduling, as in the reference JS.
 		timer_interval = GetTimerInterval(hardware_id);
 
 		cycles.Setup(cycles_per_second, timer_interval);
@@ -470,7 +454,7 @@ namespace casioemu {
 		cycles.Reset();
 		// EPS reset clears CPU/SFR state but preserves its RAM image. Do this before
 		// the worker starts so firmware sees a clean reset with the restored RAM.
-		if (IsEpsFamily(hardware_id))
+		if (IsEpsFamily(hardware_id) || hardware_id == HW_TI_MULTI_VIEW)
 			chipset.Reset();
 		if (!headless) {
 		#ifdef __EMSCRIPTEN__
@@ -501,6 +485,7 @@ namespace casioemu {
 				tick_thread = new std::thread([this] {
 					while (1) {
 						{
+							const std::lock_guard execution_lock(access_mx);
 							if (!Running())
 								break;
 							if (!Paused)
@@ -532,7 +517,7 @@ namespace casioemu {
 			RunStartupScript();
 		}
 
-		if (!IsEpsFamily(hardware_id))
+		if (!IsEpsFamily(hardware_id) && hardware_id != HW_TI_MULTI_VIEW)
 			chipset.Reset();
 	}
 
@@ -543,6 +528,9 @@ namespace casioemu {
 			delete tick_thread;
 
 			// std::lock_guard<decltype(access_mx)> access_lock(access_mx);
+			// Peripherals own SDL resources (including screen capture and mirror
+			// resources), so destroy them before the renderer they use.
+			delete& chipset;
 
 			if (scaled_interface_texture)
 				SDL_DestroyTexture(scaled_interface_texture);
@@ -553,7 +541,9 @@ namespace casioemu {
 			SDL_DestroyWindow(window);
 		}
 
-		delete& chipset;
+		else {
+			delete& chipset;
+		}
 	}
 
 	void Emulator::HandleMemoryError() {
@@ -633,20 +623,11 @@ namespace casioemu {
 
 	std::string Emulator::GetModelFilePath(std::string relative_path) const {
 		if (model_resources) return {};
+		return
 #ifdef __ANDROID__
-    return (
-        std::filesystem::path(SDL_AndroidGetExternalStoragePath()) /
-        model_path /
-        relative_path
-    ).string();
-
+		(SDL_AndroidGetExternalStoragePath() / std::filesystem::path(model_path) / relative_path).string();
 #else
-
-    return (
-        std::filesystem::path(model_path) /
-        relative_path
-    ).string();
-
+			(std::filesystem::path(model_path) / relative_path).string();
 #endif
 	}
 
@@ -674,20 +655,30 @@ namespace casioemu {
 	}
 
 	void Emulator::TimerCallback() {
+		const std::lock_guard execution_lock(access_mx);
+		if (hardware_id == HW_TI_MULTI_VIEW) {
+			const auto elapsed = cycles.GetDelta();
+			if (Paused) { frame_cycle_remainder.store(0); return; }
+			const auto total = frame_cycle_remainder.load() + elapsed;
+			frame_cycle_remainder.store(total % 1000);
+			for (Uint64 i = 0; i < total / 1000 && !Paused; ++i) chipset.RunTiMultiViewFrame();
+			if (Paused) frame_cycle_remainder.store(0);
+			return;
+		}
 		// std::lock_guard<decltype(access_mx)> access_lock(access_mx);
 		if (IsEpsFamily(hardware_id)) {
 			constexpr Uint64 cycles_per_eps_frame = 4000;
 			const auto cycles_to_emulate = cycles.GetDelta();
 			if (Paused) {
-				eps_frame_cycle_remainder.store(0, std::memory_order_relaxed);
+				frame_cycle_remainder.store(0, std::memory_order_relaxed);
 				eps_timer1_cycle_remainder.store(0, std::memory_order_relaxed);
 				return;
 			}
-			eps_frame_cycle_remainder.fetch_add(cycles_to_emulate, std::memory_order_relaxed);
+			frame_cycle_remainder.fetch_add(cycles_to_emulate, std::memory_order_relaxed);
 			Uint64 frames_run = 0;
-			while (eps_frame_cycle_remainder.load(std::memory_order_relaxed) >= cycles_per_eps_frame) {
+			while (frame_cycle_remainder.load(std::memory_order_relaxed) >= cycles_per_eps_frame) {
 				if (Paused) {
-					eps_frame_cycle_remainder.store(0, std::memory_order_relaxed);
+					frame_cycle_remainder.store(0, std::memory_order_relaxed);
 					eps_timer1_cycle_remainder.store(0, std::memory_order_relaxed);
 					break;
 				}
@@ -703,11 +694,11 @@ namespace casioemu {
 				}
 				if (chipset.RunEpsFrame(timer1_cycles)) {
 					SetPaused(true);
-					eps_frame_cycle_remainder.store(0, std::memory_order_relaxed);
+					frame_cycle_remainder.store(0, std::memory_order_relaxed);
 					eps_timer1_cycle_remainder.store(0, std::memory_order_relaxed);
 					break;
 				}
-				eps_frame_cycle_remainder.fetch_sub(cycles_per_eps_frame, std::memory_order_relaxed);
+				frame_cycle_remainder.fetch_sub(cycles_per_eps_frame, std::memory_order_relaxed);
 				++frames_run;
 			}
 			return;
@@ -723,7 +714,6 @@ namespace casioemu {
 		// std::lock_guard<decltype(access_mx)> access_lock(access_mx);
 		// SDL_RenderPresent(renderer);
 	}
-	
 	void Emulator::Frame() {
 		if (headless)
 			return;
@@ -801,8 +791,7 @@ namespace casioemu {
 		SDL_Texture* tx = SDL_CreateTexture(renderer, format, SDL_TEXTUREACCESS_TARGET, render_target_w, render_target_h);
 
 		// render on `tx`
-		if (SDL_SetRenderTarget(renderer, tx) != 0)
-			PANIC("SetRenderTarget failed: %s\n", SDL_GetError());
+		SDL_SetRenderTarget(renderer, tx);
 		SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
 		SDL_RenderClear(renderer);
 		SDL_SetTextureColorMod(interface_texture, 255, 255, 255);
@@ -866,7 +855,6 @@ namespace casioemu {
 		// without this it leaked one full-size render-target texture's
 		// worth of GPU memory on every single frame, unconditionally.
 		SDL_DestroyTexture(tx);
-
 		Repaint();
 	}
 
@@ -895,6 +883,9 @@ namespace casioemu {
 	}
 
 	void Emulator::SetPaused(bool _paused) {
+		const std::lock_guard execution_lock(access_mx);
+		if (!_paused && chipset.t4x && chipset.t4x->LastDebugStop().stopped())
+			chipset.t4x->RequestContinue();
 		Paused.store(_paused, std::memory_order_relaxed);
 	}
 
@@ -931,8 +922,9 @@ namespace casioemu {
 	}
 
 	void Emulator::SetClockSpeed(float speed) {
+		const std::lock_guard execution_lock(access_mx);
 		cycles.Setup((unsigned int)(cycles_per_second * speed), timer_interval);
-		eps_frame_cycle_remainder.store(0, std::memory_order_relaxed);
+		frame_cycle_remainder.store(0, std::memory_order_relaxed);
 		eps_timer1_cycle_remainder.store(0, std::memory_order_relaxed);
 	}
 
