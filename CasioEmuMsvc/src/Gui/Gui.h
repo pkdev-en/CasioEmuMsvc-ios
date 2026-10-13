@@ -39,23 +39,6 @@ inline std::string FindBestFont(const std::vector<std::string>& candidates) {
 	return "";
 }
 
-inline void AddFontsFromDir(std::vector<std::string>& candidates, const std::string& dir) {
-	if (!std::filesystem::exists(dir))
-		return;
-
-	for (auto& entry : std::filesystem::directory_iterator(dir)) {
-		if (!entry.is_regular_file())
-			continue;
-
-		auto path = entry.path().string();
-		auto ext = entry.path().extension().string();
-
-		if (ext == ".ttf" || ext == ".otf") {
-			candidates.push_back(path); // append OK
-		}
-	}
-}
-
 // -----------------------------------------------------------------------------
 // 获取等宽字体 (Monospace Font) - 核心修正
 // -----------------------------------------------------------------------------
@@ -270,17 +253,6 @@ inline void RebuildFont(float scale = 0.0f) {
 	if (scale == 0) {
 		scale = defaultscale;
 	}
-
-	// 3. External Users Fonts
-	std::vector<std::string> externalFonts;
-	AddFontsFromDir(externalFonts, "./fonts/");
-	if (!externalFonts.empty()) {
-		for (const auto& font : externalFonts) {
-			io.Fonts->AddFontFromFileTTF(font.c_str(), 15 * scale, &config, GetGlobalRanges());
-			printf("[Ui][Info] Loaded Users Fonts: %s\n", font.c_str());
-		}
-	}
-	
 
 	// 1. 加载等宽基础字体 (Monospace Base)
 	// 这是改动最大的地方，确保英文和代码符号绝对等宽
