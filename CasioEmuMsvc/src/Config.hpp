@@ -101,10 +101,6 @@ public:                       \
 
 #define EMULATOR_VERSION GIT_COMMIT_HASH
 
-#ifndef DISABLE_SENTRY
-#define DISABLE_SENTRY
-#endif
-
 #if !defined(__ANDROID__) && !defined(__EMSCRIPTEN__) && !defined(DISABLE_SENTRY)
 #define ENABLE_SENTRY
 #define SENTRY_BUILD_STATIC 1
