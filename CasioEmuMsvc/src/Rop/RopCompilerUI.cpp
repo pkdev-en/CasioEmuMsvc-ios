@@ -136,8 +136,8 @@ private:
 	// Inject feedback (transient banner)
 	double injectFeedbackTimer_ = 0.0;
 	std::string injectFeedbackText_;
-	
-	// FIX: State theo doi ban phim mobile
+
+	// iOS/Android soft-keyboard tracking
 	bool editorFocused_ = false;
 	bool isKeyboardActive_ = false;
 
@@ -546,15 +546,6 @@ private:
 			copyOutputHexToClipboard();
 		}
 		ImGui::SameLine();
-		if (ImGui::SmallButton("Paste")) {
-			pasteSourceFromClipboard();
-		}
-		if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
-			ImGui::BeginTooltip();
-			ImGui::TextDisabled("Paste clipboard text into source editor (Ctrl+V)");
-			ImGui::EndTooltip();
-		}
-		ImGui::SameLine();
 		if (ImGui::SmallButton("RopCompiler.ClearOutput"_lc)) {
 			outputBytes_.clear();
 			diagnosticsText_.clear();
@@ -695,7 +686,7 @@ private:
 		if (ImGui::IsKeyPressed(ImGuiKey_F5, false)) {
 			compile();
 		}
-		if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Enter, false)) {
+		if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Enter)) {
 			compile();
 		}
 		// Ctrl+V / Cmd+V: paste vao editor (chi khi editor khong tu xu ly)
