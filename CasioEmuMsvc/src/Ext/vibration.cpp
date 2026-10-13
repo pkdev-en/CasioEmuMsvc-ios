@@ -10,25 +10,25 @@ bool setting_DisableVibration = false;
 void Vibration::vibrate(long milliseconds) {
 	if (setting_DisableVibration)
 		return;
-    // ???JNI???
+    // 鑾峰彇JNI鐜
     JNIEnv* env = (JNIEnv*)SDL_AndroidGetJNIEnv();
     if (env == NULL) {
         return;
     }
 
-    // ???SDLActivity??
+    // 鑾峰彇SDLActivity绫?
     jclass activityClass = env->FindClass("com/tele/u8emulator/Game");
     if (activityClass == NULL) {
         return;
     }
 
-    // ???nativeVibrate??�?????ID
+    // 鑾峰彇nativeVibrate闈欐€佹柟娉曠殑ID
     jmethodID vibrateMethod = env->GetStaticMethodID(activityClass, "nativeVibrate", "(J)V");
     if (vibrateMethod == NULL) {
         return;
     }
 
-    // ???nativeVibrate??�????
+    // 璋冪敤nativeVibrate闈欐€佹柟娉?
     env->CallStaticVoidMethod(activityClass, vibrateMethod, (jlong)milliseconds);
 }
 
@@ -36,19 +36,19 @@ void Vibration::vibrate(long milliseconds) {
 extern "C"
 {
 	JNIEXPORT void JNICALL Java_com_tele_u8emulator_Game_nativeVibrate(JNIEnv* env, jclass cls, jlong milliseconds) {
-		// ???SDLActivity??
+		// 鑾峰彇SDLActivity绫?
 		jclass activityClass = env->FindClass("com/tele/u8emulator/Game");
 		if (activityClass == NULL) {
 			return;
 		}
 
-		// ???nativeVibrate??�?????ID
+		// 鑾峰彇nativeVibrate闈欐€佹柟娉曠殑ID
 		jmethodID vibrateMethod = env->GetStaticMethodID(activityClass, "nativeVibrate", "(J)V");
 		if (vibrateMethod == NULL) {
 			return;
 		}
 
-		// ???nativeVibrate??�????
+		// 璋冪敤nativeVibrate闈欐€佹柟娉?
 		env->CallStaticVoidMethod(activityClass, vibrateMethod, milliseconds);
 	}
 }
