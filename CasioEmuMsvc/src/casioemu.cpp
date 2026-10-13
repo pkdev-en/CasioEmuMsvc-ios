@@ -737,9 +737,7 @@ int main(int argc, char* argv[]) {
 		}
 
 	hld:
-		if (g_mirror && g_mirror->handleEvent(event)) {
-			continue;
-		}
+		// Desktop screen mirror windows pump their own events (see ScreenOutput).
 		int wid, hei;
 		SDL_GetWindowSize(window, &wid, &hei);
 		const Uint32 eventWindowId = GetEventWindowId(event);
