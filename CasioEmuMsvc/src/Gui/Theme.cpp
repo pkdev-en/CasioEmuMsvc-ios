@@ -1,4 +1,5 @@
 #include "Theme.h"
+#include "Peripheral/OrdinaryLcdHistory.hpp"
 #include "FileDialog.hpp"
 #ifndef CASIOEMU_CORE_WEB
 #include "SysDialog.h"
