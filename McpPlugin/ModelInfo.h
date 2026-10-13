@@ -1,9 +1,15 @@
 #pragma once
+#include <array>
+#include <cstddef>
+#include <iosfwd>
 #include <map>
+#include <istream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "Binary.h"
+#include "EpsVariant.h"
 struct Rect {
 	int x, y;
 	int w, h;
@@ -14,6 +20,9 @@ struct Rect {
 #endif
 };
 namespace casioemu {
+	inline constexpr int BUTTON_KIKO_RESET = 0xFE;
+	inline constexpr int BUTTON_KIKO_POWER = 0xFF;
+
 	enum HardwareId {
 		HW_MIN = 3,
 		HW_ES_PLUS = 3,
@@ -22,11 +31,125 @@ namespace casioemu {
 		HW_FX_5800P = 6,
 		HW_TI_MATH_PRINT = 7,
 		HW_SOLARII = 8,
-
-		HW_MAX = 8,
+		// our test ends here, so we can add new models without worrying about breaking old configs
+		HW_EPS6800 = 9,
+		HW_EPS6009 = 10,
+		HW_EPS9500 = 11,
+		HW_EPS6800_W192 = 12,
+		HW_TI_MULTI_VIEW = 13,
+		HW_MAX = HW_TI_MULTI_VIEW,
 	};
+
+	enum class EpsDisplayKind : unsigned char {
+		None,
+		DotMatrix6800,
+		Segment6009,
+		DotMatrix9500,
+		DotMatrix6800W192
+	};
+
+	enum class EpsPowerKeyBehavior : unsigned char {
+		None,
+		HostCpuReset,
+		CoreContact
+	};
+
+	struct HardwareDescriptor {
+		unsigned short hardware_id;
+		const char* display_name;
+		const char* startup_filter;
+		EpsVariant eps_variant;
+		EpsDisplayKind eps_display;
+		EpsPowerKeyBehavior eps_power_key;
+		unsigned int timer_interval_ms;
+		unsigned int minimum_press_ms;
+		size_t eps_status_size;
+	};
+
+	inline constexpr std::array<HardwareDescriptor, 11> HARDWARE_DESCRIPTORS{{
+		{HW_ES_PLUS, "ES(P)", "ESP", EpsVariant::None, EpsDisplayKind::None,
+			EpsPowerKeyBehavior::None, 20, 25, 0},
+		{HW_CLASSWIZ, "CWX", "CWX", EpsVariant::None, EpsDisplayKind::None,
+			EpsPowerKeyBehavior::None, 20, 25, 0},
+		{HW_CLASSWIZ_II, "CWII", "CWII", EpsVariant::None, EpsDisplayKind::None,
+			EpsPowerKeyBehavior::None, 20, 25, 0},
+		{HW_FX_5800P, "Fx5800p", "Fx5800p", EpsVariant::None, EpsDisplayKind::None,
+			EpsPowerKeyBehavior::None, 20, 25, 0},
+		{HW_TI_MATH_PRINT, "TI MathPrint", "TI", EpsVariant::None, EpsDisplayKind::None,
+			EpsPowerKeyBehavior::None, 20, 25, 0},
+		{HW_SOLARII, "SolarII", "SolarII", EpsVariant::None, EpsDisplayKind::None,
+			EpsPowerKeyBehavior::None, 20, 25, 0},
+		{HW_EPS6800, "EPS6800", "EPS6800", EpsVariant::Eps6800, EpsDisplayKind::DotMatrix6800,
+			EpsPowerKeyBehavior::HostCpuReset, 40, 60, 12},
+		{HW_EPS6009, "EPS6009", "EPS6009", EpsVariant::Eps6009, EpsDisplayKind::Segment6009,
+			EpsPowerKeyBehavior::HostCpuReset, 4, 0, 0},
+		{HW_EPS9500, "EPS9500", "EPS9500", EpsVariant::Eps9500, EpsDisplayKind::DotMatrix9500,
+			EpsPowerKeyBehavior::CoreContact, 20, 25, 4},
+		{HW_EPS6800_W192, "EPS6800_W192", "EPS6800_W192", EpsVariant::Eps6800W192, EpsDisplayKind::DotMatrix6800W192,
+			EpsPowerKeyBehavior::HostCpuReset, 40, 60, 24},
+		{HW_TI_MULTI_VIEW, "TI MultiView", "TI MV", EpsVariant::None, EpsDisplayKind::None,
+			EpsPowerKeyBehavior::None, 20, 25, 0},
+	}};
+	static_assert(HARDWARE_DESCRIPTORS.size() == static_cast<size_t>(HW_MAX - HW_MIN + 1));
+
+	inline constexpr bool HardwareDescriptorsAreComplete() {
+		for (size_t index = 0; index < HARDWARE_DESCRIPTORS.size(); ++index) {
+			if (HARDWARE_DESCRIPTORS[index].hardware_id != HW_MIN + index)
+				return false;
+		}
+		return true;
+	}
+	static_assert(HardwareDescriptorsAreComplete());
+
+	inline constexpr const HardwareDescriptor* FindHardwareDescriptor(unsigned short hardware_id) {
+		for (const auto& descriptor : HARDWARE_DESCRIPTORS) {
+			if (descriptor.hardware_id == hardware_id)
+				return &descriptor;
+		}
+		return nullptr;
+	}
+
+	inline constexpr const char* HardwareDisplayName(unsigned short hardware_id) {
+		const auto* descriptor = FindHardwareDescriptor(hardware_id);
+		return descriptor ? descriptor->display_name : "Invalid";
+	}
+
+	inline constexpr const char* HardwareStartupFilter(unsigned short hardware_id) {
+		const auto* descriptor = FindHardwareDescriptor(hardware_id);
+		return descriptor ? descriptor->startup_filter : "Unknown";
+	}
+
+	inline constexpr bool IsEpsFamily(unsigned short hardware_id) {
+		const auto* descriptor = FindHardwareDescriptor(hardware_id);
+		return descriptor && descriptor->eps_variant != EpsVariant::None;
+	}
+
+	inline constexpr bool EpsPowerKeyResetsCpu(unsigned short hardware_id) {
+		// ePS6800/ePS6009 models use the legacy host power-key reset path.
+		// ePS9500 exposes ON/C as a dedicated PA7/PB0 input and must not reset
+		// CPU/SFR state when that contact is pressed.
+		const auto* descriptor = FindHardwareDescriptor(hardware_id);
+		return descriptor && descriptor->eps_power_key == EpsPowerKeyBehavior::HostCpuReset;
+	}
+
+	inline constexpr bool IsEpsSegmentLcd(unsigned short hardware_id) {
+		const auto* descriptor = FindHardwareDescriptor(hardware_id);
+		return descriptor && descriptor->eps_display == EpsDisplayKind::Segment6009;
+	}
 	struct SpriteInfo {
 		Rect src, dest;
+		std::string svg_shape;
+		std::string svg_defs;
+		void Write(std::ostream& stm) const {
+			Binary::Write(stm, src);
+			Binary::Write(stm, dest);
+		}
+		void Read(std::istream& stm) {
+			Binary::Read(stm, src);
+			Binary::Read(stm, dest);
+			svg_shape.clear();
+			svg_defs.clear();
+		}
 	};
 	struct ColourInfo {
 		int r, g, b;
@@ -35,6 +158,8 @@ namespace casioemu {
 		Rect rect{};
 		int kiko{};
 		std::string keyname;
+		std::string svg_shape;
+		std::string svg_defs;
 		void Write(std::ostream& stm) const {
 			Binary::Write(stm, rect);
 			Binary::Write(stm, kiko);
@@ -44,6 +169,21 @@ namespace casioemu {
 			Binary::Read(stm, rect);
 			Binary::Read(stm, kiko);
 			Binary::Read(stm, keyname);
+		}
+	};
+	struct StatusIndicatorInfo {
+		std::string sprite_name;
+		unsigned short byte_offset{};
+		unsigned char bit{};
+		void Write(std::ostream& stm) const {
+			Binary::Write(stm, sprite_name);
+			Binary::Write(stm, byte_offset);
+			Binary::Write(stm, bit);
+		}
+		void Read(std::istream& stm) {
+			Binary::Read(stm, sprite_name);
+			Binary::Read(stm, byte_offset);
+			Binary::Read(stm, bit);
 		}
 	};
 	struct ModelInfo {
@@ -65,8 +205,15 @@ namespace casioemu {
 		bool LARGE_model{};
 		// ML620 style mirroring(1->8) or ML610 style mirroring(1->4)
 		bool ml620_mirroring{};
+		std::string board_path;
+		int screen_width{};
+		int screen_height{};
+		double screen_scale_y{};
+		std::map<std::string, int> status_sprite_indexes;
+		std::vector<StatusIndicatorInfo> status_indicators;
+		std::map<std::string, std::string> extra;
 		void Write(std::ostream& os) const {
-			Binary::Write(os, std::string("\n\nnx-U16/U8 Emulator Configuration file v51\n\n模拟器配置文件v51\n\ntệp cấu hình giả lập v51\n\n"));
+			Binary::Write(os, std::string("\n\nnx-U16/U8 Emulator Configuration file v53\n\n模拟器配置文件v53\n\ntệp cấu hình giả lập v53\n\n"));
 			Binary::Write(os, csr_mask);
 			Binary::Write(os, hardware_id);
 			Binary::Write(os, real_hardware);
@@ -84,12 +231,46 @@ namespace casioemu {
 			Binary::Write(os, u16_mode);
 			Binary::Write(os, LARGE_model);
 			Binary::Write(os, ml620_mirroring);
+			Binary::Write(os, extra);
+			Binary::Write(os, status_sprite_indexes);
+
+			std::vector<std::string> button_svg_shapes;
+			std::vector<std::string> button_svg_defs;
+			button_svg_shapes.reserve(buttons.size());
+			button_svg_defs.reserve(buttons.size());
+			for (const auto& button : buttons) {
+				button_svg_shapes.push_back(button.svg_shape);
+				button_svg_defs.push_back(button.svg_defs);
+			}
+			Binary::Write(os, button_svg_shapes);
+			Binary::Write(os, button_svg_defs);
+
+			std::map<std::string, std::string> sprite_svg_shapes;
+			std::map<std::string, std::string> sprite_svg_defs;
+			for (const auto& [name, sprite] : sprites) {
+				if (!sprite.svg_shape.empty())
+					sprite_svg_shapes[name] = sprite.svg_shape;
+				if (!sprite.svg_defs.empty())
+					sprite_svg_defs[name] = sprite.svg_defs;
+			}
+			Binary::Write(os, sprite_svg_shapes);
+			Binary::Write(os, sprite_svg_defs);
+			Binary::Write(os, board_path);
+			Binary::Write(os, screen_width);
+			Binary::Write(os, screen_height);
+			Binary::Write(os, screen_scale_y);
+			Binary::Write(os, status_indicators);
 		}
 		void Read(std::istream& is) {
-			{
-				std::string unused;
-				Binary::Read(is, unused);
-			}
+			status_sprite_indexes.clear();
+			status_indicators.clear();
+			board_path.clear();
+			screen_width = 0;
+			screen_height = 0;
+			screen_scale_y = 0;
+			std::string format_header;
+			Binary::Read(is, format_header);
+			const bool has_status_indicators = format_header.find("v53") != std::string::npos;
 			Binary::Read(is, csr_mask);
 			Binary::Read(is, hardware_id);
 			Binary::Read(is, real_hardware);
@@ -105,7 +286,7 @@ namespace casioemu {
 			Binary::Read(is, is_sample_rom);
 			Binary::Read(is, legacy_ko);
 			// set default value if loaded a old config
-			if (hardware_id == HW_ES_PLUS) {
+			if (hardware_id == HW_ES_PLUS || hardware_id == HW_SOLARII) {
 				u16_mode = false;
 			}
 			else {
@@ -126,136 +307,39 @@ namespace casioemu {
 			Binary::Read(is, u16_mode);
 			Binary::Read(is, LARGE_model);
 			Binary::Read(is, ml620_mirroring);
-		}
-	};
-} // namespace casioemu#pragma once
-#include <map>
-#include <string>
-#include <vector>
+			Binary::Read(is, extra);
+			if (is.peek() != std::char_traits<char>::eof()) {
+				Binary::Read(is, status_sprite_indexes);
 
-#include "Binary.h"
-struct Rect {
-	int x, y;
-	int w, h;
-#ifdef SDL_rect_h_
-	constexpr operator SDL_Rect() const {
-		return {x, y, w, h};
-	}
-#endif
-};
-namespace casioemu {
-	enum HardwareId {
-		HW_MIN = 3,
-		HW_ES_PLUS = 3,
-		HW_CLASSWIZ = 4,
-		HW_CLASSWIZ_II = 5,
-		HW_FX_5800P = 6,
-		HW_TI_MATH_PRINT = 7,
-		HW_SOLARII = 8,
+				std::vector<std::string> button_svg_shapes;
+				std::vector<std::string> button_svg_defs;
+				Binary::Read(is, button_svg_shapes);
+				Binary::Read(is, button_svg_defs);
+				for (size_t ix = 0; ix < buttons.size(); ++ix) {
+					if (ix < button_svg_shapes.size())
+						buttons[ix].svg_shape = std::move(button_svg_shapes[ix]);
+					if (ix < button_svg_defs.size())
+						buttons[ix].svg_defs = std::move(button_svg_defs[ix]);
+				}
 
-		HW_MAX = 8,
-	};
-	struct SpriteInfo {
-		Rect src, dest;
-	};
-	struct ColourInfo {
-		int r, g, b;
-	};
-	struct ButtonInfo {
-		Rect rect{};
-		int kiko{};
-		std::string keyname;
-		void Write(std::ostream& stm) const {
-			Binary::Write(stm, rect);
-			Binary::Write(stm, kiko);
-			Binary::Write(stm, keyname);
-		}
-		void Read(std::istream& stm) {
-			Binary::Read(stm, rect);
-			Binary::Read(stm, kiko);
-			Binary::Read(stm, keyname);
-		}
-	};
-	struct ModelInfo {
-		std::vector<ButtonInfo> buttons;
-		std::map<std::string, SpriteInfo> sprites;
-		ColourInfo ink_color{};
-		std::string interface_path;
-		std::string model_name;
-		std::string rom_path;
-		std::string flash_path;
-		unsigned short csr_mask{};
-		unsigned short hardware_id{};
-		bool real_hardware{};
-		unsigned char pd_value{};
-		bool enable_new_screen{};
-		bool is_sample_rom{};
-		bool legacy_ko{};
-		bool u16_mode{};
-		bool LARGE_model{};
-		// ML620 style mirroring(1->8) or ML610 style mirroring(1->4)
-		bool ml620_mirroring{};
-		void Write(std::ostream& os) const {
-			Binary::Write(os, std::string("\n\nnx-U16/U8 Emulator Configuration file v51\n\n模拟器配置文件v51\n\ntệp cấu hình giả lập v51\n\n"));
-			Binary::Write(os, csr_mask);
-			Binary::Write(os, hardware_id);
-			Binary::Write(os, real_hardware);
-			Binary::Write(os, pd_value);
-			Binary::Write(os, buttons);
-			Binary::Write(os, sprites);
-			Binary::Write(os, ink_color);
-			Binary::Write(os, interface_path);
-			Binary::Write(os, model_name);
-			Binary::Write(os, rom_path);
-			Binary::Write(os, flash_path);
-			Binary::Write(os, enable_new_screen);
-			Binary::Write(os, is_sample_rom);
-			Binary::Write(os, legacy_ko);
-			Binary::Write(os, u16_mode);
-			Binary::Write(os, LARGE_model);
-			Binary::Write(os, ml620_mirroring);
-		}
-		void Read(std::istream& is) {
-			{
-				std::string unused;
-				Binary::Read(is, unused);
+				std::map<std::string, std::string> sprite_svg_shapes;
+				std::map<std::string, std::string> sprite_svg_defs;
+				Binary::Read(is, sprite_svg_shapes);
+				Binary::Read(is, sprite_svg_defs);
+				for (auto& [name, shape] : sprite_svg_shapes)
+					sprites[name].svg_shape = std::move(shape);
+				for (auto& [name, defs] : sprite_svg_defs)
+					sprites[name].svg_defs = std::move(defs);
+
+				if (is.peek() != std::char_traits<char>::eof()) {
+					Binary::Read(is, board_path);
+					Binary::Read(is, screen_width);
+					Binary::Read(is, screen_height);
+					Binary::Read(is, screen_scale_y);
+					if (has_status_indicators && is.peek() != std::char_traits<char>::eof())
+						Binary::Read(is, status_indicators);
+				}
 			}
-			Binary::Read(is, csr_mask);
-			Binary::Read(is, hardware_id);
-			Binary::Read(is, real_hardware);
-			Binary::Read(is, pd_value);
-			Binary::Read(is, buttons);
-			Binary::Read(is, sprites);
-			Binary::Read(is, ink_color);
-			Binary::Read(is, interface_path);
-			Binary::Read(is, model_name);
-			Binary::Read(is, rom_path);
-			Binary::Read(is, flash_path);
-			Binary::Read(is, enable_new_screen);
-			Binary::Read(is, is_sample_rom);
-			Binary::Read(is, legacy_ko);
-			// set default value if loaded a old config
-			if (hardware_id == HW_ES_PLUS) {
-				u16_mode = false;
-			}
-			else {
-				u16_mode = true;
-			}
-			if (hardware_id == HW_SOLARII) {
-				LARGE_model = false;
-			}
-			else {
-				LARGE_model = true;
-			}
-			if (hardware_id == HW_CLASSWIZ) {
-				ml620_mirroring = false;
-			}
-			else {
-				ml620_mirroring = true;
-			}
-			Binary::Read(is, u16_mode);
-			Binary::Read(is, LARGE_model);
-			Binary::Read(is, ml620_mirroring);
 		}
 	};
 } // namespace casioemu
