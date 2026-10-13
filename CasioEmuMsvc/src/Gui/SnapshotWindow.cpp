@@ -406,7 +406,7 @@ void SnapshotWindow::RenderDetails() {
 
     if (ImGui::GetTime() - m_LoadSuccessTime < 3.0) {
         ImGui::Spacing();
-        ImGui::TextColored(UIHelpers::kColorSuccess, "[v] Loaded");
+        ImGui::TextColored(UIHelpers::kColorSuccess, "✔ Loaded");
     }
 
     ImGui::EndChild();
