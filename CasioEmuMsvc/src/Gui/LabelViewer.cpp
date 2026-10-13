@@ -49,14 +49,12 @@ void LabelViewer::RenderCore() {
 			ImGui::PopID();
 
 			ImGui::TableNextColumn();
-			UIHelpers::ClickableAddress(lb.start, UIHelpers::JumpTarget::Memory);
+			UIHelpers::ClickableAddress(lb.start);
 
 			ImGui::TableNextColumn();
 			std::string desc = lb.desc;
 			ltrim(desc);
-			if (ImGui::Selectable(desc.c_str())) {
-				UIHelpers::JumpToMemory(lb.start);
-			}
+			ImGui::TextUnformatted(desc.c_str());
 		}
 		ImGui::EndTable();
 	}
@@ -97,12 +95,10 @@ void LabelViewer::RenderCore() {
 			ImGui::PopID();
 
 			ImGui::TableNextColumn();
-			UIHelpers::ClickableAddress(lb->base, UIHelpers::JumpTarget::Memory);
+			UIHelpers::ClickableAddress(lb->base);
 
 			ImGui::TableNextColumn();
-			if (ImGui::Selectable(lb->description.c_str())) {
-				UIHelpers::JumpToMemory(lb->base);
-			}
+			ImGui::TextUnformatted(lb->description.c_str());
 		}
 		ImGui::EndTable();
 	}
