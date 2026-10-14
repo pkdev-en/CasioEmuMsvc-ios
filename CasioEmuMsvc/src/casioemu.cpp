@@ -273,16 +273,40 @@ int main(int argc, char* argv[]) {
 		// moment to finish before loading translations, since an empty
 		// locales/ here means every "..."_lc lookup silently falls back to
 		// printing the raw key instead of translated text.
-		for (int attempt = 0; attempt < 40; ++attempt) {
-			std::error_code ec;
-			bool hasLocaleFiles = false;
-			if (std::filesystem::exists("./locales", ec)) {
-				for (auto& entry : std::filesystem::directory_iterator("./locales", ec)) {
-					if (entry.path().extension() == ".lc") { hasLocaleFiles = true; break; }
-				}
+		// FIX: waiting for "any .lc file" was not enough -- the Java side copies the
+		// files one by one, so Load() could run while the selected language (or a
+		// half-written file) was still missing and every "..."_lc showed its raw key.
+		// Wait until en_US.lc and the saved language are both present and their
+		// size stopped changing, for up to ~10 seconds.
+		{
+			auto fileSizeOf = [](const std::string& p) -> long long {
+				std::error_code sec;
+				const auto sz = std::filesystem::file_size(p, sec);
+				return sec ? -1 : static_cast<long long>(sz);
+			};
+			std::string wanted = "en_US";
+			{
+				std::ifstream lf("locale.txt");
+				std::string t;
+				if ((lf >> t) && t != "C") wanted = t;
 			}
-			if (hasLocaleFiles) break;
-			std::this_thread::sleep_for(std::chrono::milliseconds(50));
+			long long lastWanted = -2, lastEnglish = -2;
+			int stableRounds = 0;
+			for (int attempt = 0; attempt < 200; ++attempt) {
+				const long long wantedSize = fileSizeOf("./locales/" + wanted + ".lc");
+				const long long englishSize = fileSizeOf("./locales/en_US.lc");
+				// After ~2s stop requiring the saved language: it may not exist at all.
+				const bool wantedReady = wantedSize > 0 || attempt >= 40;
+				if (englishSize > 0 && wantedReady && wantedSize == lastWanted && englishSize == lastEnglish) {
+					if (++stableRounds >= 2) break;
+				}
+				else {
+					stableRounds = 0;
+				}
+				lastWanted = wantedSize;
+				lastEnglish = englishSize;
+				std::this_thread::sleep_for(std::chrono::milliseconds(50));
+			}
 		}
 	}
 #endif
