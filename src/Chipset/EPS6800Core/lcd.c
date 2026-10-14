@@ -482,4 +482,3 @@ void lcd_reset_state(struct lcd_state *state) {
 	state->w192_bus_phase = 0;
 	lcd_w192_update_gpio(state);
 }
-
