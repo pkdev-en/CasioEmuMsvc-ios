@@ -404,5 +404,3 @@ bool machine_state_import_ram(
 	}
 	return true;
 }
-
-
