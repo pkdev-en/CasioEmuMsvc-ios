@@ -30,7 +30,10 @@ public:
 	void Load() {
 		std::fstream fs("locale.txt", std::ios::in);
 		std::string locale;
-		if (fs >> locale) {
+		// "C" is what older builds wrote to locale.txt when the locale file was not
+		// on disk yet (Android asset extraction race). It means "no translations",
+		// so never treat it as a real choice: fall back to English and keep going.
+		if ((fs >> locale) && locale != "C") {
 			ChangeLanguage(locale);
 		}
 		else {
@@ -47,11 +50,33 @@ public:
 				m_missingKeys.clear();
 			}
 			m_currentLocale = localeName;
+
+			// Always load the English file first as a baseline. Any key missing from the
+			// selected language (or the whole language, if its file is missing or still
+			// being copied) then shows English instead of the raw key.
+			bool baselineLoaded = false;
+			if (localeName != "en_US") {
+				std::error_code baseEc;
+				const std::filesystem::path enPath = std::filesystem::path(m_basePath) / "en_US.lc";
+				if (std::filesystem::exists(enPath, baseEc)) {
+					try {
+						LoadTranslationsFromFile(enPath);
+						baselineLoaded = true;
+					}
+					catch (const std::exception&) {
+						m_translations.clear();
+						m_pluralRules.clear();
+					}
+				}
+			}
+
 			std::filesystem::path filePath =
 				std::filesystem::path(m_basePath) / (localeName + ".lc");
 
+			bool loaded = false;
 			if (std::filesystem::exists(filePath)) {
 				LoadTranslationsFromFile(filePath);
+				loaded = true;
 			}
 			else {
 				if (!std::filesystem::exists(m_basePath)) {
@@ -63,11 +88,15 @@ public:
 					LoadTranslationsFromString(it->second);
 					std::ofstream outFile(filePath);
 					outFile << it->second;
+					loaded = true;
 				}
-				else {
-					//LoadTranslationsFromString(DefaultLocales::en_US);
-					m_currentLocale = "C";
-				}
+			}
+			if (!loaded) {
+				// Requested language is not available (yet): keep the English baseline and
+				// do NOT persist this to locale.txt, otherwise one early start without the
+				// files would lock the app into raw keys forever.
+				m_currentLocale = baselineLoaded ? "en_US" : "C";
+				savesetting = false;
 			}
 			if (savesetting) {
 				std::fstream fs("locale.txt", std::ios::out);
