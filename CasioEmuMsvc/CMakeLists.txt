@@ -264,6 +264,11 @@ file(GLOB MAIN_SOURCES_ROP "${SOURCE_DIR}/Rop/*.cpp")
 file(GLOB MAIN_SOURCES_GUI "${SOURCE_DIR}/Gui/*.cpp")
 file(GLOB MAIN_SOURCES_IMGUI "${SOURCE_DIR}/Gui/imgui/*.cpp")
 file(GLOB MAIN_SOURCES_JIT "${SOURCE_DIR}/JitU8/*.cpp")
+# AsmJit is not built on iOS/Web (no JIT allowed on iOS, add_subdirectory(asmjit) is skipped),
+# so JitU8.cpp cannot find <asmjit/core.h>. It has no users outside its own file; drop it there.
+if(IOS OR CASIOEMU_WEB)
+    set(MAIN_SOURCES_JIT "")
+endif()
 file(GLOB MAIN_SOURCES_PERIPHERAL CONFIGURE_DEPENDS "${SOURCE_DIR}/Peripheral/*.cpp")
 file(GLOB MAIN_SOURCES_PLUGIN "${SOURCE_DIR}/Plugin/*.cpp")
 file(GLOB MAIN_SOURCES_STARTUP CONFIGURE_DEPENDS "${SOURCE_DIR}/StartupUi/*.cpp")
