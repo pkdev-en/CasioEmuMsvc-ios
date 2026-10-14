@@ -109,5 +109,3 @@ void machine_state_run_frame(struct machine_state *state) {
 	machine_state_run_chunks(state, MACHINE_FRAME_ACTIVE_CHUNKS, true);
 	machine_state_run_chunks(state, MACHINE_FRAME_IDLE_CHUNKS, false);
 }
-
-
