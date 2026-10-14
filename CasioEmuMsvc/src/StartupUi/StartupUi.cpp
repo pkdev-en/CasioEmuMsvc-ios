@@ -1419,7 +1419,7 @@ namespace casioemu {
 				online_status = "StartupUI.OnlineAuthorizationExpired"_lc;
 			}
 			const ImVec2 viewport_size = ImGui::GetMainViewport()->WorkSize;
-#ifdef __ANDROID__
+#ifdef CASIOEMU_MOBILE
 			const ImVec2 online_popup_size(viewport_size.x * 0.96f, viewport_size.y * 0.90f);
 #else
 			const ImVec2 online_popup_size(
@@ -1551,7 +1551,7 @@ namespace casioemu {
 			}
 			if (show_update && std::filesystem::exists("locale.txt")) {
 				const ImVec2 work_size = ImGui::GetMainViewport()->WorkSize;
-#ifdef __ANDROID__
+#ifdef CASIOEMU_MOBILE
 				const ImVec2 update_popup_size(work_size.x * 0.96f, work_size.y * 0.90f);
 #else
 				const ImVec2 update_popup_size(
