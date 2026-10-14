@@ -83,5 +83,3 @@ bool lcd_raw_write_byte_state(struct lcd_state *state, size_t addr, uint8_t valu
 void lcd_reset_state(struct lcd_state *state);
 
 #endif /* FX_EMU_CORE_LCD_INTERNAL_H */
-
-
