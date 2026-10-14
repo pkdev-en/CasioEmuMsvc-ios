@@ -29,6 +29,10 @@
 #undef min
 #undef max
 #endif
+#if defined(__IOS__) || defined(IOS)
+#define CASIOEMU_IOS_MEDIA 1
+#include "../Ext/IOSMedia.h"
+#endif
 #ifdef __ANDROID__
 #include <android/api-level.h>
 #include <android/log.h>
@@ -127,6 +131,8 @@ namespace casioemu {
 		if (externalPath && *externalPath) {
 			return std::filesystem::path(externalPath) / "recordings" / name;
 		}
+#elif defined(CASIOEMU_IOS_MEDIA)
+		return std::filesystem::path("recordings") / name;
 #endif
 		return std::filesystem::path(name);
 	}
@@ -244,6 +250,20 @@ namespace casioemu {
 		}
 
 		ReleaseDC(NULL, hdcScreen);
+#elif defined(CASIOEMU_IOS_MEDIA)
+		// Same as Android: also put the screenshot in the Photos library and on the clipboard.
+		if (iosSaveImageToPhotos(static_cast<const uint8_t*>(screenSurface->pixels), screenSurface->w, screenSurface->h, screenSurface->pitch)) {
+			SDL_Log("Screenshot sent to Photos");
+		}
+		else {
+			SDL_Log("Error saving screenshot to Photos");
+		}
+		if (iosCopyImageToClipboard(static_cast<const uint8_t*>(screenSurface->pixels), screenSurface->w, screenSurface->h, screenSurface->pitch)) {
+			SDL_Log("Screenshot copied to clipboard");
+		}
+		else {
+			SDL_Log("Failed to copy screenshot to clipboard");
+		}
 #else
 		SDL_Log("Clipboard copy not implemented for this platform");
 #endif
@@ -530,7 +550,45 @@ namespace casioemu {
 	};
 #endif
 
-#if !defined(__ANDROID__) && !defined(IOS)
+#ifdef CASIOEMU_IOS_MEDIA
+	// iOS: hardware H.264 encoder through AVAssetWriter (see Ext/IOSMedia.mm).
+	// Same interface as AndroidVideoEncoder.
+	class IosVideoEncoder {
+	public:
+		~IosVideoEncoder() {
+			Stop();
+		}
+
+		bool Start(const std::filesystem::path& path, int videoWidth, int videoHeight, int videoFps) {
+			Stop();
+			if (!EnsureParentDirectory(path)) {
+				return false;
+			}
+			handle = iosVideoWriterCreate(path.string().c_str(), videoWidth, videoHeight, std::max(1, videoFps));
+			return handle != nullptr;
+		}
+
+		bool WriteRgbaFrame(const uint8_t* rgba, int pitch) {
+			return handle && iosVideoWriterAppendRGBA(handle, rgba, pitch);
+		}
+
+		void Stop() {
+			if (handle) {
+				iosVideoWriterFinish(handle);
+				handle = nullptr;
+			}
+		}
+
+		bool IsOpen() const {
+			return handle != nullptr;
+		}
+
+	private:
+		void* handle = nullptr;
+	};
+#endif
+
+#if !defined(__ANDROID__) && !defined(CASIOEMU_IOS_MEDIA)
 	class RawVideoPipe {
 	public:
 		~RawVideoPipe() {
@@ -654,8 +712,8 @@ namespace casioemu {
 		FILE* pipe = nullptr;
 #endif
 	};
-#elif defined(IOS)
-	// iOS has no popen()/system(): recording always falls back to a PNG frame sequence.
+#elif defined(CASIOEMU_IOS_MEDIA)
+	// iOS has no popen()/system(); IosVideoEncoder above is used instead (this stub is unused).
 	class RawVideoPipe {
 	public:
 		bool Start(const std::string&) { return false; }
@@ -932,7 +990,7 @@ namespace casioemu {
 
 			const std::string stem = MakeTimestampedName("recording-", "");
 			outputPath = GetRecordingOutputPath(stem + ".mp4");
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(CASIOEMU_IOS_MEDIA)
 			if (encoder.Start(outputPath, outputWidth, outputHeight, fps)) {
 				frameSequence = false;
 				recording = true;
@@ -961,8 +1019,8 @@ namespace casioemu {
 			}
 
 			recording = true;
-#ifdef __ANDROID__
-			SDL_Log("Android video encoder was not available; recording PNG frames to %s", frameDirectory.string().c_str());
+#if defined(__ANDROID__) || defined(CASIOEMU_IOS_MEDIA)
+			SDL_Log("Native video encoder was not available; recording PNG frames to %s", frameDirectory.string().c_str());
 #else
 			SDL_Log("ffmpeg was not available; recording PNG frames to %s", frameDirectory.string().c_str());
 #endif
@@ -1009,7 +1067,7 @@ namespace casioemu {
 
 			bool success = frameSequence
 				? SaveFrameAsPng()
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(CASIOEMU_IOS_MEDIA)
 				: encoder.WriteRgbaFrame(framePixels.data(), frameSurface->pitch);
 #else
 				: encoder.Write(framePixels.data(), framePixels.size());
@@ -1086,7 +1144,9 @@ namespace casioemu {
 			return true;
 		}
 
-#ifdef __ANDROID__
+#if defined(CASIOEMU_IOS_MEDIA)
+		IosVideoEncoder encoder;
+#elif defined(__ANDROID__)
 		AndroidVideoEncoder encoder;
 #else
 		RawVideoPipe encoder;
