@@ -6,6 +6,17 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#if TARGET_OS_IPHONE
+#ifndef IOS
+#define IOS
+#endif
+#ifndef __IOS__
+#define __IOS__
+#endif
+#endif
+#endif
 #ifdef __ANDROID__
 #include "AndroidSystemFont.h"
 #include "RuntimeFontGlyphCache.h"
@@ -59,6 +70,13 @@ inline std::string GetMonospaceFontPath() {
 	candidates = {
 		"/system/fonts/DroidSansMono.ttf",
 		"/system/fonts/NotoSansMono-Regular.ttf"};
+#elif defined(IOS)
+	// iOS apps cannot read /System/Library/Fonts. Use the font bundled in ./fonts
+	// (copied to the Documents dir at startup, see casioemu.cpp). Roboto covers
+	// Latin, Vietnamese, Cyrillic and Greek, which RebuildFont() merges from this file.
+	candidates = {
+		"./fonts/Roboto-Regular.ttf",
+		"fonts/Roboto-Regular.ttf"};
 #elif defined(__APPLE__)
 	candidates = {
 		"/System/Library/Fonts/Monaco.ttf",
