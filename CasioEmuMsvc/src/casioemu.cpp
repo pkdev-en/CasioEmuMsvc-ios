@@ -32,6 +32,8 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <vector>
+#include <cctype>
 #if _WIN32
 #include <Windows.h>
 #include <combaseapi.h>
@@ -175,6 +177,70 @@ static Uint32 GetEventWindowId(const SDL_Event& event) {
 	}
 }
 
+#ifdef __ANDROID__
+// Reads a file bundled in the APK (SDL resolves relative names against the assets).
+static bool ReadApkAsset(const std::string& assetPath, std::string& out) {
+	SDL_RWops* rw = SDL_RWFromFile(assetPath.c_str(), "rb");
+	if (!rw) return false;
+	out.clear();
+	char buffer[8192];
+	size_t got;
+	while ((got = SDL_RWread(rw, buffer, 1, sizeof(buffer))) > 0)
+		out.append(buffer, got);
+	SDL_RWclose(rw);
+	return true;
+}
+
+// Copies locales/*.lc from the APK into ./locales (cwd = app storage), replacing
+// a file only when its content differs, via temp file + rename so a killed app
+// can never leave a half-written .lc behind.
+static void SyncBundledLocalesFromApk() {
+	std::vector<std::string> names;
+	std::string index;
+	if (ReadApkAsset("locales/index.txt", index)) {
+		std::istringstream lines(index);
+		std::string line;
+		while (std::getline(lines, line)) {
+			while (!line.empty() && std::isspace(static_cast<unsigned char>(line.back()))) line.pop_back();
+			if (line.size() > 3 && line.compare(line.size() - 3, 3, ".lc") == 0
+				&& line.find('/') == std::string::npos && line.find('\\') == std::string::npos
+				&& line.find("..") == std::string::npos)
+				names.push_back(line);
+		}
+	}
+	if (names.empty()) {
+		names = { "de_DE.lc", "en_US.lc", "es_ES.lc", "fr_FR.lc", "ja_JP.lc",
+			"ko_KR.lc", "ru_RU.lc", "vi_VN.lc", "zh_CN.lc" };
+	}
+	std::error_code ec;
+	std::filesystem::create_directories("locales", ec);
+	int written = 0, present = 0;
+	for (const std::string& name : names) {
+		std::string data;
+		if (!ReadApkAsset("locales/" + name, data) || data.empty()) continue;
+		const std::string target = "locales/" + name;
+		{
+			std::ifstream existing(target, std::ios::binary);
+			if (existing) {
+				std::string current((std::istreambuf_iterator<char>(existing)), std::istreambuf_iterator<char>());
+				if (current == data) { ++present; continue; }
+			}
+		}
+		const std::string temp = target + ".tmp";
+		{
+			std::ofstream out(temp, std::ios::binary | std::ios::trunc);
+			out.write(data.data(), static_cast<std::streamsize>(data.size()));
+			out.flush();
+			if (!out) { SDL_Log("[Locale] failed to write %s", temp.c_str()); continue; }
+		}
+		std::filesystem::rename(temp, target, ec);
+		if (ec) { SDL_Log("[Locale] rename %s failed: %s", target.c_str(), ec.message().c_str()); continue; }
+		++written;
+	}
+	SDL_Log("[Locale] bundled locales synced: %d written, %d already current", written, present);
+}
+#endif
+
 static void ProcessImGuiEvent(const SDL_Event& event) {
 #ifdef __ANDROID__
 	if (event.type == SDL_TEXTINPUT) {
@@ -212,7 +278,18 @@ int main(int argc, char* argv[]) {
 	sentry_init(options);
 #endif
 #ifdef __ANDROID__
-	chdir(SDL_AndroidGetExternalStoragePath());
+	{
+		// chdir(NULL) fails silently: if external storage is not available yet (right
+		// after the process was killed/restarted) the cwd stayed "/", so locales/ and
+		// locale.txt were not found and every string showed its raw key.
+		const char* externalDir = SDL_AndroidGetExternalStoragePath();
+		const char* workDir = (externalDir && access(externalDir, W_OK) == 0)
+			? externalDir : SDL_AndroidGetInternalStoragePath();
+		if (workDir && chdir(workDir) == 0)
+			SDL_Log("[Locale] working directory: %s", workDir);
+		else
+			SDL_Log("[Locale] WARNING: could not enter a writable working directory");
+	}
 #elif defined(MACOS)
 	{
 		const char* home = getenv("HOME");
@@ -268,46 +345,15 @@ int main(int argc, char* argv[]) {
 #ifndef __IOS__
 #ifdef __ANDROID__
 	{
-		// Game.java's extractAssets() copies locales/*.lc into this same
-		// directory from a separate Java-side onCreate() path; give it a
-		// moment to finish before loading translations, since an empty
-		// locales/ here means every "..."_lc lookup silently falls back to
-		// printing the raw key instead of translated text.
-		// FIX: waiting for "any .lc file" was not enough -- the Java side copies the
-		// files one by one, so Load() could run while the selected language (or a
-		// half-written file) was still missing and every "..."_lc showed its raw key.
-		// Wait until en_US.lc and the saved language are both present and their
-		// size stopped changing, for up to ~10 seconds.
-		{
-			auto fileSizeOf = [](const std::string& p) -> long long {
-				std::error_code sec;
-				const auto sz = std::filesystem::file_size(p, sec);
-				return sec ? -1 : static_cast<long long>(sz);
-			};
-			std::string wanted = "en_US";
-			{
-				std::ifstream lf("locale.txt");
-				std::string t;
-				if ((lf >> t) && t != "C") wanted = t;
-			}
-			long long lastWanted = -2, lastEnglish = -2;
-			int stableRounds = 0;
-			for (int attempt = 0; attempt < 200; ++attempt) {
-				const long long wantedSize = fileSizeOf("./locales/" + wanted + ".lc");
-				const long long englishSize = fileSizeOf("./locales/en_US.lc");
-				// After ~2s stop requiring the saved language: it may not exist at all.
-				const bool wantedReady = wantedSize > 0 || attempt >= 40;
-				if (englishSize > 0 && wantedReady && wantedSize == lastWanted && englishSize == lastEnglish) {
-					if (++stableRounds >= 2) break;
-				}
-				else {
-					stableRounds = 0;
-				}
-				lastWanted = wantedSize;
-				lastEnglish = englishSize;
-				std::this_thread::sleep_for(std::chrono::milliseconds(50));
-			}
-		}
+		// FIX (raw keys on start, ~10 s slow start, back again after killing the app):
+		// we used to poll for up to 10 s until the Java side (Game.extractAssets) had
+		// copied locales/*.lc, and Load() simply ran with no translations when that
+		// did not happen in time. The locale files are bundled in the APK, so read
+		// them from there directly: no race, no waiting, always up to date.
+		SyncBundledLocalesFromApk();
+		// Only if even that failed (no bundled assets), give the Java side a short grace period.
+		for (int attempt = 0; attempt < 40 && !std::filesystem::exists("./locales/en_US.lc"); ++attempt)
+			std::this_thread::sleep_for(std::chrono::milliseconds(50));
 	}
 #endif
 	g_local.Load();
