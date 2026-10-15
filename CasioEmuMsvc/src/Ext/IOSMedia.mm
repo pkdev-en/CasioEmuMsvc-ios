@@ -202,4 +202,37 @@ extern "C" bool iosVideoWriterFinish(void* handle) {
     return ok;
 }
 
+extern "C" int iosHttpGet(const char* url, int timeoutSeconds, std::string* body) {
+    if (!url) return -1;
+    NSURL* nsUrl = [NSURL URLWithString:[NSString stringWithUTF8String:url]];
+    if (!nsUrl) return -1;
+    const NSTimeInterval timeout = timeoutSeconds > 0 ? timeoutSeconds : 10;
+
+    NSMutableURLRequest* request = [NSMutableURLRequest requestWithURL:nsUrl
+                                                           cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
+                                                       timeoutInterval:timeout];
+    [request setValue:@"application/vnd.github+json" forHTTPHeaderField:@"Accept"];
+    [request setValue:@"CasioEmuMsvc-update-checker" forHTTPHeaderField:@"User-Agent"];
+
+    __block int status = -1;
+    __block NSData* result = nil;
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+    NSURLSessionDataTask* task = [[NSURLSession sharedSession] dataTaskWithRequest:request
+        completionHandler:^(NSData* _Nullable data, NSURLResponse* _Nullable response, NSError* _Nullable error) {
+            if (!error && [response isKindOfClass:[NSHTTPURLResponse class]]) {
+                status = (int)((NSHTTPURLResponse*)response).statusCode;
+                result = data;
+            }
+            dispatch_semaphore_signal(done);
+        }];
+    [task resume];
+    if (dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(timeout + 2) * NSEC_PER_SEC)) != 0) {
+        [task cancel];
+        return -1;
+    }
+    if (status < 0 || (result && result.length > 1024 * 1024)) return -1;
+    if (body && result) body->assign(static_cast<const char*>(result.bytes), (size_t)result.length);
+    return status;
+}
+
 #endif // TARGET_OS_IPHONE
