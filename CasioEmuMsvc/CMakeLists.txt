@@ -434,6 +434,10 @@ if(BUILD_EXECUTABLE)
             set_source_files_properties(${IOS_GUI_DIR}/GameViewController.mm PROPERTIES
                 COMPILE_FLAGS "-fobjc-arc"
             )
+            # IOSMedia.mm keeps AVFoundation objects in a C++ struct: it needs ARC too
+            set_source_files_properties("${SOURCE_DIR}/Ext/IOSMedia.mm" PROPERTIES
+                COMPILE_FLAGS "-fobjc-arc"
+            )
 
             # 3. Tạo executable với icon PNG trực tiếp
             add_executable(${TARGET_NAME}
@@ -518,6 +522,11 @@ if(IOS)
         "-framework UniformTypeIdentifiers"
         "-framework SafariServices"
         "-framework Security"
+        # IOSMedia.mm: MP4 screen recording + saving screenshots/videos to Photos
+        "-framework AVFoundation"
+        "-framework CoreMedia"
+        "-framework CoreVideo"
+        "-framework Photos"
     )
 endif()
 
