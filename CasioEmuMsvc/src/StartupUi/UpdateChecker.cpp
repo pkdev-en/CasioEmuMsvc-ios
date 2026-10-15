@@ -6,6 +6,8 @@
 #elif defined(__ANDROID__)
 #include <jni.h>
 #include <SDL_system.h>
+#else
+#include "../Ext/IOSMedia.h"
 #endif
 #include <chrono>
 #include <ctime>
@@ -19,8 +21,14 @@
 
 namespace casioemu {
 namespace {
+#ifdef __IOS__
+// The iOS build is published from the iOS fork, not from the upstream repository.
+constexpr const char* kApi = "https://api.github.com/repos/pkdev-en/CasioEmuMsvc-ios/releases?per_page=1";
+constexpr const char* kReleaseBase = "https://github.com/pkdev-en/CasioEmuMsvc-ios/releases/tag/";
+#else
 constexpr const char* kApi = "https://api.github.com/repos/telecomadm1145/CasioEmuMsvc/releases?per_page=1";
 constexpr const char* kReleaseBase = "https://github.com/telecomadm1145/CasioEmuMsvc/releases/tag/";
+#endif
 constexpr const char* kCachePath = "update-check.json";
 constexpr auto kCacheLifetime = std::chrono::hours(1);
 constexpr std::size_t kMaxResponseSize = 1024 * 1024;
@@ -153,7 +161,11 @@ UpdateInfo Check() {
 	const jsize len = env->GetArrayLength(bytes); body.assign(static_cast<size_t>(len), '\0');
 	env->GetByteArrayRegion(bytes, 0, len, reinterpret_cast<jbyte*>(body.data())); env->DeleteLocalRef(bytes);
 #elif defined(__IOS__)
-	throw std::runtime_error("update check not supported on iOS");
+	{
+		const int status = iosHttpGet(api, 10, &body);
+		SDL_Log("[UpdateChecker] HTTP result: status=%d bytes=%zu", status, body.size());
+		if (status < 200 || status >= 300) throw std::runtime_error("release request failed");
+	}
 #else
 	CURL* c = curl_easy_init(); if (!c) throw std::runtime_error("curl init failed");
 	curl_slist* h = nullptr;
