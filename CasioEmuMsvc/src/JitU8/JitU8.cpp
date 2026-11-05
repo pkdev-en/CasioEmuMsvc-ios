@@ -1,5 +1,3 @@
-#ifndef ASMJIT_NO_JIT
-
 #include "CPU.hpp"
 #include "MMU.hpp"
 #include <asmjit/core.h>
@@ -612,5 +610,3 @@ public:
 		}
 	}
 };
-
-#endif // ASMJIT_NO_JIT

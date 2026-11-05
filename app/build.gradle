@@ -18,6 +18,15 @@ def copyLocaleAssetsTask = tasks.register('copyLocaleAssets', Sync) {
         into 'locales'
     }
     into(generatedLocaleAssetsRoot)
+    doLast {
+        // locales/index.txt lets the native side enumerate the bundled .lc files
+        // (assets cannot be listed from C++).
+        def names = (rootProject.file('CasioEmuMsvc/locales').listFiles() ?: new File[0])
+            .findAll { it.name.endsWith('.lc') }*.name.sort()
+        def indexFile = new File(generatedLocaleAssetsRoot.get().asFile, 'locales/index.txt')
+        indexFile.parentFile.mkdirs()
+        indexFile.text = names.join('\n') + '\n'
+    }
 }
 
 android {

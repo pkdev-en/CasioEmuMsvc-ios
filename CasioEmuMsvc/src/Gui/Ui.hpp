@@ -1,6 +1,4 @@
 #pragma once
-#ifndef CASIOEMU_GUI_UI_HPP
-#define CASIOEMU_GUI_UI_HPP
 #include "Chipset/MMU.hpp"
 #include "Emulator.hpp"
 #include "LabelFile.h"
@@ -21,7 +19,6 @@ extern casioemu::Emulator* m_emu;
 extern SDL_Window* window;
 extern SDL_Renderer* renderer;
 extern std::vector<Label> g_labels;
-void SaveUIState();
 extern uint32_t pc_cache;
 extern CodeViewer* code_viewer;
 extern SnapshotWindow* snapshot_window;
@@ -80,8 +77,9 @@ public:
 	}
 	virtual void RenderCore() = 0;
 	// Optional: navigate the window to a specific memory address. No-op by default.
-	virtual bool GotoMemoryAddress(uint32_t /*addr*/) { return false; }
+	virtual void GotoMemoryAddress(uint32_t /*addr*/) {}
 	virtual ~UIWindow() {}
+
 
 };
 
@@ -152,4 +150,3 @@ namespace UIHelpers {
 }
 
 inline constexpr ImGuiTableFlags pretty_table = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersV | ImGuiTableFlags_Reorderable | ImGuiTableFlags_Resizable;
-#endif // CASIOEMU_GUI_UI_HPP

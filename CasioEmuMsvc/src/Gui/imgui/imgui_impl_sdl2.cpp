@@ -144,6 +144,7 @@ static void ImGui_ImplSDL2_SetClipboardText(void*, const char* text)
 // Note: native IME will only display if user calls SDL_SetHint(SDL_HINT_IME_SHOW_UI, "1") _before_ SDL_CreateWindow().
 static void ImGui_ImplSDL2_SetPlatformImeData(ImGuiContext*,ImGuiViewport*, ImGuiPlatformImeData* data)
 {
+    static bool s_imeWasVisible = false; // previous WantVisible, used to detect a new focus (rising edge)
     if (data->WantVisible)
     {
         // FIX: SDL_SetTextInputRect must be called alongside SDL_StartTextInput.
@@ -168,9 +169,29 @@ static void ImGui_ImplSDL2_SetPlatformImeData(ImGuiContext*,ImGuiViewport*, ImGu
         // while it's already active is exactly what makes the on-screen
         // keyboard visibly flash open and instantly close, so only call it
         // on the actual off->on transition; just refresh the rect otherwise.
-        if (!SDL_IsTextInputActive())
+        if (!SDL_IsTextInputActive()) {
             SDL_StartTextInput();
+        }
+#if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IOS)
+        else if (!s_imeWasVisible) {
+            // FIX: a text field just gained focus (rising edge) but SDL already
+            // reports text input as active. That state is stale -- e.g. left over
+            // from another window/startup UI, or a first-responder request that
+            // iOS ignored before the view was ready -- so no keyboard is on
+            // screen and the guard above would never start it. The user then had
+            // to tap away and tap again. Re-arm text input once per focus, only
+            // when the on-screen keyboard is really not shown (so it can never
+            // flash an already visible keyboard).
+            SDL_Window* focus = SDL_GetKeyboardFocus();
+            if (!focus || !SDL_IsScreenKeyboardShown(focus)) {
+                SDL_StopTextInput();
+                SDL_StartTextInput();
+            }
+        }
+#endif
+        s_imeWasVisible = true;
     }else {
+        s_imeWasVisible = false;
 #if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IOS)
         // On mobile, the on-screen keyboard must be explicitly dismissed
         // when no ImGui text field is focused (e.g. user tapped outside
@@ -428,6 +449,13 @@ static bool ImGui_ImplSDL2_Init(SDL_Window* window, SDL_Renderer* renderer)
     io.GetClipboardTextFn = ImGui_ImplSDL2_GetClipboardText;
     io.ClipboardUserData = nullptr;
     io.PlatformSetImeDataFn = ImGui_ImplSDL2_SetPlatformImeData;
+#if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IOS)
+    // Start every window with text input off, so the first tap on a text field is a
+    // real off->on transition and shows the on-screen keyboard (SDL keeps this state
+    // globally, so it can be left "active" by a previous window).
+    if (SDL_IsTextInputActive())
+        SDL_StopTextInput();
+#endif
 
     // Load mouse cursors
     bd->MouseCursors[ImGuiMouseCursor_Arrow] = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_ARROW);

@@ -536,103 +536,28 @@ void Injector::RenderInjectorTab(InjectorData& inj, int index, bool& show_info, 
 			   (c >= 'A' && c <= 'F');
 	};
 
-	// ── Địa chỉ inject ──────────────────────────────────────────
 	ImGui::TextUnformatted("Rop.InjectAddr"_lc);
 	ImGui::SameLine();
-	ImGui::SetNextItemWidth(100);
-	ImGui::InputText(("##addr" + std::to_string(index)).c_str(), inj.addr, 10,
-		ImGuiInputTextFlags_CharsHexadecimal);
-	ImGui::SameLine();
-	// Nút Dán cho ô địa chỉ
-	if (ImGui::SmallButton(("Dán##addr" + std::to_string(index)).c_str())) {
-		const char* clip = ImGui::GetClipboardText();
-		if (clip) {
-			strncpy(inj.addr, clip, sizeof(inj.addr) - 1);
-			inj.addr[sizeof(inj.addr) - 1] = '\0';
-		}
-	}
+	ImGui::SetNextItemWidth(80);
+	ImGui::InputText(("##addr" + std::to_string(index)).c_str(), inj.addr, 10);
 
-	// ── Toolbar cho ô hex data ───────────────────────────────────
-	ImGui::Spacing();
-
-	// Dán (paste toàn bộ clipboard vào textarea)
-	if (ImGui::Button(("Dán##data" + std::to_string(index)).c_str())) {
-		const char* clip = ImGui::GetClipboardText();
-		if (clip) {
-			strncpy(inj.data, clip, sizeof(inj.data) - 1);
+	if (ImGui::Button(("Rop.Paste"_l + "##" + std::to_string(index)).c_str())) {
+		if (ImGui::GetClipboardText() != nullptr) {
+			strncpy(inj.data, ImGui::GetClipboardText(), sizeof(inj.data) - 1);
 			inj.data[sizeof(inj.data) - 1] = '\0';
 		}
 	}
-	if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
-		ImGui::SetTooltip("Dán clipboard vào ô hex");
-	}
-
 	ImGui::SameLine();
-	// Sao chép nội dung hex ra clipboard
-	if (ImGui::Button(("Sao chép##data" + std::to_string(index)).c_str())) {
-		ImGui::SetClipboardText(inj.data);
-	}
-	if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
-		ImGui::SetTooltip("Sao chép hex vào clipboard");
-	}
-
-	ImGui::SameLine();
-	// Xoá sạch
-	if (ImGui::Button(("Xoá##data" + std::to_string(index)).c_str())) {
+	if (ImGui::Button(("Rop.Clear"_l + "##" + std::to_string(index)).c_str())) {
 		memset(inj.data, 0, sizeof(inj.data));
 	}
-	if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
-		ImGui::SetTooltip("Xoá toàn bộ nội dung");
-	}
 
-	ImGui::SameLine();
-	// Hiển thị số byte đã nhập (đếm cặp hex hợp lệ)
-	{
-		size_t byte_count = 0;
-		const char* p = inj.data;
-		while (*p && *(p + 1)) {
-			if (valid_hex(*p) && valid_hex(*(p + 1))) {
-				byte_count++;
-				p += 2;
-			} else {
-				p++;
-			}
-		}
-		ImGui::TextDisabled("(%zu bytes)", byte_count);
-	}
-
-	// ── Ô nhập hex ──────────────────────────────────────────────
-	// Dùng PushStyleVar để tăng padding, giúp touch/click dễ hơn
-	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6, 6));
-	float textarea_height = ImGui::GetTextLineHeight() * 8 + ImGui::GetStyle().FramePadding.y * 2;
+	ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
 	ImGui::InputTextMultiline(
 		("##hex" + std::to_string(index)).c_str(),
 		inj.data,
 		IM_ARRAYSIZE(inj.data) - 1,
-		ImVec2(-1, textarea_height),
-		ImGuiInputTextFlags_None  // Không dùng AlwaysOverwrite, không giới hạn ký tự
-	);
-	ImGui::PopStyleVar();
-
-	// Context menu chuột phải / long-press cho textarea
-	if (ImGui::BeginPopupContextItem(("##ctx_hex" + std::to_string(index)).c_str())) {
-		if (ImGui::MenuItem("Dán")) {
-			const char* clip = ImGui::GetClipboardText();
-			if (clip) {
-				strncpy(inj.data, clip, sizeof(inj.data) - 1);
-				inj.data[sizeof(inj.data) - 1] = '\0';
-			}
-		}
-		if (ImGui::MenuItem("Sao chép")) {
-			ImGui::SetClipboardText(inj.data);
-		}
-		if (ImGui::MenuItem("Xoá")) {
-			memset(inj.data, 0, sizeof(inj.data));
-		}
-		ImGui::EndPopup();
-	}
-
-	ImGui::Spacing();
+		ImVec2(-1, ImGui::GetTextLineHeight() * 8));
 
 	if (ImGui::Button(("Rop.Inject"_l + "##" + std::to_string(index)).c_str())) {
 		auto plc = strtol(inj.addr, 0, 16);

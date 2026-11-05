@@ -6,6 +6,17 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#if TARGET_OS_IPHONE
+#ifndef IOS
+#define IOS
+#endif
+#ifndef __IOS__
+#define __IOS__
+#endif
+#endif
+#endif
 #ifdef __ANDROID__
 #include "AndroidSystemFont.h"
 #include "RuntimeFontGlyphCache.h"
@@ -39,23 +50,6 @@ inline std::string FindBestFont(const std::vector<std::string>& candidates) {
 	return "";
 }
 
-inline void AddFontsFromDir(std::vector<std::string>& candidates, const std::string& dir) {
-	if (!std::filesystem::exists(dir))
-		return;
-
-	for (auto& entry : std::filesystem::directory_iterator(dir)) {
-		if (!entry.is_regular_file())
-			continue;
-
-		auto path = entry.path().string();
-		auto ext = entry.path().extension().string();
-
-		if (ext == ".ttf" || ext == ".otf") {
-			candidates.push_back(path); // append OK
-		}
-	}
-}
-
 // -----------------------------------------------------------------------------
 // 获取等宽字体 (Monospace Font) - 核心修正
 // -----------------------------------------------------------------------------
@@ -76,6 +70,13 @@ inline std::string GetMonospaceFontPath() {
 	candidates = {
 		"/system/fonts/DroidSansMono.ttf",
 		"/system/fonts/NotoSansMono-Regular.ttf"};
+#elif defined(IOS)
+	// iOS apps cannot read /System/Library/Fonts. Use the font bundled in ./fonts
+	// (copied to the Documents dir at startup, see casioemu.cpp). Roboto covers
+	// Latin, Vietnamese, Cyrillic and Greek, which RebuildFont() merges from this file.
+	candidates = {
+		"./fonts/Roboto-Regular.ttf",
+		"fonts/Roboto-Regular.ttf"};
 #elif defined(__APPLE__)
 	candidates = {
 		"/System/Library/Fonts/Monaco.ttf",
@@ -270,17 +271,6 @@ inline void RebuildFont(float scale = 0.0f) {
 	if (scale == 0) {
 		scale = defaultscale;
 	}
-
-	// 3. External Users Fonts
-	std::vector<std::string> externalFonts;
-	AddFontsFromDir(externalFonts, "./fonts/");
-	if (!externalFonts.empty()) {
-		for (const auto& font : externalFonts) {
-			io.Fonts->AddFontFromFileTTF(font.c_str(), 15 * scale, &config, GetGlobalRanges());
-			printf("[Ui][Info] Loaded Users Fonts: %s\n", font.c_str());
-		}
-	}
-	
 
 	// 1. 加载等宽基础字体 (Monospace Base)
 	// 这是改动最大的地方，确保英文和代码符号绝对等宽

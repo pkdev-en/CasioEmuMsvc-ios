@@ -1,45 +1,137 @@
-/* Emulated machine boundary */
-#ifndef FX_EMU_CORE_MACHINE_H
-#define FX_EMU_CORE_MACHINE_H
+/* Emulated machine host I/O wrappers */
 
-#include "eps6800.h"
+#include "machine_internal.h"
+#include "machine_io.h"
 
-#include <stdbool.h>
-#include <stddef.h>
-#include <stdint.h>
+enum machine_cpu_mode machine_state_cpu_mode(const struct machine_state *state) {
+	if (!state)
+		return MACHINE_CPU_MODE_SLEEP;
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+	switch (state->cpu.mode) {
+	case CPU_MODE_SLOW:
+		return MACHINE_CPU_MODE_SLOW;
+	case CPU_MODE_FAST:
+		return MACHINE_CPU_MODE_FAST;
+	case CPU_MODE_IDLE:
+		return MACHINE_CPU_MODE_IDLE;
+	case CPU_MODE_SLEEP:
+	default:
+		return MACHINE_CPU_MODE_SLEEP;
+	}
+}
 
-struct machine_state;
+uint8_t machine_state_interrupt_pending(const struct machine_state *state) {
+	return state ? state->cpu.int_pending : 0;
+}
 
-/* Lifecycle */
-struct machine_state *machine_state_create(void);
-struct machine_state *machine_state_create_variant(enum eps_variant variant);
-void machine_state_destroy(struct machine_state *state);
-enum eps_variant machine_state_variant(const struct machine_state *state);
-void machine_state_reset(struct machine_state *state);
-void machine_state_clear_ram_and_reset(struct machine_state *state);
+size_t machine_state_lcd_raw_size(const struct machine_state *state) {
+	return state ? eps_lcd_raw_size(state->mmio.variant) : 0;
+}
 
-/* Host-persisted RAM image.  Import requires exactly the size returned by
- * machine_state_ram_image_size(state). */
-size_t machine_state_ram_image_size(const struct machine_state *state);
-bool machine_state_export_ram(
+uint32_t machine_state_idle_timer1_cycles_per_tick(const struct machine_state *state) {
+	return state ? eps_get_variant_traits(state->mmio.variant)->timer.idle_cycles_per_20ms : 0;
+}
+
+size_t machine_state_lcd_copy_display(
 	const struct machine_state *state,
 	uint8_t *data,
-	size_t size
-);
-bool machine_state_import_ram(
-	struct machine_state *state,
-	const uint8_t *data,
-	size_t size
-);
+	size_t size,
+	struct machine_lcd_control *control
+) {
+	if (!state || !data)
+		return 0;
 
-#ifdef __cplusplus
+	return lcd_copy_display_state(
+		&state->lcd,
+		data,
+		size,
+		control ? &control->lcdarh : NULL,
+		control ? &control->lcdcon : NULL,
+		control ? &control->contrast : NULL,
+		control ? &control->all_pixels_on : NULL);
 }
-#endif
 
-#endif /* FX_EMU_CORE_MACHINE_H */
+size_t machine_state_lcd_copy_raw_memory(const struct machine_state *state, uint8_t *data, size_t size) {
+	return state && data ? lcd_copy_raw_memory_state(&state->lcd, data, size) : 0;
+}
 
+bool machine_state_lcd_get_control(const struct machine_state *state, struct machine_lcd_control *control) {
+	if (!state || !control)
+		return false;
+	lcd_get_control_state(&state->lcd, &control->lcdarh, &control->lcdcon,
+		&control->contrast, &control->all_pixels_on);
+	return true;
+}
 
+void machine_state_set_lcd_change_callback(
+	struct machine_state *state,
+	machine_lcd_change_callback callback,
+	void *user
+) {
+	if (state)
+		lcd_set_change_callback_state(&state->lcd, callback, user);
+}
+
+size_t machine_state_lcd_copy_framebuffer(const struct machine_state *state, uint8_t *data, size_t size) {
+	return machine_state_lcd_copy_display(state, data, size, NULL);
+}
+
+uint8_t machine_state_lcd_read_memory(const struct machine_state *state, size_t address) {
+	return state ? lcd_raw_read_byte_state(&state->lcd, address) : 0xff;
+}
+
+bool machine_state_lcd_write_memory(struct machine_state *state, size_t address, uint8_t value) {
+	return state ? lcd_raw_write_byte_state(&state->lcd, address, value) : false;
+}
+
+void machine_state_keydown(struct machine_state *state, uint8_t key) {
+	if (!state) {
+		return;
+	}
+
+	kbd_keydown_state(&state->kbd, key);
+}
+
+void machine_state_restore_keydown(struct machine_state *state, uint8_t key) {
+	if (!state) {
+		return;
+	}
+
+	kbd_restore_keydown_state(&state->kbd, key);
+}
+
+void machine_state_keyup(struct machine_state *state, uint8_t key) {
+	if (!state) {
+		return;
+	}
+
+	kbd_keyup_state(&state->kbd, key);
+}
+
+void machine_state_ondown(struct machine_state *state) {
+	if (!state) {
+		return;
+	}
+
+	kbd_ondown_state(&state->kbd);
+}
+
+void machine_state_onup(struct machine_state *state) {
+	if (!state) {
+		return;
+	}
+
+	kbd_onup_state(&state->kbd);
+}
+
+void machine_state_set_portb_input(struct machine_state *state, uint8_t mask, uint8_t value) {
+	if (state) {
+		kbd_set_portb_input_state(&state->kbd, mask, value);
+	}
+}
+
+void machine_state_set_portc_input(struct machine_state *state, uint8_t mask, uint8_t value) {
+	if (state) {
+		kbd_set_portc_input_state(&state->kbd, mask, value);
+	}
+}

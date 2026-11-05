@@ -1,4 +1,5 @@
 #include "HwController.h"
+#include "Peripheral/OrdinaryLcdHistory.hpp"
 #include "../Config.hpp"
 #include "Ui.hpp"
 #include "imgui/imgui.h"
@@ -9,9 +10,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cmath>
-int screen_flashing_threshold = 20;
 float screen_fading_blending_coefficient = 0;
-bool enable_screen_fading = false;
 float screen_flashing_brightness_coeff = 1.5f;
 bool screen_residual_enabled = true;
 float screen_residual_alpha_scale = 1.0f;
@@ -101,10 +100,21 @@ void HwController::RenderCore() {
 	}
 #endif
 
-	if (!casioemu::IsEpsFamily(m_emu->hardware_id)) {
-		ImGui::SliderInt("HwController.Value1"_lc, &screen_flashing_threshold, 0, 0x3F);
-		ImGui::SliderFloat("HwController.Value2"_lc, &screen_flashing_brightness_coeff, 1.0f, 8.0f);
-		ImGui::SliderInt("HwController.ScreenBufferSelect"_lc, &screen_buffer_select, 0, 2);
+	if (!casioemu::IsEpsFamily(m_emu->hardware_id) && m_emu->hardware_id != casioemu::HW_TI_MULTI_VIEW) {
+		auto gate = casioemu::screen_gate::Get();
+		int flashing_threshold = gate.flashing_threshold;
+		if (ImGui::SliderInt("HwController.Value1"_lc, &flashing_threshold, 0, 0x3F))
+			casioemu::screen_gate::SetFlashingThreshold(flashing_threshold);
+		float flashing_brightness = screen_flashing_brightness_coeff;
+		if (ImGui::SliderFloat("HwController.Value2"_lc, &flashing_brightness, 1.0f, 8.0f)) {
+			casioemu::ordinary_lcd_history::UntrackedChange change;
+			screen_flashing_brightness_coeff = flashing_brightness;
+		}
+		int buffer_select = screen_buffer_select;
+		if (ImGui::SliderInt("HwController.ScreenBufferSelect"_lc, &buffer_select, 0, 2)) {
+			casioemu::ordinary_lcd_history::UntrackedChange change;
+			screen_buffer_select = buffer_select;
+		}
 	}
 
 	UIHelpers::SectionHeader("CPU & Performance");
@@ -113,11 +123,14 @@ void HwController::RenderCore() {
 	if (ImGui::SliderInt("HwController.CPS"_lc, &cps, 1, 28, "2^%d CPS")) {
 		m_emu->cycles.Setup((Uint64)1 << cps, m_emu->cycles.timer_interval);
 	}
-	ImGui::Text("%.6f MHz", (double)m_emu->cycles.cycles_per_second / 1024 / 1024);
+	if (m_emu->hardware_id == casioemu::HW_TI_MULTI_VIEW)
+		ImGui::Text("Reference speed: %.3fx", (double)m_emu->cycles.cycles_per_second / 1000000.0);
+	else
+		ImGui::Text("%.6f MHz", (double)m_emu->cycles.cycles_per_second / 1024 / 1024);
 	
 	ImGui::Spacing();
 	
-	if (!casioemu::IsEpsFamily(m_emu->hardware_id)) {
+	if (!casioemu::IsEpsFamily(m_emu->hardware_id) && m_emu->hardware_id != casioemu::HW_TI_MULTI_VIEW) {
 		static bool pdx[8];
 		int pd = m_emu->ModelDefinition.pd_value;
 
@@ -181,11 +194,7 @@ void HwController::RenderCore() {
 		m_emu->SetPaused(true);
 		auto lg = std::lock_guard(m_emu->access_mx);
 		std::string error;
-		if (m_emu->chipset.ReloadRom(error)) {
-			if (m_emu->chipset.epscpu && code_viewer)
-				code_viewer->PrepareDisasm();
-		}
-		else {
+		if (!m_emu->chipset.ReloadRom(error)) {
 			SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
 				"HwController.HotReload"_lc, error.c_str(), window);
 		}

@@ -113,7 +113,7 @@ bool TouchMouseTranslator::HandleFingerUp(
 			const float thresholdSq =
 				dragThresholdPixels_ * dragThresholdPixels_;
 
-			if (primary_.isTapCandidate && distSq <= thresholdSq) {
+			if (!primary_.suppressTap && distSq <= thresholdSq) {
 				if (now - primary_.startTime < longPressDelayMs_) {
 					// 短按 → 左键点击
 					EmitMouseClick(primary_.target,
@@ -232,23 +232,13 @@ void TouchMouseTranslator::HandleSingleFingerMove(
 
 void TouchMouseTranslator::HandleTwoFingerMove(
 	TouchState& state, float x, float y,
-	float anchorX, float anchorY)
-{
-	float moveY = y - state.currentY;
+	float anchorX, float anchorY) {
 
-	Uint32 now = SDL_GetTicks();
-
-	state.scrollAccum += moveY;
-	
-	if (std::abs(state.scrollAccum) < 2.0f)
+	const float moveY = y - state.currentY;
+	if (std::abs(moveY) <= 1.0f) {
 		return;
-
-	EmitMouseWheel(state.target,
-				   state.scrollAccum,
-				   anchorX, anchorY);
-
-	state.scrollAccum = 0;
-	state.lastScrollTime = now;
+	}
+	EmitMouseWheel(state.target, moveY, anchorX, anchorY);
 }
 
 // ════════════════════════════════════════════════════════════
@@ -262,10 +252,6 @@ void TouchMouseTranslator::StartFinger(
 	state.active = true;
 	state.dragging = false;
 	state.suppressTap = false;
-	state.isTapCandidate = true;
-	state.movedBeyondThreshold = false;
-	state.scrollAccum = 0;
-	state.lastScrollTime = 0;
 	state.fingerId = fingerId;
 	state.startX = x;
 	state.startY = y;

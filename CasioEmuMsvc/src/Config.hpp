@@ -15,6 +15,14 @@
 #endif
 #endif
 
+// Touch-first platforms (Android + iOS). Use this instead of checking __ANDROID__
+// alone when something is about the touch/mobile UI rather than Android internals.
+#if defined(__ANDROID__) || defined(__IOS__) || defined(IOS)
+    #ifndef CASIOEMU_MOBILE
+    #define CASIOEMU_MOBILE 1
+    #endif
+#endif
+
 #include "Containers/ConcurrentObject.h"
 #include <cstdint>
 #include <cstdio>
@@ -100,10 +108,6 @@ public:                       \
 #include <git_info.h>
 
 #define EMULATOR_VERSION GIT_COMMIT_HASH
-
-#ifndef DISABLE_SENTRY
-#define DISABLE_SENTRY
-#endif
 
 #if !defined(__ANDROID__) && !defined(__EMSCRIPTEN__) && !defined(DISABLE_SENTRY)
 #define ENABLE_SENTRY

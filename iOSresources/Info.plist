@@ -56,6 +56,10 @@
     <key>LSSupportsOpeningDocumentsInPlace</key>
     <true/>
 
+    <!-- Save screenshots and screen recordings to the Photos library (add-only) -->
+    <key>NSPhotoLibraryAddUsageDescription</key>
+    <string>CasioEmuMsvc saves your screenshots and screen recordings to your Photos library.</string>
+
     <!-- LÆ°á»£c Äá» URL riÃªng, giá»¯ láº¡i Äá» tÆ°Æ¡ng thÃ­ch ngÆ°á»£c vá»i cÃ¡c lá»i táº¯t ÄÃ£
          táº¡o báº±ng báº£n build cÅ© (kiá»u WebClip). CÆ¡ cháº¿ táº¡o lá»i táº¯t hiá»n táº¡i
          dÃ¹ng Home Screen Quick Actions (UIApplication.shortcutItems, xem
